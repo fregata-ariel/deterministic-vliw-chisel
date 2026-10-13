@@ -38,6 +38,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1） |
 | `compiler/` | アセンブラ、DAG、静的スケジューラ、独立検証器 |
 | `sim/` | ISA参照モデル、サイクル精度モデル |
+| `tests/` | 実装をまたいで共有するテストデータ（golden、テストケース） |
 | `benchmarks/` | 整数SAXPY、FIR、固定サイズ行列積 |
 | `docs/` | 方針、仕様、判断理由、開発順序 |
 | `scripts/check.sh` | 手元とCIで共通のチェック入口 |
