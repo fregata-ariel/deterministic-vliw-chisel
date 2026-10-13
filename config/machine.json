@@ -34,8 +34,10 @@
     "HALT": {"slot": "compute", "opcode": 15, "requires_no_pending_operations": true, "requires_memory_nop": true, "done_after_cycles": 1}
   },
   "nop_opcode": 0,
+  "instruction_memory": {"bundles": 256},
   "control": {"branches": false, "loops": "unrolled", "internal_stalls": false},
   "timing": {
+    "source_read": "issue_cycle",
     "availability": "issue_cycle_plus_latency",
     "dependency_constraint": "consumer_issue_gte_producer_issue_plus_latency",
     "writeback_cycle_reservation": true,
