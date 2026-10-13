@@ -4,7 +4,6 @@
 
 | 資料 | 利用目的 |
 |---|---|
-| [GitHub CLI: gh repo create](https://cli.github.com/manual/gh_repo_create) | private repo、source、remote、pushのCLI仕様 |
 | [Chisel Installation](https://www.chisel-lang.org/docs/installation) | Scala/Chisel、JDK、ビルド導入 |
 | [CHIPS Alliance chisel-template](https://github.com/chipsalliance/chisel-template) | 標準的なプロジェクトの起点 |
 | [Chisel Testing](https://www.chisel-lang.org/docs/explanations/testing) | ChiselSimによる検証 |

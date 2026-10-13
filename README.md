@@ -18,15 +18,15 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 ## リポジトリの定義
 
-| 項目 | 初期設定 |
+| 項目 | 設定 |
 |---|---|
 | 名前 | deterministic-vliw-chisel |
 | 説明 | Compiler-scheduled, fixed-cycle VLIW microengine in Chisel |
 | 公開範囲 | private |
-| 所有者 | Macのghで選択中のgithub.comアカウント |
-| 初期ブランチ | main |
-| 初期コミット | docs: define deterministic VLIW architecture and development plan |
+| 既定ブランチ | main（PRとCIを経てマージする） |
 | ライセンス | 未選定。公開や外部コード導入時に決定 |
+
+初回の作成に使ったスクリプト（`scripts/create-github-repo.sh`）は、作成完了に伴い削除した（git履歴に残る）。
 
 ## 構成
 
@@ -44,7 +44,6 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 | `docs/` | 方針、仕様、判断理由、開発順序 |
 | `scripts/check.sh` | 手元とCIで共通のチェック入口 |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
-| `scripts/create-github-repo.sh` | Git初期化・初回commit・ghによるprivate repo作成・push |
 
 ## 開発
 
