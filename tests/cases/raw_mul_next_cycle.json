@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "raw_mul_next_cycle",
+  "description": "MULの結果を次のサイクルにSTで読む（L3）。ComputeポートはSTと競合しない",
+  "program": [
+    "@0: mul r3, r1, r2",
+    "@1: nop            | st [0], r3   ; r3 is in flight until 2",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r3": 0
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L3"
+      ]
+    }
+  }
+}

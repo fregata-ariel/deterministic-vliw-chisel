@@ -1,0 +1,17 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "empty_program",
+  "description": "bundleが1つも無い（L2）",
+  "program": [],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L2"
+      ]
+    }
+  }
+}

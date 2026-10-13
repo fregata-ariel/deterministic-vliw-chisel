@@ -38,7 +38,8 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1） |
 | `compiler/` | アセンブラ、DAG、静的スケジューラ、独立検証器 |
 | `sim/` | ISA参照モデル、サイクル精度モデル |
-| `tests/` | 実装をまたいで共有するテストデータ（golden、テストケース） |
+| `tests/` | 実装をまたいで共有するテストデータ（[テストケース](tests/cases/README.md)、golden、縮小machine定義） |
+| `crosscheck/` | verifierと参照モデルの差分テスト（テストコードのみ） |
 | `benchmarks/` | 整数SAXPY、FIR、固定サイズ行列積 |
 | `docs/` | 方針、仕様、判断理由、開発順序 |
 | `scripts/check.sh` | 手元とCIで共通のチェック入口 |
@@ -56,7 +57,7 @@ scripts/check.sh scala    # scalafmt・コンパイル（警告はエラー）�
 sbt test                  # テストだけを実行
 ```
 
-`compiler` と `sim` は `isa` にのみ依存し、互いに依存しません（[ADR-0002](docs/DECISIONS.md#adr-0002-相互検査は言語ではなく状態表現と判定方法の違いで設計する)）。
+`compiler` と `sim` は `isa` にのみ依存し、互いに依存しません。両者の突き合わせは `crosscheck` で行います（[ADR-0002](docs/DECISIONS.md#adr-0002-相互検査は言語ではなく状態表現と判定方法の違いで設計する)）。
 
 ## MVP
 

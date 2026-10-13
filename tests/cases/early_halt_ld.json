@@ -1,0 +1,22 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "early_halt_ld",
+  "description": "HALT時にLDが完了していない（L6）",
+  "program": [
+    "@0: nop            | ld r1, [0]   ; completes at E_2",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 7
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L6"
+      ]
+    }
+  }
+}

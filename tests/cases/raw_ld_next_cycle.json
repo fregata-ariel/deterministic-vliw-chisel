@@ -1,0 +1,26 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "raw_ld_next_cycle",
+  "description": "LDの結果を次のサイクルで読む（L3）",
+  "program": [
+    "@0: nop            | ld r1, [0]",
+    "@1: add r2, r1, r1                ; r1 is in flight until 2",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 0
+    },
+    "memory": {
+      "0": 7
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L3"
+      ]
+    }
+  }
+}

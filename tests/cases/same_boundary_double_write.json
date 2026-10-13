@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "same_boundary_double_write",
+  "description": "LD(0)とADD(1)が同じE_2にr1へ書く（L4）",
+  "program": [
+    "@0: nop            | ld r1, [0]   ; r1 [0, 2)",
+    "@1: add r1, r2, r2                ; r1 [1, 2)",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1
+    },
+    "memory": {
+      "0": 7
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L4"
+      ]
+    }
+  }
+}

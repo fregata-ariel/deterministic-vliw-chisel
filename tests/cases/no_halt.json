@@ -1,0 +1,22 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "no_halt",
+  "description": "HALTが無い（L2）",
+  "program": [
+    "@0: add r1, r2, r2",
+    "@1: nop"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L2"
+      ]
+    }
+  }
+}
