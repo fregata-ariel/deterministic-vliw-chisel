@@ -45,10 +45,11 @@ verifier、参照モデル、Phase 1 のRTLテストが共有する、手作り�
 | `expect.verdict` | ○ | `"legal"`、または `{"illegal": ["L3", ...]}` |
 | `expect.cycles` | | 合法な場合だけ書ける。start受理から done までのサイクル数（h+1） |
 | `expect.registers` / `expect.memory` | | 合法な場合だけ書ける。最終状態の部分指定で、書いた場所だけを照合する |
+| `expect.trace` | | 合法な場合だけ書ける。手作りのgolden trace本体（[TRACE.md](TRACE.md)、ヘッダ行なし）のパス。サイクルごとに照合する |
 
 値は 0〜4294967295 の整数、または `"0xFFFFFFFF"` のような16進文字列で書く。
 
 ## 判定の照合方法
 
-- `"legal"`: verifier は違反を報告しない。参照モデルはエラー無しで完了し、`cycles` と最終状態が期待値と一致する。
+- `"legal"`: verifier は違反を報告しない。参照モデルはエラー無しで完了し、`cycles`、最終状態、`trace` が期待値と一致する。
 - `{"illegal": [...]}`: verifier が報告する規則の集合が、列挙した集合と**一致**する。参照モデルが実行中に最初に検出する違反は、この集合に含まれる。
