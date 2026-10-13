@@ -11,7 +11,6 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 - [設計方針・技術的系譜](docs/DESIGN.md)
 - [ISAとサイクル契約](docs/ISA.md)
 - [開発順序・完了条件](docs/ROADMAP.md)
-- [MacでのGitHub作成手順](docs/SETUP_MAC.md)
 - [一次資料](docs/REFERENCES.md)
 
 ## リポジトリの定義
@@ -44,19 +43,3 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 Phase 0ではループを展開し、開始前に入力を配置します。実行中の外部メモリアクセスと内部バックプレッシャーは対象外です。
 
 `config/machine.json`の内容は**実装契約案**です。Phase 0でスキーマと検証器を実装し、RTL・命令列・シミュレータが同じ定義を参照する構成へ進めます。
-
-## GitHubに作成
-
-Macでgh認証とGitの名前・メール設定を済ませてから実行します。
-
-```bash
-bash scripts/create-github-repo.sh
-```
-
-名前だけ変更する場合：
-
-```bash
-bash scripts/create-github-repo.sh my-vliw-project
-```
-
-実行後に表示されるURLとcommitを確認してください。詳細と失敗時の復旧手順は[SETUP_MAC.md](docs/SETUP_MAC.md)にあります。
