@@ -10,6 +10,7 @@
 | [0004](#adr-0004-ツールチェーンとバージョン固定) | ツールチェーンとバージョン固定 | 採用 | 2026-10-14 |
 | [0005](#adr-0005-ciの入口と起動条件) | CIの入口と起動条件 | 採用 | 2026-10-14 |
 | [0006](#adr-0006-mvpでは合法なプログラムを保守的に限定する) | MVPでは合法なプログラムを保守的に限定する | 採用 | 2026-10-14 |
+| [0007](#adr-0007-machinejsonは手書きの厳格なローダで検証しjcs互換の正規化形式で識別する) | machine.jsonは手書きの厳格なローダで検証し、JCS互換の正規化形式で識別する | 採用 | 2026-10-14 |
 
 ---
 
@@ -56,6 +57,7 @@
 | Scala | 2.13.18 | `build.sbt` | Chisel 7.16.0 のPOMが要求する版 |
 | sbt | 1.12.15 | `project/build.properties` | sbt 2.x はプラグインとChiselの追随を待つ |
 | ScalaTest | 3.2.20 | `build.sbt` | ChiselSimと同じテスト基盤 |
+| ujson | 4.4.3 | `build.sbt` | JSONの読み書き（ADR-0007） |
 | scalafmt | 3.11.5 | `.scalafmt.conf` | |
 | sbt-scalafmt | 2.6.2 | `project/plugins.sbt` | |
 | Chisel | 7.x（Phase 1で固定） | — | 2026-10-14時点の最新は7.16.0（2026-10-01公開）。Phase 1着手時に、2週間以上経った版から選ぶ |
@@ -100,3 +102,17 @@
   - 参照モデル（#8）は、同じ違反を実行中に検出する。
   - テストケース（#7）は、入力宣言 R_in / M_in を持つ。
   - `config/machine.json` に `instruction_memory.bundles`（256）と `timing.source_read` を追加した。
+
+## ADR-0007: machine.jsonは手書きの厳格なローダで検証し、JCS互換の正規化形式で識別する
+
+- **状態**: 採用（Issue #4）
+- **背景**: RTL・命令列・シミュレータが同じ定義を参照するためには、定義の検証方法と同一性の判定方法が必要だった。
+- **決定**:
+  - 検証は、JSON Schemaではなく、Scalaの手書きローダ（`vliw.isa.MachineDescription`）で行う。規則は [MACHINE.md](MACHINE.md) にまとめる。
+  - JSONの読み書きには ujson を使い、重複キーを拒否する厳格な読み込みを被せる。
+  - 同一性は、正規化形式（RFC 8785を整数に制限したもの）のSHA-256で表す。`schema_version`（形式の版）と `revision`（内容の版）は分けて持つ。
+- **理由**:
+  - mvp-0 には、値が1つに固定された項目が多い。「この実装が対応する値か」を判定するには、型の検査だけでなく値の検査が必要で、ローダと同じ場所に書く方が一貫する。
+  - JSON Schemaの検証器を追加すると依存が増える。またScalaのモデルとschemaの二重管理になる。
+  - 正規化形式は、ASCIIと整数だけの文書では `jq -cS .` と一致する。そのため、外部ツールでも同じhashを再計算できる。
+- **影響**: ローダの規則を変えるときは `schema_version` を上げる。CIの `static` ジョブは引き続きJSON構文だけを確認し、意味の検証は `scala` ジョブのテスト（`MachineDescriptionSpec`）が行う。

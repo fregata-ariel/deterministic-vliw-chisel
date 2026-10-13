@@ -1,5 +1,6 @@
 {
-  "schema_version": 0,
+  "schema_version": 1,
+  "revision": 1,
   "status": "proposed",
   "isa_version": "mvp-0",
   "machine_id": "vliw2-i32-sp2",
