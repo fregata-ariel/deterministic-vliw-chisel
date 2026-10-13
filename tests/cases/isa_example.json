@@ -19,6 +19,7 @@
     "verdict": "legal",
     "cycles": 7,
     "registers": {"r1": 7, "r2": 3, "r3": 21, "r4": 28},
-    "memory": {"0": 7, "1": 28}
+    "memory": {"0": 7, "1": 28},
+    "trace": "tests/golden/isa_example.trace.jsonl"
   }
 }

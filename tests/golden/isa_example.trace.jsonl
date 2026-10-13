@@ -1,0 +1,8 @@
+{"cycle":0,"pc":0,"issue":{"compute":"nop","memory":"ld r1, [0]"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+{"cycle":1,"pc":1,"issue":{"compute":"nop","memory":"nop"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+{"cycle":2,"pc":2,"issue":{"compute":"mul r3, r1, r2","memory":"nop"},"rf_commit":[{"reg":1,"value":7,"port":"memory"}],"mem_commit":[],"busy":true,"done":false}
+{"cycle":3,"pc":3,"issue":{"compute":"nop","memory":"nop"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+{"cycle":4,"pc":4,"issue":{"compute":"add r4, r3, r1","memory":"nop"},"rf_commit":[{"reg":3,"value":21,"port":"compute"}],"mem_commit":[],"busy":true,"done":false}
+{"cycle":5,"pc":5,"issue":{"compute":"nop","memory":"st [1], r4"},"rf_commit":[{"reg":4,"value":28,"port":"compute"}],"mem_commit":[],"busy":true,"done":false}
+{"cycle":6,"pc":6,"issue":{"compute":"halt","memory":"nop"},"rf_commit":[],"mem_commit":[{"addr":1,"value":28}],"busy":true,"done":false}
+{"cycle":7,"pc":null,"issue":null,"rf_commit":[],"mem_commit":[],"busy":false,"done":true}

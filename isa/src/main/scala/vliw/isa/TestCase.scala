@@ -20,12 +20,15 @@ object Verdict {
 /** Values the host places before start (the input declaration R_in / M_in of rule L8). */
 final case class Inputs(registers: Map[Int, Long], memory: Map[Int, Long])
 
-/** Hand-written expectations. Final state maps are partial: unlisted locations are not checked. */
+/** Hand-written expectations. Final state maps are partial: unlisted locations are not checked.
+  * `trace` names a golden trace body (docs/TRACE.md) to compare cycle by cycle.
+  */
 final case class Expectation(
     verdict: Verdict,
     cycles: Option[Int],
     registers: Map[Int, Long],
-    memory: Map[Int, Long]
+    memory: Map[Int, Long],
+    trace: Option[Path] = None
 )
 
 /** A test case shared by the verifier, the reference model and the RTL (docs/TESTCASE.md). */
@@ -149,7 +152,16 @@ object TestCase {
         val regs =
           if (onlyIfLegal("registers")) registers(o, "registers") else Some(Map.empty[Int, Long])
         val mem = if (onlyIfLegal("memory")) memory(o, "memory") else Some(Map.empty[Int, Long])
-        for (v <- verdict; c <- cycles; r <- regs; m <- mem) yield Expectation(v, c, r, m)
+        val trace =
+          if (onlyIfLegal("trace"))
+            o.str("trace").flatMap { p =>
+              val path = Paths.get(p)
+              if (Files.isRegularFile(path)) Some(Some(path))
+              else { o.report("trace", s"no such file: $p"); None }
+            }
+          else Some(None)
+        for (v <- verdict; c <- cycles; r <- regs; m <- mem; t <- trace)
+          yield Expectation(v, c, r, m, t)
       }
       .flatten
 
