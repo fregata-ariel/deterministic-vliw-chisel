@@ -19,3 +19,5 @@ obj_dir/
 *.fst
 .env
 .env.*
+.bloop/
+project/metals.sbt
