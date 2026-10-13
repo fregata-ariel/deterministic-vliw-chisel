@@ -127,6 +127,15 @@ LDの値を「サイクル s で見えるScratchpad」と定義できるのは�
 
 NOPとHALTはopcode以外の全bitを0とする。HALTに対応するMemory wordはNOPでなければならない。
 
+命令列のファイル形式は2つある。実装は `vliw.isa.BundleCodec` と `vliw.isa.ProgramFile`。
+
+| 形式 | 内容 | 用途 |
+|---|---|---|
+| `.bin` | 1bundle = 8byte little-endian | 配布・ホストからのロード |
+| `.hex` | 1行1bundle、64bit値を16桁の小文字16進で書く（Memory wordが上位） | `$readmemh`、Chiselの `loadMemoryFromFile`、差分レビュー |
+
+下の命令例のエンコード結果は、[tests/golden/isa_example.hex](../tests/golden/isa_example.hex) に手作業で求めた値として固定している。
+
 ## 開始・終了
 
 idle中だけstartを受理する。受理境界をE_0とし、最初のbundleをサイクル0で実行する。busy中のstartは受理しない。HALTをサイクルhに発行するとE_(h+1)でdoneを1cycle通知し、busyを解除する。実行サイクル数は`h+1`。
