@@ -32,7 +32,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 | パス | 責務 |
 |---|---|
-| `config/machine.json` | ISA、演算遅延、資源制約の共有定義案 |
+| `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)） |
 | `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定 |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1） |

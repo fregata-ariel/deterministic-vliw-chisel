@@ -14,15 +14,25 @@ ThisBuild / scalacOptions ++= Seq(
 )
 
 val scalatestVersion = "3.2.20"
+val ujsonVersion = "4.4.3"
 
+// Tests and `run` fork with the repository root as working directory, so paths such as
+// config/machine.json resolve the same way as in the CLI.
 lazy val commonSettings = Seq(
-  libraryDependencies += "org.scalatest" %% "scalatest" % scalatestVersion % Test
+  libraryDependencies += "org.scalatest" %% "scalatest" % scalatestVersion % Test,
+  Test / fork := true,
+  Compile / run / fork := true,
+  Test / forkOptions := (Test / forkOptions).value
+    .withWorkingDirectory((LocalRootProject / baseDirectory).value),
+  Compile / run / forkOptions := (Compile / run / forkOptions).value
+    .withWorkingDirectory((LocalRootProject / baseDirectory).value)
 )
 
 // Dependency rule (ADR-0002): compiler and sim depend only on isa, never on each other.
 // Cross-checks between them belong to a separate test project added in #10.
 lazy val isa = (project in file("isa"))
   .settings(commonSettings)
+  .settings(libraryDependencies += "com.lihaoyi" %% "ujson" % ujsonVersion)
 
 lazy val compiler = (project in file("compiler"))
   .dependsOn(isa)
