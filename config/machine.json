@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "revision": 1,
-  "status": "proposed",
+  "revision": 2,
+  "status": "frozen",
   "isa_version": "mvp-0",
   "machine_id": "vliw2-i32-sp2",
   "word_bits": 32,
