@@ -6,7 +6,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 設計原則：**コンパイラが時間配置を決め、ハードウェアがそのスケジュールを実行する。**
 
-現段階は設計仕様の初期案と、Scala/sbtのビルド・CI基盤です。RTL、アセンブラ、コンパイラ、シミュレータは今後実装します。性能値は未測定です。
+Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）が完了しています（[完了報告](docs/PHASE0.md)）。次は Phase 1 の Chisel RTL です。性能値は未測定です。
 
 ## 最初に読む文書
 
@@ -14,6 +14,8 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 - [ISAとサイクル契約](docs/ISA.md)
 - [開発順序・完了条件](docs/ROADMAP.md)
 - [設計判断記録（ADR）](docs/DECISIONS.md)
+- [Phase 0 完了報告](docs/PHASE0.md)
+- 形式: [machine description](docs/MACHINE.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[verifier](docs/VERIFIER.md)
 - [一次資料](docs/REFERENCES.md)
 
 ## リポジトリの定義
@@ -54,6 +56,12 @@ scripts/check.sh          # 全チェック（CIと同じ内容）
 scripts/check.sh static   # JSON構文・shellcheck・空白エラー
 scripts/check.sh scala    # scalafmt・コンパイル（警告はエラー）・テスト
 sbt test                  # テストだけを実行
+
+sbt "isa/run machine"                                   # machine description の検証とhash
+sbt "isa/run asm prog.asm prog.hex"                     # アセンブル（.hex / .bin）
+sbt "isa/run disasm prog.hex"                           # 逆アセンブル
+sbt "compiler/run verify tests/cases/isa_example.json"  # 合法性の静的検査
+sbt "sim/run tests/cases/isa_example.json --trace out.jsonl"  # 参照モデルで実行
 ```
 
 `compiler` と `sim` は `isa` にのみ依存し、互いに依存しません。両者の突き合わせは `crosscheck` で行います（[ADR-0002](docs/DECISIONS.md#adr-0002-相互検査は言語ではなく状態表現と判定方法の違いで設計する)）。
@@ -63,4 +71,4 @@ sbt test                  # テストだけを実行
 32bit整数、16レジスタ、演算＋メモリの2スロット、2バンクScratchpad、固定遅延ADD/SUB/MUL/LD/ST、HALT。
 Phase 0ではループを展開し、開始前に入力を配置します。実行中の外部メモリアクセスと内部バックプレッシャーは対象外です。
 
-`config/machine.json`の内容は**実装契約案**です。Phase 0でスキーマと検証器を実装し、RTL・命令列・シミュレータが同じ定義を参照する構成へ進めます。
+`config/machine.json` は mvp-0 の**実装契約**です（revision 2、frozen）。RTL・命令列・verifier・参照モデルは、すべて `vliw.isa.MachineDescription` を通して同じ定義を参照します。

@@ -10,7 +10,7 @@ RTL・命令列・verifier・参照モデルは、このファイルをローダ
 |---|---|---|
 | `schema_version` | このファイル形式（キーの構成と検証規則）の版。現在は1。 | キーの追加・削除、検証規則の変更。ローダも同時に変える。 |
 | `revision` | 同じ `machine_id` の内容の版。1から始まる整数。 | 値を変えるたびに1増やす。 |
-| `status` | `proposed`（検討中）または `frozen`（確定）。 | Phase 0 完了時に `frozen` にする（#12）。 |
+| `status` | `proposed`（検討中）または `frozen`（確定）。 | Phase 0 完了時に `frozen` にした（revision 2）。 |
 | hash | 正規化形式のSHA-256。`sha256:<64桁の16進>`。 | 自動的に変わる（ファイルに書かない）。 |
 
 人が読む識別子は `machine_id` と `revision`、機械的な同一性は hash で表す。トレースと評価記録には、両方を記録する。

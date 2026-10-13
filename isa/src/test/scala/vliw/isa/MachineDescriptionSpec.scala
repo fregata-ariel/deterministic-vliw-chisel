@@ -61,7 +61,7 @@ class MachineDescriptionSpec extends AnyFunSuite {
 
   test("hash changes when any value changes") {
     val v = baseValue
-    v("revision") = 2
+    v("revision") = v("revision").num + 1
     assert(loadOk(ujson.write(v)).hash != loadOk(text).hash)
   }
 
