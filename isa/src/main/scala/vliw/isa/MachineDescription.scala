@@ -3,8 +3,9 @@ package vliw.isa
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 
-import scala.collection.mutable
 import scala.util.Try
+
+import vliw.isa.JsonReader.{Errors, Obj, kind}
 
 /** Issue slot of a bundle; also names the register file write-back port it owns. */
 sealed abstract class Slot(val name: String) extends Product with Serializable
@@ -245,82 +246,5 @@ object MachineDescription {
       canonicalJson = canonical,
       hash = Json.sha256(canonical)
     )
-  }
-
-  private final class Errors {
-    private val buffer = mutable.ListBuffer.empty[String]
-    def add(path: String, message: String): Unit = buffer += s"$path: $message"
-    def isEmpty: Boolean = buffer.isEmpty
-    def toList: List[String] = buffer.toList
-  }
-
-  private def kind(v: ujson.Value): String = v match {
-    case _: ujson.Obj             => "object"
-    case _: ujson.Arr             => "array"
-    case _: ujson.Str             => "string"
-    case _: ujson.Num             => "number"
-    case ujson.True | ujson.False => "boolean"
-    case ujson.Null               => "null"
-  }
-
-  /** Reads one JSON object; every key must be read exactly once or `finish` reports it. */
-  private final class Obj(
-      path: String,
-      fields: collection.Map[String, ujson.Value],
-      errors: Errors
-  ) {
-    private val used = mutable.Set.empty[String]
-
-    private def get(key: String): Option[ujson.Value] = {
-      used += key
-      val v = fields.get(key)
-      if (v.isEmpty) errors.add(path, s"""missing key "$key"""")
-      v
-    }
-
-    def int(key: String, min: Int, max: Int): Option[Int] = get(key).flatMap {
-      case ujson.Num(d) if d.isWhole && d >= min && d <= max => Some(d.toInt)
-      case ujson.Num(d) if d.isWhole                         =>
-        errors.add(s"$path.$key", s"must be in $min..$max, got ${d.toLong}")
-        None
-      case other =>
-        errors.add(s"$path.$key", s"must be an integer, got ${kind(other)}")
-        None
-    }
-
-    def str(key: String): Option[String] = get(key).flatMap {
-      case ujson.Str(s) => Some(s)
-      case other        =>
-        errors.add(s"$path.$key", s"must be a string, got ${kind(other)}")
-        None
-    }
-
-    def oneOf(key: String, allowed: Seq[String]): Option[String] = str(key).filter { s =>
-      val ok = allowed.contains(s)
-      if (!ok) errors.add(s"$path.$key", s"must be one of ${allowed.mkString(", ")}, got $s")
-      ok
-    }
-
-    def const(key: String, expected: ujson.Value): Unit = get(key).foreach { v =>
-      if (v != expected)
-        errors.add(s"$path.$key", s"must be ${ujson.write(expected)}, got ${ujson.write(v)}")
-    }
-
-    def obj[A](key: String)(f: Obj => A): Option[A] =
-      get(key).flatMap {
-        case ujson.Obj(sub) =>
-          val reader = new Obj(s"$path.$key", sub, errors)
-          val a = f(reader)
-          reader.finish()
-          Some(a)
-        case other =>
-          errors.add(s"$path.$key", s"must be an object, got ${kind(other)}")
-          None
-      }
-
-    def finish(): Unit =
-      fields.keys.filterNot(used).toSeq.sorted.foreach { k =>
-        errors.add(path, s"""unknown key "$k"""")
-      }
   }
 }

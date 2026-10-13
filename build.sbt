@@ -22,6 +22,9 @@ lazy val commonSettings = Seq(
   libraryDependencies += "org.scalatest" %% "scalatest" % scalatestVersion % Test,
   Test / fork := true,
   Compile / run / fork := true,
+  Compile / run / javaOptions ++= Seq("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8"),
+  Compile / run / outputStrategy := Some(StdoutOutput),
+  Test / javaOptions ++= Seq("-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8"),
   Test / forkOptions := (Test / forkOptions).value
     .withWorkingDirectory((LocalRootProject / baseDirectory).value),
   Compile / run / forkOptions := (Compile / run / forkOptions).value
