@@ -1,0 +1,17 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "halt_only",
+  "description": "最短のプログラム: HALTだけ。実行サイクル数は1",
+  "program": [
+    "@0: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 1,
+    "trace": "tests/golden/halt_only.trace.jsonl"
+  }
+}

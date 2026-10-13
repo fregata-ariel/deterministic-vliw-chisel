@@ -1,0 +1,19 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "halt_with_memory_op",
+  "description": "HALTとLDを同じbundleに置く（L1）",
+  "program_hex": [
+    "11000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

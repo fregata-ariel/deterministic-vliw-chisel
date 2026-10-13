@@ -1,0 +1,32 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "consecutive_mul",
+  "description": "II=1: MULを毎サイクル発行する。各結果はs+2から見え、Computeポートは境界ごとに1回だけ使う",
+  "program": [
+    "@0: mul r4, r1, r2      ; r4 = 6,  visible from 2",
+    "@1: mul r5, r1, r3      ; r5 = 8,  visible from 3",
+    "@2: mul r6, r4, r1      ; r6 = 12, visible from 4",
+    "@3: mul r7, r5, r1      ; r7 = 16, visible from 5",
+    "@4: nop",
+    "@5: halt                ; the last MUL completes at E_5 = h"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 6,
+    "registers": {
+      "r4": 6,
+      "r5": 8,
+      "r6": 12,
+      "r7": 16
+    },
+    "trace": "tests/golden/consecutive_mul.trace.jsonl"
+  }
+}

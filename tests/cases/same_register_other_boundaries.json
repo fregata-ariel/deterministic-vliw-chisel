@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "same_register_other_boundaries",
+  "description": "同じレジスタへのComputeとMemoryの書込みは、区間が重ならなければ合法",
+  "program": [
+    "@0: add r1, r2, r3                ; r1 [0, 1), value 5",
+    "@1: nop            | ld r1, [0]   ; r1 [1, 3), value 9",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 2,
+      "r3": 3
+    },
+    "memory": {
+      "0": 9
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 4,
+    "registers": {
+      "r1": 9
+    }
+  }
+}

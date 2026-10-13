@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "halt_not_last",
+  "description": "HALTが最後のbundleでない（L2）",
+  "program": [
+    "@0: halt",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L2"
+      ]
+    }
+  }
+}

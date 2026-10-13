@@ -1,0 +1,23 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "address_out_of_range",
+  "description": "8 wordのScratchpadで、アドレス8へのST（L7）",
+  "machine": "tests/machines/small_scratchpad.json",
+  "program": [
+    "@0: nop            | st [8], r1",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L7"
+      ]
+    }
+  }
+}

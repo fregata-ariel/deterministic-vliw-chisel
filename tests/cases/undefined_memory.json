@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "undefined_memory",
+  "description": "入力宣言もSTも無いアドレスをLDで読む（L8）",
+  "program": [
+    "@0: nop            | ld r1, [9]",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L8"
+      ]
+    }
+  }
+}

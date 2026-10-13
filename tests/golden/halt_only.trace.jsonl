@@ -1,0 +1,2 @@
+{"cycle":0,"pc":0,"issue":{"compute":"halt","memory":"nop"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+{"cycle":1,"pc":null,"issue":null,"rf_commit":[],"mem_commit":[],"busy":false,"done":true}

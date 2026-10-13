@@ -1,0 +1,23 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "early_halt_mul",
+  "description": "HALT時にMULが完了していない（L6）",
+  "program": [
+    "@0: nop",
+    "@1: mul r3, r1, r1                ; completes at E_3",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L6"
+      ]
+    }
+  }
+}

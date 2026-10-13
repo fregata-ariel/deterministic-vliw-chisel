@@ -1,0 +1,20 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "unknown_opcode",
+  "description": "Compute opcode 4 は未定義（L1）。最後はHALT",
+  "program_hex": [
+    "0000000040000000",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

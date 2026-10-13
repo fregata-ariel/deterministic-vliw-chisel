@@ -1,0 +1,20 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "reserved_bits",
+  "description": "ADDの予約bit 0 が1（L1）",
+  "program_hex": [
+    "0000000010000001",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "issue_cycle_read",
+  "description": "発行サイクル自身での読出しは旧値を読む（ADDのソースとSTのソース）",
+  "program": [
+    "@0: add r1, r1, r2 | st [0], r1   ; r1 = 15 from 1, memory[0] = 10",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 10,
+      "r2": 5
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 2,
+    "registers": {
+      "r1": 15
+    },
+    "memory": {
+      "0": 10
+    }
+  }
+}

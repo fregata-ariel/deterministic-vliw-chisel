@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "store_then_load",
+  "description": "先行するSTの値を次のサイクルのLDが読む（入力宣言の無いアドレス）",
+  "program": [
+    "@0: nop            | st [5], r1",
+    "@1: nop            | ld r2, [5]",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": "0xDEADBEEF"
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 4,
+    "registers": {
+      "r2": "0xDEADBEEF"
+    },
+    "memory": {
+      "5": "0xDEADBEEF"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "compute_and_load",
+  "description": "同じbundleでComputeとLDを発行し、別々の書戻しポートで同じ境界にcommitする",
+  "program": [
+    "@0: mul r3, r1, r2 | ld r4, [2]   ; both visible from 2",
+    "@1: nop",
+    "@2: add r5, r3, r4                ; 15 + 100",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 3,
+      "r2": 5
+    },
+    "memory": {
+      "2": 100
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 4,
+    "registers": {
+      "r3": 15,
+      "r4": 100,
+      "r5": 115
+    }
+  }
+}

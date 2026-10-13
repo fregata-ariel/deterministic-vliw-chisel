@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mul_then_add_port",
+  "description": "MUL(s)とADD(s+1)はどちらもE_(s+2)にComputeポートを使う（L5）",
+  "program": [
+    "@0: mul r3, r1, r2",
+    "@1: add r4, r1, r2",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L5"
+      ]
+    }
+  }
+}

@@ -32,7 +32,7 @@ lazy val commonSettings = Seq(
 )
 
 // Dependency rule (ADR-0002): compiler and sim depend only on isa, never on each other.
-// Cross-checks between them belong to a separate test project added in #10.
+// Cross-checks between them live in the crosscheck test project.
 lazy val isa = (project in file("isa"))
   .settings(commonSettings)
   .settings(libraryDependencies += "com.lihaoyi" %% "ujson" % ujsonVersion)
@@ -45,8 +45,14 @@ lazy val sim = (project in file("sim"))
   .dependsOn(isa)
   .settings(commonSettings)
 
+// Differential tests between the verifier and the reference model (ADR-0002). Test code only.
+lazy val crosscheck = (project in file("crosscheck"))
+  .dependsOn(compiler, sim)
+  .settings(commonSettings)
+  .settings(publish / skip := true)
+
 lazy val root = (project in file("."))
-  .aggregate(isa, compiler, sim)
+  .aggregate(isa, compiler, sim, crosscheck)
   .settings(
     name := "deterministic-vliw-chisel",
     publish / skip := true
