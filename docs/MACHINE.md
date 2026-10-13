@@ -28,7 +28,7 @@ hash は、正規化形式のUTF-8バイト列のSHA-256である。ASCIIだけ�
 
 ```sh
 jq -cS . config/machine.json | tr -d '\n' | sha256sum
-sbt "isa/run"            # machine_id、revision、hash を表示する
+sbt "isa/run machine"    # machine_id、revision、hash を表示する
 ```
 
 キーの順序や空白だけを変えても、hash は変わらない。

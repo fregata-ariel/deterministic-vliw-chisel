@@ -1,0 +1,24 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "isa_example",
+  "description": "docs/ISA.md「最初の命令例」: LD → MUL → ADD → ST → HALT",
+  "program": [
+    "@0: nop            | ld r1, [0]     ; r1 = 7 at E_2",
+    "@1: nop            | nop            ; wait for LD",
+    "@2: mul r3, r1, r2 |                ; r3 = 21 at E_4",
+    "@3: nop                             ; ADD depends on r3",
+    "@4: add r4, r3, r1                  ; r4 = 28 at E_5",
+    "@5: nop            | st [1], r4     ; memory[1] = 28 at E_6",
+    "@6: halt                            ; done at E_7"
+  ],
+  "inputs": {
+    "registers": {"r2": 3},
+    "memory": {"0": 7}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 7,
+    "registers": {"r1": 7, "r2": 3, "r3": 21, "r4": 28},
+    "memory": {"0": 7, "1": 28}
+  }
+}
