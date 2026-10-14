@@ -8,12 +8,12 @@ final case class Finding(rule: Rule, cycle: Option[Int], message: String) {
     s"${rule.id} (${rule.title})${cycle.fold("")(c => s" at cycle $c")}: $message"
 }
 
-/** Static schedule verifier for the MVP legality rules L1-L8 (docs/VERIFIER.md).
+/** Static schedule verifier for the MVP legality rules L1-L10 (docs/VERIFIER.md).
   *
   * It never computes values. The program is summarised as register write intervals `[s, s+L)`,
-  * write-back port reservations per commit boundary, and register and memory reads with their
-  * cycles; each rule is then a check over these tables. All violations are reported. The verifier
-  * does not use the reference model (ADR-0002).
+  * write-back port reservations per commit boundary, register and memory reads with their cycles,
+  * and the issue cycles of each operation; each rule is then a check over these tables. All
+  * violations are reported. The verifier does not use the reference model (ADR-0002).
   */
 object Verifier {
 
@@ -43,7 +43,9 @@ object Verifier {
           machine,
           summary
         ) ++
-        undefinedReads(summary, declared)).sortBy(f => (f.cycle.getOrElse(-1), f.rule.id))
+        undefinedReads(summary, declared) ++ issueIntervals(machine, summary) ++ inFlightStoreReads(
+          summary
+        )).sortBy(f => (f.cycle.getOrElse(-1), f.rule.id))
     }
   }
 
@@ -59,12 +61,14 @@ object Verifier {
   }
   private final case class Read(reg: Int, cycle: Int, what: String)
   private final case class Access(addr: Int, cycle: Int, store: Boolean, latency: Int)
+  private final case class Issue(mnemonic: String, cycle: Int, what: String)
 
   /** Static tables extracted from the program. */
   private final case class Summary(
       writes: Vector[Write],
       reads: Vector[Read],
-      accesses: Vector[Access]
+      accesses: Vector[Access],
+      issues: Vector[Issue]
   )
   private object Summary {
     def apply(machine: MachineDescription, bundles: Vector[Bundle]): Summary = {
@@ -72,11 +76,13 @@ object Verifier {
       val writes = Vector.newBuilder[Write]
       val reads = Vector.newBuilder[Read]
       val accesses = Vector.newBuilder[Access]
+      val issues = Vector.newBuilder[Issue]
       bundles.zipWithIndex.foreach { case (b, s) =>
         val text = Disassembler.compute(b.compute)
         def rrr(d: Int, x: Int, y: Int, m: String): Unit = {
           reads += Read(x, s, text); reads += Read(y, s, text)
           writes += Write(d, s, lat(m), Some(Slot.Compute), text)
+          issues += Issue(m, s, text)
         }
         b.compute match {
           case ComputeOp.Add(d, x, y)         => rrr(d, x, y, "ADD")
@@ -89,13 +95,15 @@ object Verifier {
           case MemoryOp.Ld(d, a) =>
             writes += Write(d, s, lat("LD"), Some(Slot.Memory), mtext)
             accesses += Access(a, s, store = false, lat("LD"))
+            issues += Issue("LD", s, mtext)
           case MemoryOp.St(a, r) =>
             reads += Read(r, s, mtext)
             accesses += Access(a, s, store = true, lat("ST"))
+            issues += Issue("ST", s, mtext)
           case MemoryOp.Nop => ()
         }
       }
-      Summary(writes.result(), reads.result(), accesses.result())
+      Summary(writes.result(), reads.result(), accesses.result(), issues.result())
     }
   }
 
@@ -223,4 +231,31 @@ object Verifier {
       )
     regs ++ loads
   }
+
+  // L9: two issues of the same operation are at least its II apart.
+  private def issueIntervals(machine: MachineDescription, sum: Summary): Vector[Finding] =
+    sum.issues.groupBy(_.mnemonic).toVector.sortBy(_._1).flatMap { case (m, is) =>
+      val ii = machine.operation(m).ii
+      is.sortBy(_.cycle).sliding(2).collect {
+        case Vector(a, b) if b.cycle - a.cycle < ii =>
+          Finding(
+            Rule.IssueInterval,
+            Some(b.cycle),
+            s"`${b.what}` is issued ${b.cycle - a.cycle} cycle(s) after `${a.what}` (cycle ${a.cycle}); $m has II $ii"
+          )
+      }
+    }
+
+  // L10: no load of a word strictly inside the interval [s, s+L) of a store to it.
+  private def inFlightStoreReads(sum: Summary): Vector[Finding] =
+    for {
+      l <- sum.accesses
+      if !l.store
+      st <- sum.accesses
+      if st.store && st.addr == l.addr && st.cycle < l.cycle && l.cycle < st.cycle + st.latency
+    } yield Finding(
+      Rule.InFlightStoreRead,
+      Some(l.cycle),
+      s"ld [${l.addr}] reads the word while `st [${st.addr}]` (cycle ${st.cycle}) writes it; visible from cycle ${st.cycle + st.latency}"
+    )
 }

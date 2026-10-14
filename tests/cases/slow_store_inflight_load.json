@@ -1,0 +1,28 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "slow_store_inflight_load",
+  "description": "ST のレイテンシーが2の構成で、書込み中の番地を LD で読む。入力宣言があって旧値が定義されていても不正（L10）",
+  "machine": "tests/machines/slow_units.json",
+  "program": [
+    "@0: nop            | st [2], r1   ; memory[2] visible from 2",
+    "@1: nop            | ld r2, [2]   ; [2] is being stored",
+    "@2: nop",
+    "@3: nop",
+    "@4: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1
+    },
+    "memory": {
+      "2": 5
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L10"
+      ]
+    }
+  }
+}

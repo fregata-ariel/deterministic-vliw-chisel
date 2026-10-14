@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "ii_ld_too_close",
+  "description": "LD の II が3の構成では、LD(s) の次の LD は s+3 以降（s+2 は L9）",
+  "machine": "tests/machines/ii_units.json",
+  "program": [
+    "@0: nop            | ld r1, [0]",
+    "@1: nop",
+    "@2: nop            | ld r2, [1]   ; LD II 3: the next LD may issue at 3",
+    "@3: nop",
+    "@4: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 1,
+      "1": 2
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L9"
+      ]
+    }
+  }
+}

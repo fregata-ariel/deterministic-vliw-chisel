@@ -130,4 +130,38 @@ class VerifierSpec extends AnyFunSuite {
     )
     assert(f.map(_.cycle.get) == f.map(_.cycle.get).sorted)
   }
+
+  private def machineFile(name: String) =
+    MachineDescription
+      .load(java.nio.file.Paths.get("tests", "machines", name))
+      .fold(es => fail(es.mkString("\n")), identity)
+
+  test("L9: issues of one operation are at least its II apart; each operation has its own unit") {
+    val ii = machineFile("ii_units.json") // ADD, SUB, MUL II 2; LD II 3
+    def on(src: String) = Verifier.verify(ii, words(src, ii), all).map(_.rule.id).toSet
+    assert(on("mul r3, r1, r2\nmul r4, r1, r2\nnop\nhalt") == Set("L9"))
+    assert(on("mul r3, r1, r2\nnop\nmul r4, r1, r2\nnop\nhalt") == Set.empty)
+    assert(on("add r3, r1, r2\nsub r4, r1, r2\nadd r5, r1, r2\nhalt") == Set.empty)
+    assert(on("| ld r3, [0]\nnop\n| ld r4, [1]\nnop\nhalt") == Set("L9"))
+    assert(on("| ld r3, [0]\nnop\nnop\n| ld r4, [1]\nnop\nhalt") == Set.empty)
+    // Each issue is checked against the previous one: three MULs one cycle apart give two findings.
+    val f = Verifier.verify(
+      ii,
+      words("mul r3, r1, r2\nmul r4, r1, r2\nmul r5, r1, r2\nnop\nhalt", ii),
+      all
+    )
+    assert(f.map(f => (f.rule.id, f.cycle.get)) == Vector(("L9", 1), ("L9", 2)))
+    // With II 1 (mvp-0), back-to-back issue is legal.
+    assert(rules("mul r3, r1, r2\nmul r4, r1, r2\nnop\nhalt") == Set.empty)
+  }
+
+  test("L10: no load of a word while a store to it is in flight") {
+    val slow = machineFile("slow_units.json") // ST latency 2, LD latency 3
+    def on(src: String) = Verifier.verify(slow, words(src, slow), all).map(_.rule.id).toSet
+    assert(on("| st [2], r1\n| ld r2, [2]\nnop\nnop\nhalt") == Set("L10"))
+    assert(on("| st [2], r1\n| ld r2, [0]\nnop\nnop\nhalt") == Set.empty) // same bank, other word
+    assert(on("| st [2], r1\nnop\n| ld r2, [2]\nnop\nnop\nhalt") == Set.empty) // visible at s+2
+    // With ST latency 1 (mvp-0), the store is visible in the next cycle.
+    assert(rules("| st [2], r1\n| ld r2, [2]\nnop\nhalt") == Set.empty)
+  }
 }

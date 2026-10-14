@@ -12,7 +12,7 @@ import vliw.isa._
   * (undefined values) is outside the RTL: the hardware holds no definedness state.
   */
 class AssertionSpec extends AnyFunSuite with ChiselSim {
-  private val FiredRule = """Assertion failed: (L\d) """.r.unanchored
+  private val FiredRule = """Assertion failed: (L\d+) """.r.unanchored
 
   private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)
   private val illegal = cases.collect {
@@ -24,7 +24,10 @@ class AssertionSpec extends AnyFunSuite with ChiselSim {
 
   test("illegal cases exist for every rule the RTL checks") {
     val covered = illegal.filter(x => supported(x._1)).flatMap(_._2).toSet
-    assert((Rule.all.toSet - Rule.UndefinedRead).subsetOf(covered), covered.map(_.id))
+    // L9 needs an II above 1 and L10 a store latency above 1: neither occurs on a machine the RTL
+    // implements (CoreParams).
+    val unreachable = Set[Rule](Rule.UndefinedRead, Rule.IssueInterval, Rule.InFlightStoreRead)
+    assert((Rule.all.toSet -- unreachable).subsetOf(covered), covered.map(_.id))
   }
 
   illegal.foreach { case (c, rules) =>

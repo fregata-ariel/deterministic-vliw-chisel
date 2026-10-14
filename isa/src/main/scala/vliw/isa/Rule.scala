@@ -13,6 +13,8 @@ object Rule {
   case object HaltCompletion extends Rule("L6", "operation pending at HALT")
   case object AddressRange extends Rule("L7", "scratchpad address out of range")
   case object UndefinedRead extends Rule("L8", "read of an undefined value")
+  case object IssueInterval extends Rule("L9", "operation issued within its II")
+  case object InFlightStoreRead extends Rule("L10", "load of a word being stored")
 
   val all: Seq[Rule] = Seq(
     Encoding,
@@ -22,7 +24,9 @@ object Rule {
     WritebackPort,
     HaltCompletion,
     AddressRange,
-    UndefinedRead
+    UndefinedRead,
+    IssueInterval,
+    InFlightStoreRead
   )
   val byId: Map[String, Rule] = all.map(r => r.id -> r).toMap
 }

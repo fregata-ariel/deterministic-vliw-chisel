@@ -15,7 +15,7 @@ class DifferentialSpec extends AnyFunSuite {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
   private val codec = new BundleCodec(machine)
 
-  /** Machine descriptions that differ in latencies and capacity (II stays 1, see #35). */
+  /** Machine descriptions that differ in latencies, II and capacity. */
   private def variant(edit: ujson.Value => Unit): MachineDescription = {
     val v = ujson.read(machine.canonicalJson)
     edit(v)
@@ -24,6 +24,9 @@ class DifferentialSpec extends AnyFunSuite {
   private val variants: Seq[(String, MachineDescription)] = Seq(
     "slow_units (tests/machines)" -> MachineDescription
       .load(java.nio.file.Paths.get("tests", "machines", "slow_units.json"))
+      .fold(es => fail(es.mkString("\n")), identity),
+    "ii_units (tests/machines)" -> MachineDescription
+      .load(java.nio.file.Paths.get("tests", "machines", "ii_units.json"))
       .fold(es => fail(es.mkString("\n")), identity),
     "add L=2, sub L=3, 4 banks x 64 words" -> variant { v =>
       v("operations")("ADD")("latency") = 2
@@ -105,7 +108,8 @@ class DifferentialSpec extends AnyFunSuite {
     variants.foreach { case (label, m) =>
       val (legal, rules) = agree(m, 99L, 8000)
       assert(legal > 100, s"$label: only $legal legal programs")
-      // With every latency 1 nothing is ever in flight, so L3, L5 and L6 cannot occur there.
+      // With every latency 1 nothing is ever in flight, so L3, L5 and L6 cannot occur there. L9
+      // needs an II above 1 and L10 a store latency above 1.
       val expected =
         if (label.startsWith("all units L=1"))
           Set[Rule](Rule.ProgramShape, Rule.AddressRange, Rule.UndefinedRead)
@@ -115,7 +119,8 @@ class DifferentialSpec extends AnyFunSuite {
             Rule.InFlightRead,
             Rule.OverlappingWrites,
             Rule.WritebackPort
-          )
+          ) ++ (if (label.startsWith("ii_units")) Set(Rule.IssueInterval) else Set.empty) ++
+            (if (label.startsWith("slow_units")) Set(Rule.InFlightStoreRead) else Set.empty)
       assert(expected.subsetOf(rules.keySet), s"$label: rules hit first: ${rules.keys.map(_.id)}")
     }
   }
