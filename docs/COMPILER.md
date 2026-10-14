@@ -8,7 +8,7 @@
 | DAG | `LoweredKernel` → `Dag` | `vliw.compiler.dag` | #48 |
 | list scheduling | `Dag` → `Schedule`（各ノードの発行サイクルと HALT。値は仮想レジスタ） | `vliw.compiler.schedule` | #49 |
 | register allocation | `Dag` → `Allocated`（スケジュールと物理レジスタ、bundle 列） | `vliw.compiler.regalloc` | #50 |
-| コード生成と検証 | → 命令語、verifier による最終検査 | 未実装 | #51 |
+| コード生成と検証 | → 命令語（verifier の最終検査に通ったもの）、`.hex`、テストケース | `vliw.compiler.KernelCompiler` | #51 |
 
 ## DAG
 
@@ -167,3 +167,55 @@ LD の共有（同じ語は1回だけ読む）を保ったまま上限を守る�
   - 成功した全ての試行についても、verifier が合法と判定すること
   - 上の表の値、レジスタが足りないときのエラー
 - `crosscheck/CompiledKernelSpec`: 割り当て後のベンチマークを参照モデル（3構成）と RTL（既定の構成）で実行し、結果が DSL の参照実装と、cycles がスケジュールと一致すること
+
+## コード生成と最終検証
+
+`KernelCompiler.compile(kernel, machine)` は、上の各段を順に行い、`CompiledKernel` を返す。
+
+1. メモリ配置と lowering、DAG
+2. スケジュールとレジスタ割り当て（`Allocation.bundles` が bundle 列を作る。最後は HALT）
+3. エンコード
+4. **独立の verifier（[VERIFIER.md](VERIFIER.md)）による最終検査**。入力宣言は、配置の初期化済みの語（M_in）だけで、R_in は空
+
+verifier が1つでも違反を報告したら、その命令列は返さず、`compiler error:` で始まるエラーにする。コンパイラの誤りであり、生成コードを出力しない。カーネルが machine に収まらない場合（Scratchpad の容量、レジスタ数）は入力の誤りとして区別する。
+
+### CLI
+
+```sh
+sbt "compiler/run compile saxpy8 fir4x8 matmul3"
+sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out out/ --seed 2 --priority program-order"
+```
+
+| オプション | 既定 | 内容 |
+|---|---|---|
+| `--machine` | `config/machine.json` | machine description |
+| `--out` | `generated/kernels` | 出力先（gitignore 済み） |
+| `--seed` | 1 | テストケースの入力値の乱数の種 |
+| `--priority` | 全部 | 優先度を1つに固定する。既定では全部を試し、cycles 最小を選ぶ |
+
+カーネルごとに次の2つを書き、cycles・下限・選ばれた試行を表示する。終了コードは、入力の誤りが2、コンパイラの誤りが3。
+
+| ファイル | 内容 |
+|---|---|
+| `<kernel>.hex` | 命令語（[ASM.md](ASM.md) の16進形式） |
+| `<kernel>.json` | テストケース（[TESTCASE.md](TESTCASE.md)）。命令列、入力宣言（M_in に入力・スカラー・定数）、期待値 |
+
+テストケースの期待値は、次のように命令列と独立に決める。
+
+- 出力の値: DSL の参照実装（`Interpreter`）で、命令列を経由せずに計算する
+- `cycles`: スケジューラの予測
+
+このテストケースは手作りの期待値ではないので、`tests/cases` には置かない。そのまま `sbt "compiler/run verify ..."` や `sbt "sim/run ..."` に渡せる。
+
+### テスト
+
+- `compiler/.../KernelCompilerSpec`
+  - ベンチマークがコンパイルでき、命令列が verifier に合格すること
+  - 壊した命令列（MUL の直後の bundle を削る）を、コンパイラの誤りとして止めること
+  - machine に収まらないカーネルを、理由付きで拒否すること
+  - 生成したテストケースが読め、期待値が DSL の参照実装と一致すること
+- `crosscheck/RandomKernelSpec`: 乱数で作った400のカーネルを、すべてコンパイルして確かめる
+  - 最終検査に合格すること
+  - 参照モデルでの結果が DSL の参照実装と、cycles が予測と一致すること
+  - 生成したテストケースが参照モデルで成り立つこと（100個）
+  - RTL でも結果と cycles が一致すること（60個）

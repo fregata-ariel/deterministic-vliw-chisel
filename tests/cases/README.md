@@ -54,6 +54,7 @@
 | `hw/CaseSpec` | 合法な全ケースを RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
 | `hw/AssertionSpec` | 不正な全ケースで、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
 | `crosscheck/CompiledKernelSpec` | DSL のベンチマークを list scheduling と register allocation で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出すこと |
+| `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと |
 | `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成）。RTL のタイミングが入力値に依存しないこと |
 
 RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
@@ -70,7 +71,7 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 
 ## mutation チェック
 
-`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**失敗する**ことを確かめる。テストが検出できない種類の誤りがあれば「SURVIVED」と表示する。mutant ごとに全テストを実行するため時間がかかる（15 mutant で約55分。timeout は120分）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義を変えたPRでだけ実行し、required にはしない。
+`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**失敗する**ことを確かめる。テストが検出できない種類の誤りがあれば「SURVIVED」と表示する。mutant ごとに全テストを実行するため時間がかかる（15 mutant で CI 上約45分。timeout は120分）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義を変えたPRでだけ実行し、required にはしない。
 
 ```sh
 scripts/mutation-check.sh                    # 全mutant
