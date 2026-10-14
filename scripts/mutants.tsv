@@ -1,5 +1,5 @@
 # Mutants for scripts/mutation-check.sh. Columns are separated by one TAB:
-# id	file	original text (must occur exactly once)	mutated text	what the mutant breaks
+# id	file	original text (must occur exactly once; \n is a newline)	mutated text	what the mutant breaks
 verifier-l3-issue-cycle	compiler/src/main/scala/vliw/compiler/Verifier.scala	w.issue < r.cycle && r.cycle < w.end	w.issue <= r.cycle && r.cycle < w.end	L3 also rejects reads in the issue cycle
 verifier-l6-off-by-one	compiler/src/main/scala/vliw/compiler/Verifier.scala	late.filter(_._2 > h)	late.filter(_._2 >= h)	L6 rejects operations that complete exactly at HALT
 verifier-l8-store-issue	compiler/src/main/scala/vliw/compiler/Verifier.scala	st.cycle + st.latency <= l.cycle	st.cycle < l.cycle	L8 treats a store as visible from the cycle after issue
@@ -14,3 +14,4 @@ verifier-l9-off-by-one	compiler/src/main/scala/vliw/compiler/Verifier.scala	b.cy
 verifier-l10-ignored	compiler/src/main/scala/vliw/compiler/Verifier.scala	st.cycle < l.cycle && l.cycle < st.cycle + st.latency	st.cycle < l.cycle && l.cycle < st.cycle + 1	L10 is missed for store latencies above 1
 model-l9-unit-free	sim/src/main/scala/vliw/sim/ReferenceModel.scala	state.unitFreeAt(m) = s + machine.operation(m).ii	state.unitFreeAt(m) = s + 1	the model ignores the II
 model-l10-ignored	sim/src/main/scala/vliw/sim/ReferenceModel.scala	op.target == Right(addr) && op.issue < s	op.target == Right(addr) && op.issue < s - 1	the model lets a load read a word being stored
+hw-decoder-swap-sources	hw/src/main/scala/vliw/hw/Decoder.scala	  io.out.rs1 := rs1\n  io.out.rs2 := rs2	  io.out.rs1 := rs2\n  io.out.rs2 := rs1	the RTL decoder swaps rs1 and rs2 (ADD and MUL results unchanged)

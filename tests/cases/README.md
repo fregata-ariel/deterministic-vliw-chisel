@@ -70,7 +70,7 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 
 ## mutation チェック
 
-`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し、そのたびに `sbt test` が**失敗する**ことを確かめる。テストが検出できない種類の誤りがあれば「SURVIVED」と表示する。mutant ごとに全テストを実行するため時間がかかる（14 mutant で約50分。timeout は120分）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義を変えたPRでだけ実行し、required にはしない。
+`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**失敗する**ことを確かめる。テストが検出できない種類の誤りがあれば「SURVIVED」と表示する。mutant ごとに全テストを実行するため時間がかかる（15 mutant で約55分。timeout は120分）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義を変えたPRでだけ実行し、required にはしない。
 
 ```sh
 scripts/mutation-check.sh                    # 全mutant

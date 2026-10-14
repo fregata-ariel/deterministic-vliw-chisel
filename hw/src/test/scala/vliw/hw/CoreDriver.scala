@@ -26,6 +26,34 @@ final class LoadRejected(message: String) extends Exception(message)
 object CoreDriver {
   private val Mask64 = (BigInt(1) << 64) - 1
 
+  /** The issued bundle as the decoder reports it, rebuilt from the decoded fields rather than from
+    * the instruction word, so that the trace shows what the slots actually execute (#56). None when
+    * the decoder flags the bundle illegal (L1).
+    */
+  private def decoded(d: DecodedBundle): Option[vliw.isa.Bundle] =
+    Option.unless(d.illegal.peek().litToBoolean) {
+      def field(x: UInt) = x.peek().litValue.toInt
+      val compute: ComputeOp =
+        if (d.halt.peek().litToBoolean) ComputeOp.Halt
+        else if (!d.compute.valid.peek().litToBoolean) ComputeOp.Nop
+        else {
+          val (rd, a, b) = (field(d.compute.bits.rd), field(d.rs1), field(d.rs2))
+          d.compute.bits.kind.peek().litValue match {
+            case k if k == ComputeKind.Add.litValue => ComputeOp.Add(rd, a, b)
+            case k if k == ComputeKind.Sub.litValue => ComputeOp.Sub(rd, a, b)
+            case _                                  => ComputeOp.Mul(rd, a, b)
+          }
+        }
+      val memory: MemoryOp =
+        if (!d.memory.valid.peek().litToBoolean) MemoryOp.Nop
+        else {
+          val (reg, addr) = (field(d.memory.bits.reg), field(d.memory.bits.addr))
+          if (d.memory.bits.kind.peek().litValue == MemoryKind.Ld.litValue) MemoryOp.Ld(reg, addr)
+          else MemoryOp.St(addr, reg)
+        }
+      vliw.isa.Bundle(compute, memory)
+    }
+
   def run(
       dut: Core,
       machine: MachineDescription,
@@ -75,7 +103,6 @@ object CoreDriver {
     dut.clock.step()
     host.start.poke(false.B)
 
-    val codec = new BundleCodec(machine)
     val lines = Vector.newBuilder[ujson.Obj]
     var violations = Set.empty[Rule]
     var visibleNow = (Vector.empty[ujson.Obj], Vector.empty[ujson.Obj]) // commits made at E_c
@@ -90,13 +117,13 @@ object CoreDriver {
       val issue: ujson.Value =
         if (!busy) ujson.Null
         else
-          codec.decode(o.word.peek().litValue.toLong) match {
-            case Right(b) =>
+          decoded(o.decoded) match {
+            case Some(b) =>
               ujson.Obj(
                 "compute" -> Disassembler.compute(b.compute),
                 "memory" -> Disassembler.memory(b.memory)
               )
-            case Left(_) => ujson.Obj("compute" -> "?", "memory" -> "?")
+            case None => ujson.Obj("compute" -> "?", "memory" -> "?")
           }
       lines += ujson.Obj(
         "cycle" -> cycle,
