@@ -1,0 +1,30 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "register_address_bounds",
+  "description": "r0 / r15 とアドレス 0 / 511 の境界。r15 の加算は桁あふれする",
+  "program": [
+    "@0: add r15, r0, r15 | st [511], r15   ; r15 = 1 + 0xFFFFFFFF = 0 from 1; memory[511] = old r15",
+    "@1: nop              | ld r0, [511]    ; r0 = 0xFFFFFFFF from 3",
+    "@2: nop              | st [0], r15     ; memory[0] = new r15 = 0",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r0": 1,
+      "r15": "0xFFFFFFFF"
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 4,
+    "registers": {
+      "r0": "0xFFFFFFFF",
+      "r15": 0
+    },
+    "memory": {
+      "0": 0,
+      "511": "0xFFFFFFFF"
+    }
+  }
+}

@@ -102,5 +102,9 @@ class TestCaseSpec extends AnyFunSuite {
     assert(errorsAfter(_("inputs")("registers")("r1") = -1).exists(_.contains("32-bit unsigned")))
     assert(errorsAfter(_("name") = "Bad").exists(_.contains("must match")))
     assert(errorsAfter(_("machine") = "nope.json").exists(_.startsWith("$.machine")))
+    assert(errorsAfter { v =>
+      v("machine") = "tests/machines/small_scratchpad.json"
+      v("inputs")("memory")("8") = 1
+    }.exists(_.contains("address 8 does not exist on vliw2-i32-sp8 (0..7)")))
   }
 }

@@ -194,7 +194,7 @@ object Verifier {
       )
     }
 
-  // L8: every read has a declared input or a write that is visible by then.
+  // L8: every read has a declared input or a write (register or store) that is visible by then.
   private def undefinedReads(sum: Summary, declared: Declaration): Vector[Finding] = {
     val regs = sum.reads
       .filterNot { r =>
@@ -212,7 +212,7 @@ object Verifier {
       .filter(!_.store)
       .filterNot { l =>
         declared.memory.contains(l.addr) || sum.accesses
-          .exists(st => st.store && st.addr == l.addr && st.cycle < l.cycle)
+          .exists(st => st.store && st.addr == l.addr && st.cycle + st.latency <= l.cycle)
       }
       .map(l =>
         Finding(

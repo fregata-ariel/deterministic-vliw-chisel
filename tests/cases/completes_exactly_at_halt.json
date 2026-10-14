@@ -1,0 +1,29 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "completes_exactly_at_halt",
+  "description": "HALTの発行サイクル h にちょうど完了する操作は合法（MUL・LDは s+2 = h、STは s+1 = h）",
+  "program": [
+    "@0: mul r2, r1, r1 | ld r3, [0]",
+    "@1: nop            | st [1], r1",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 7
+    },
+    "memory": {
+      "0": 5
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 3,
+    "registers": {
+      "r2": 49,
+      "r3": 5
+    },
+    "memory": {
+      "1": 7
+    }
+  }
+}

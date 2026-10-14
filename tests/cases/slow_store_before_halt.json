@@ -1,0 +1,24 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "slow_store_before_halt",
+  "description": "ST のレイテンシーが2の構成では、HALT の直前のサイクルの ST は完了しない（L6）",
+  "machine": "tests/machines/slow_units.json",
+  "program": [
+    "@0: nop            | st [0], r1",
+    "@1: nop            | st [1], r1   ; completes at E_3 > h = 2",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L6"
+      ]
+    }
+  }
+}

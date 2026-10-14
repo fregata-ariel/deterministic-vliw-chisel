@@ -84,6 +84,7 @@
   - 起動条件は、`main` へのpush、すべてのPR、手動実行とする。作業ブランチではPRを開いてCIを回す。（当初は全ブランチへのpushで起動し、PRでは二重実行を避けてジョブを`if`で飛ばしていたが、PR上に同名のskippedチェックが並び紛らわしいため変更した。）
   - `permissions: contents: read` にする。`main` 以外では、同じrefの古い実行をキャンセルする。
   - 使用するActionは、公式（`actions/*`）とsbt公式（`sbt/setup-sbt`）のメジャータグで固定する。第三者のActionを追加する場合はcommit SHAで固定する。
+- mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。
 - **今後**: Phase 1でChisel・firtool・Verilatorのジョブを追加する。golden traceの比較は #8 以降で `scala` ジョブのテストとして追加する。
 
 ## ADR-0006: MVPでは合法なプログラムを保守的に限定する
