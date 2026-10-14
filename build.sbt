@@ -14,7 +14,11 @@ ThisBuild / scalacOptions ++= Seq(
 )
 
 val scalatestVersion = "3.2.20"
-val ujsonVersion = "4.4.3"
+val ujsonVersion = "3.3.1" // the version Chisel depends on (ADR-0004)
+val chiselVersion = "7.15.0"
+// firtool version that Chisel 7.15.0 asks for; on the classpath, firtool-resolver extracts it
+// instead of downloading it at run time.
+val firtoolVersion = "1.158.0"
 
 // Tests and `run` fork with the repository root as working directory, so paths such as
 // config/machine.json resolve the same way as in the CLI.
@@ -45,6 +49,21 @@ lazy val sim = (project in file("sim"))
   .dependsOn(isa)
   .settings(commonSettings)
 
+// Chisel RTL (Phase 1). Reads the machine description through isa.
+lazy val hw = (project in file("hw"))
+  .dependsOn(isa)
+  .settings(commonSettings)
+  .settings(
+    libraryDependencies ++= Seq(
+      "org.chipsalliance" %% "chisel" % chiselVersion,
+      "org.chipsalliance" % "llvm-firtool" % firtoolVersion
+    ),
+    addCompilerPlugin(
+      ("org.chipsalliance" % "chisel-plugin" % chiselVersion).cross(CrossVersion.full)
+    ),
+    scalacOptions += "-Ymacro-annotations"
+  )
+
 // Differential tests between the verifier and the reference model (ADR-0002). Test code only.
 lazy val crosscheck = (project in file("crosscheck"))
   .dependsOn(compiler, sim)
@@ -52,7 +71,7 @@ lazy val crosscheck = (project in file("crosscheck"))
   .settings(publish / skip := true)
 
 lazy val root = (project in file("."))
-  .aggregate(isa, compiler, sim, crosscheck)
+  .aggregate(isa, compiler, sim, crosscheck, hw)
   .settings(
     name := "deterministic-vliw-chisel",
     publish / skip := true
