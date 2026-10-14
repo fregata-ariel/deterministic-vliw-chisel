@@ -47,8 +47,10 @@ class WritebackSchedule(regBits: Int, maxLatency: Int) extends Module {
   io.commit.bits := Mux(now, issued, slot(0).bits)
 
   private val later = io.issue.valid && io.issue.bits.latency > 1.U
-  private val target = (io.issue.bits.latency - 1.U)(log2Ceil(maxLatency).max(1) - 1, 0)
-  io.conflict := (now && slot(0).valid) || (later && slot(target).valid)
+  private val target = io.issue.bits.latency - 1.U
+  private val laterTaken =
+    if (maxLatency == 1) false.B else slot(target(log2Ceil(maxLatency) - 1, 0)).valid
+  io.conflict := (now && slot(0).valid) || (later && laterTaken)
   io.pending := slot.map(_.valid).reduce(_ || _)
 
   for (k <- 0 until maxLatency) {
