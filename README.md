@@ -37,7 +37,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)） |
 | `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定 |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
-| `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1） |
+| `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1）。`sbt "hw/run"` で `generated/` にSystemVerilogを出力 |
 | `compiler/` | アセンブラ、DAG、静的スケジューラ、独立検証器 |
 | `sim/` | ISA参照モデル、サイクル精度モデル |
 | `tests/` | 実装をまたいで共有するテストデータ（[テストケース](tests/cases/README.md)、golden、縮小machine定義） |
@@ -49,7 +49,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 
 ## 開発
 
-必要なもの: JDK 21、sbt、jq、shellcheck。バージョンと構成の根拠は[ADR-0004](docs/DECISIONS.md#adr-0004-ツールチェーンとバージョン固定)にあります。
+必要なもの: JDK 21、sbt、jq、shellcheck、Verilator（5.020。`hw` の ChiselSim テストに使う）。バージョンと構成の根拠は[ADR-0004](docs/DECISIONS.md#adr-0004-ツールチェーンとバージョン固定)にあります。
 
 ```sh
 scripts/check.sh          # 全チェック（CIと同じ内容）

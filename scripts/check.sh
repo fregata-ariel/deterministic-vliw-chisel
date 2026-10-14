@@ -31,6 +31,7 @@ run_static() {
 run_scala() {
   local sbt_cmd="${SBT:-sbt}"
   command -v "$sbt_cmd" >/dev/null 2>&1 || die "sbt is required (or set SBT): $sbt_cmd"
+  command -v verilator >/dev/null 2>&1 || die 'verilator is required by the hw tests (ChiselSim)'
 
   step 'sbt: scalafmt check, compile (-Werror), test'
   "$sbt_cmd" scalafmtSbtCheck scalafmtCheckAll test

@@ -55,13 +55,15 @@
 | 対象 | バージョン | 固定場所 | 備考 |
 |---|---|---|---|
 | JDK | 21 | `.github/workflows/ci.yml` | CIはTemurin |
-| Scala | 2.13.18 | `build.sbt` | Chisel 7.16.0 のPOMが要求する版 |
+| Scala | 2.13.18 | `build.sbt` | Chisel 7.15.0 のPOMが要求する版 |
 | sbt | 1.12.15 | `project/build.properties` | sbt 2.x はプラグインとChiselの追随を待つ |
 | ScalaTest | 3.2.20 | `build.sbt` | ChiselSimと同じテスト基盤 |
-| ujson | 4.4.3 | `build.sbt` | JSONの読み書き（ADR-0007） |
+| ujson | 3.3.1 | `build.sbt` | JSONの読み書き（ADR-0007）。Chisel 7.15.0 が依存する upickle 3.3.1 と揃える（当初の 4.4.3 は、Chisel と同じクラスパスに置くと版が衝突した） |
 | scalafmt | 3.11.5 | `.scalafmt.conf` | |
 | sbt-scalafmt | 2.6.2 | `project/plugins.sbt` | |
-| Chisel | 7.x（Phase 1で固定） | — | 2026-10-14時点の最新は7.16.0（2026-10-01公開）。Phase 1着手時に、2週間以上経った版から選ぶ |
+| Chisel | 7.15.0 | `build.sbt` | 2026-09-01公開。7.16.0（2026-10-01公開）は、Phase 1 着手時点（2026-10-14）で2週間に満たなかった |
+| firtool（llvm-firtool） | 1.158.0 | `build.sbt` | Chisel 7.15.0 が要求する版。依存に入れておくと firtool-resolver がjarから取り出すので、実行時のダウンロードが要らない |
+| Verilator | 5.020 | CIでは `apt-get install verilator`（ubuntu-24.04） | ChiselSim のバックエンド。手元でも同じ版を推奨する |
 
 - **コンパイラ設定**: `-deprecation -feature -unchecked -Xlint -Werror`。警告はすべてエラーとして扱う。
 - **sbtプロジェクト構成**:
@@ -72,7 +74,7 @@
 | `compiler` | `compiler/` | `isa` | アセンブラ、verifier、Phase 2のスケジューラ |
 | `sim` | `sim/` | `isa` | サイクル精度の参照モデル |
 | `crosscheck` | `crosscheck/` | `compiler`、`sim` | verifierと参照モデルの差分テスト（テストのみ） |
-| `hw` | `hw/` | `isa`（予定） | Phase 1で追加するChisel RTL |
+| `hw` | `hw/` | `isa` | Chisel RTL と ChiselSim のテスト |
 
 ## ADR-0005: CIの入口と起動条件
 
@@ -85,7 +87,7 @@
   - `permissions: contents: read` にする。`main` 以外では、同じrefの古い実行をキャンセルする。
   - 使用するActionは、公式（`actions/*`）とsbt公式（`sbt/setup-sbt`）のメジャータグで固定する。第三者のActionを追加する場合はcommit SHAで固定する。
 - mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。
-- **今後**: Phase 1でChisel・firtool・Verilatorのジョブを追加する。golden traceの比較は #8 以降で `scala` ジョブのテストとして追加する。
+- `scala` ジョブ（と `mutation` ジョブ）は Verilator を apt で入れ、`hw` の ChiselSim テストも実行する（#23）。firtool は sbt の依存として取得し、sbt のキャッシュに載る。
 
 ## ADR-0006: MVPでは合法なプログラムを保守的に限定する
 
