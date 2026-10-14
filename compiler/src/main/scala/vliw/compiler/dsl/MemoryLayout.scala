@@ -18,6 +18,15 @@ final case class MemoryLayout(
   def scalar(name: String): Int = scalars(name)
   def constant(value: Long): Int = constants(value)
 
+  /** Addresses the host initialises before start (M_in): input elements, scalars and constants. */
+  def initialized: Set[Int] =
+    (kernel.inputs.flatMap(a => (0 until a.length).map(elem(a.name, _))) ++
+      kernel.scalars.map(scalar) ++ constants.values).toSet
+
+  /** Addresses of the output elements. */
+  def outputAddresses: Set[Int] =
+    kernel.outputs.flatMap(o => (0 until o.length).map(elem(o.name, _))).toSet
+
   /** Initial scratchpad contents for `in`: inputs, scalars and constants. */
   def memoryImage(in: Values): Either[String, Map[Int, Long]] =
     Interpreter.check(kernel, in).map { _ =>

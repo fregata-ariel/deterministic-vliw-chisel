@@ -17,3 +17,5 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 - `dag`: 依存 DAG（データ依存とメモリ順序、レイテンシーによる距離、クリティカルパスと資源による下限）。[docs/COMPILER.md](../docs/COMPILER.md)
 - `schedule`: 資源制約付き list scheduling（スロット、書戻しポートの未来の予約、II、HALT の位置。優先度はクリティカルパスとプログラム順。レジスタの上限付きも可）
 - `regalloc`: 生存区間による register allocation と、足りないときの上限付き再スケジュール。命令列（bundle）を作る
+- `KernelCompiler`: 全段をまとめ、独立 verifier の最終検査に通った命令列だけを返す。`.hex` とテストケースを出力する
+- CLI: `sbt "compiler/run compile <kernel>... [--machine m.json] [--out dir]"`（[docs/COMPILER.md](../docs/COMPILER.md)「CLI」）
