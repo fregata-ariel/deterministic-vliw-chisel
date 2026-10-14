@@ -15,4 +15,5 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 
 - `dsl`: カーネルDSL（`Kernel`、`Expr`）、参照実装（`Interpreter`）、メモリ配置（`MemoryLayout`）、lowering（`Lowering`）、ベンチマークのカーネル（`Benchmarks`）。[docs/DSL.md](../docs/DSL.md)
 - `dag`: 依存 DAG（データ依存とメモリ順序、レイテンシーによる距離、クリティカルパスと資源による下限）。[docs/COMPILER.md](../docs/COMPILER.md)
-- `schedule`: 資源制約付き list scheduling（スロット、書戻しポートの未来の予約、II、HALT の位置。優先度はクリティカルパスとプログラム順）
+- `schedule`: 資源制約付き list scheduling（スロット、書戻しポートの未来の予約、II、HALT の位置。優先度はクリティカルパスとプログラム順。レジスタの上限付きも可）
+- `regalloc`: 生存区間による register allocation と、足りないときの上限付き再スケジュール。命令列（bundle）を作る

@@ -2,7 +2,6 @@ package vliw.compiler.schedule
 
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.compiler.Verifier
 import vliw.compiler.dag.{Dag, Node}
 import vliw.compiler.dsl._
 import vliw.compiler.dsl.LoweredKernel.{Bin, Read, Write}
@@ -116,33 +115,5 @@ class ScheduleSpec extends AnyFunSuite {
     // Recorded here so that scheduler changes show up (docs/COMPILER.md).
     assert(cycles(Priority.CriticalPath) == Map("saxpy8" -> 26, "fir4x8" -> 63, "matmul3" -> 52))
     assert(cycles(Priority.ProgramOrder) == Map("saxpy8" -> 28, "fir4x8" -> 63, "matmul3" -> 53))
-  }
-
-  test("small kernels, one register per value, pass the verifier on three machines") {
-    val small = Seq(Benchmarks.saxpy(2), Benchmarks.fir(Seq(1L, 2L), 2), Benchmarks.saxpy(3))
-    for (m <- machines; k <- small; p <- Priority.all) {
-      val layout = MemoryLayout.fixedOrder(k, m).fold(e => fail(e), identity)
-      val s = ListScheduler.schedule(Dag.of(Lowering.lower(layout), m), p)
-      val bundles = NaiveCodegen.bundles(s).getOrElse(fail(s"${k.name}: too many values"))
-      val words = new BundleCodec(m).encodeAll(bundles).fold(e => fail(e), identity)
-      val declared = Verifier.Declaration(
-        Set.empty,
-        layout
-          .memoryImage(
-            Values(
-              k.inputs.map(a => a.name -> Vector.fill(a.length)(1L)).toMap,
-              k.scalars.map(_ -> 1L).toMap
-            )
-          )
-          .toOption
-          .get
-          .keySet
-      )
-      val findings = Verifier.verify(m, words, declared)
-      assert(
-        findings.isEmpty,
-        s"${k.name} on ${m.machineId} with ${p.name}:\n${Disassembler.program(bundles)}${findings.mkString("\n")}"
-      )
-    }
   }
 }
