@@ -1,0 +1,33 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "slow_store_same_bank",
+  "description": "ST のレイテンシーが2の構成で、書込み中の ST と同じ bank の別の番地は読める。ST(s) の番地は s+2 から読める",
+  "machine": "tests/machines/slow_units.json",
+  "program": [
+    "@0: nop            | st [2], r1   ; bank 0, memory[2] visible from 2",
+    "@1: nop            | ld r2, [0]   ; bank 0, another word",
+    "@2: nop            | ld r3, [2]   ; 2 = 0 + ST latency",
+    "@3: nop",
+    "@4: nop",
+    "@5: halt                          ; LD latency 3: the LD at 2 completes at E_5"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 9
+    },
+    "memory": {
+      "0": 4
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 6,
+    "registers": {
+      "r2": 4,
+      "r3": 9
+    },
+    "memory": {
+      "2": 9
+    }
+  }
+}

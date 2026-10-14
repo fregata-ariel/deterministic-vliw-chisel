@@ -1,0 +1,26 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "ii_back_to_back_mul",
+  "description": "MUL の II が2の構成では、MUL を連続するサイクルに発行できない（L9）",
+  "machine": "tests/machines/ii_units.json",
+  "program": [
+    "@0: mul r3, r1, r2",
+    "@1: mul r4, r1, r2   ; MUL II 2: the next MUL may issue at 2",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L9"
+      ]
+    }
+  }
+}

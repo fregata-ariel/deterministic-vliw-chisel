@@ -189,4 +189,39 @@ class ReferenceModelSpec extends AnyFunSuite {
     )
     assert(result.left.map(_.rule) == Left(Rule.AddressRange))
   }
+
+  private def machineFile(name: String) =
+    MachineDescription
+      .load(Paths.get("tests", "machines", name))
+      .fold(es => fail(es.mkString), identity)
+
+  test("L9: an operation's unit accepts a new issue II cycles after the previous one") {
+    val ii = machineFile("ii_units.json") // ADD, SUB, MUL II 2; LD II 3
+    def on(src: String) =
+      ReferenceModel.run(ii, words(src, ii), Inputs(Map(1 -> 3L, 2 -> 4L), Map(0 -> 5L, 1 -> 6L)))
+    assert(
+      on("mul r3, r1, r2\nmul r4, r1, r2\nnop\nhalt").left.map(_.rule) == Left(Rule.IssueInterval)
+    )
+    assert(
+      on("| ld r3, [0]\nnop\n| ld r4, [1]\nnop\nhalt").left.map(_.rule) == Left(Rule.IssueInterval)
+    )
+    val r = on("add r3, r1, r2\nsub r4, r1, r2\nadd r5, r3, r4\nhalt").fold(
+      v => fail(v.toString),
+      identity
+    )
+    assert(r.registers(5).contains(6L)) // (3 + 4) + (3 - 4) modulo 2^32
+  }
+
+  test("L10: a load of a word being stored stops the run, even if the old value is defined") {
+    val slow = machineFile("slow_units.json") // ST latency 2
+    def on(src: String) =
+      ReferenceModel.run(slow, words(src, slow), Inputs(Map(1 -> 9L), Map(0 -> 4L, 2 -> 5L)))
+    val v = on("| st [2], r1\n| ld r2, [2]\nnop\nnop\nhalt").left.toOption.get
+    assert(v.rule == Rule.InFlightStoreRead && v.cycle.contains(1))
+    val r = on("| st [2], r1\n| ld r2, [0]\n| ld r3, [2]\nnop\nnop\nhalt").fold(
+      v => fail(v.toString),
+      identity
+    )
+    assert(r.registers(2).contains(4L) && r.registers(3).contains(9L))
+  }
 }

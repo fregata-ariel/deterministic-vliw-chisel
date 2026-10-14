@@ -27,11 +27,11 @@ final case class Execution(
 
 /** Cycle-accurate reference model of mvp-0 (docs/ISA.md, "実行意味論").
   *
-  * State is the architectural RF and scratchpad plus a queue of issued operations carrying their
-  * computed values and commit boundaries. Each cycle reads sources from the visible state, enqueues
-  * results for E_(s+L), and then applies everything due at E_(s+1). Runtime checks stand in for RTL
-  * assertions: the first violated legality rule stops the run. The model does not use the verifier
-  * (ADR-0002).
+  * State is the architectural RF and scratchpad, a queue of issued operations carrying their
+  * computed values and commit boundaries, and for each operation the cycle from which its unit
+  * accepts a new issue. Each cycle reads sources from the visible state, enqueues results for
+  * E_(s+L), and then applies everything due at E_(s+1). Runtime checks stand in for RTL assertions:
+  * the first violated legality rule stops the run. The model does not use the verifier (ADR-0002).
   */
 object ReferenceModel {
   private val Mask = 0xffffffffL
@@ -90,6 +90,9 @@ object ReferenceModel {
     val rf: Array[Option[Long]] = Array.fill(machine.registerCount)(None)
     val mem: Array[Option[Long]] = Array.fill(machine.scratchpadWords)(None)
     val inFlight: mutable.ArrayBuffer[InFlight] = mutable.ArrayBuffer.empty
+
+    /** First cycle in which each operation's unit accepts a new issue (L9). */
+    val unitFreeAt: mutable.Map[String, Int] = mutable.Map.empty.withDefaultValue(0)
     inputs.registers.foreach { case (r, v) => rf(r) = Some(v & Mask) }
     inputs.memory.foreach { case (a, v) => mem(a) = Some(v & Mask) }
   }
@@ -163,8 +166,18 @@ object ReferenceModel {
           s"address $a is outside the scratchpad (0..${machine.scratchpadWords - 1})"
         )
 
+    def unit(mnemonic: String): Either[Violation, Unit] = {
+      val free = state.unitFreeAt(mnemonic)
+      if (s < free)
+        fail(
+          Rule.IssueInterval,
+          s"$mnemonic is issued before its unit accepts a new operation (from cycle $free)"
+        )
+      else Right(())
+    }
+
     def binary(d: Int, a: Int, b: Int, mnemonic: String)(f: (Long, Long) => Long) =
-      for { x <- readReg(a); y <- readReg(b) } yield Some(
+      for { _ <- unit(mnemonic); x <- readReg(a); y <- readReg(b) } yield Some(
         InFlight(s, s + latency(mnemonic), Left(d), Some(Slot.Compute), f(x, y) & Mask)
       )
 
@@ -181,7 +194,16 @@ object ReferenceModel {
       case MemoryOp.Nop      => Right(None)
       case MemoryOp.Ld(d, a) =>
         for {
+          _ <- unit("LD")
           addr <- address(a)
+          _ <- state.inFlight.find(op => op.target == Right(addr) && op.issue < s) match {
+            case Some(op) =>
+              fail(
+                Rule.InFlightStoreRead,
+                s"[$addr] is loaded while being stored (issued at cycle ${op.issue}, visible from ${op.commitAt})"
+              )
+            case None => Right(())
+          }
           v <- state
             .mem(addr)
             .toRight(
@@ -189,7 +211,7 @@ object ReferenceModel {
             )
         } yield Some(InFlight(s, s + latency("LD"), Left(d), Some(Slot.Memory), v))
       case MemoryOp.St(a, r) =>
-        for { addr <- address(a); v <- readReg(r) } yield Some(
+        for { _ <- unit("ST"); addr <- address(a); v <- readReg(r) } yield Some(
           InFlight(s, s + latency("ST"), Right(addr), None, v)
         )
     }
@@ -243,6 +265,18 @@ object ReferenceModel {
       halted <- halt()
     } yield {
       state.inFlight ++= ops
+      def occupy(m: String) = state.unitFreeAt(m) = s + machine.operation(m).ii
+      bundle.compute match {
+        case ComputeOp.Add(_, _, _)         => occupy("ADD")
+        case ComputeOp.Sub(_, _, _)         => occupy("SUB")
+        case ComputeOp.Mul(_, _, _)         => occupy("MUL")
+        case ComputeOp.Nop | ComputeOp.Halt => ()
+      }
+      bundle.memory match {
+        case MemoryOp.Ld(_, _) => occupy("LD")
+        case MemoryOp.St(_, _) => occupy("ST")
+        case MemoryOp.Nop      => ()
+      }
       halted
     }
   }

@@ -10,3 +10,7 @@ codec-swap-sources	isa/src/main/scala/vliw/isa/BundleCodec.scala	(a << 20) | (b 
 hw-mul-latency	hw/src/main/scala/vliw/hw/ComputeSlot.scala	ComputeKind.Mul -> p.latency("MUL").U	ComputeKind.Mul -> p.latency("ADD").U	RTL MUL commits with the ADD latency
 hw-rs2-reads-rs1	hw/src/main/scala/vliw/hw/Core.scala	rf.io.read(1).addr := d.rs2	rf.io.read(1).addr := d.rs1	RTL reads rs1 in place of rs2
 hw-ld-capture-late	hw/src/main/scala/vliw/hw/MemorySlot.scala	schedule.io.issue.bits.latency := (p.latency("LD") - 1).U	schedule.io.issue.bits.latency := p.latency("LD").U	RTL writes a load one cycle late
+verifier-l9-off-by-one	compiler/src/main/scala/vliw/compiler/Verifier.scala	b.cycle - a.cycle < ii	b.cycle - a.cycle < ii - 1	L9 accepts an issue one cycle inside the II
+verifier-l10-ignored	compiler/src/main/scala/vliw/compiler/Verifier.scala	st.cycle < l.cycle && l.cycle < st.cycle + st.latency	st.cycle < l.cycle && l.cycle < st.cycle + 1	L10 is missed for store latencies above 1
+model-l9-unit-free	sim/src/main/scala/vliw/sim/ReferenceModel.scala	state.unitFreeAt(m) = s + machine.operation(m).ii	state.unitFreeAt(m) = s + 1	the model ignores the II
+model-l10-ignored	sim/src/main/scala/vliw/sim/ReferenceModel.scala	op.target == Right(addr) && op.issue < s	op.target == Right(addr) && op.issue < s - 1	the model lets a load read a word being stored

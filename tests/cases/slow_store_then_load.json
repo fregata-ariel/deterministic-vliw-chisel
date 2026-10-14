@@ -1,11 +1,11 @@
 {
   "format": "vliw-testcase/1",
   "name": "slow_store_then_load",
-  "description": "ST のレイテンシーが2の構成では、ST(s) の値は s+2 から見える。s+1 の LD は未定義値を読む（L8）",
+  "description": "ST のレイテンシーが2の構成では、ST(s) の値は s+2 から見える。s+1 の LD は書込み中の番地を読み（L10）、入力宣言も無いので未定義値でもある（L8）",
   "machine": "tests/machines/slow_units.json",
   "program": [
     "@0: nop            | st [2], r1   ; memory[2] visible from 2",
-    "@1: nop            | ld r2, [2]   ; too early: memory[2] has no value yet",
+    "@1: nop            | ld r2, [2]   ; too early: memory[2] is being stored and has no value yet",
     "@2: nop",
     "@3: nop",
     "@4: halt"
@@ -19,7 +19,8 @@
   "expect": {
     "verdict": {
       "illegal": [
-        "L8"
+        "L8",
+        "L10"
       ]
     }
   }

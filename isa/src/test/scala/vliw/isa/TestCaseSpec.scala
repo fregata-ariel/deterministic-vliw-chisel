@@ -59,7 +59,7 @@ class TestCaseSpec extends AnyFunSuite {
       )
     )
     assert(
-      errorsAfter(_("expect") = ujson.Obj("verdict" -> ujson.Obj("illegal" -> ujson.Arr("L9"))))
+      errorsAfter(_("expect") = ujson.Obj("verdict" -> ujson.Obj("illegal" -> ujson.Arr("L11"))))
         .exists(_.contains("unknown rule"))
     )
     assert(

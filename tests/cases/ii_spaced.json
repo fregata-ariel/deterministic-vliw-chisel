@@ -1,0 +1,40 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "ii_spaced",
+  "description": "II が2以上の構成で、各演算をちょうど II だけ空けて発行する。II は演算ごとの演算器の制約で、ADD の直後に SUB は発行できる",
+  "machine": "tests/machines/ii_units.json",
+  "program": [
+    "@0: add r3, r1, r2 | ld r5, [0]   ; ADD II 2, LD II 3",
+    "@1: sub r4, r1, r2                ; another unit: not limited by the ADD at 0",
+    "@2: add r6, r3, r4                ; 2 - 0 = II of ADD; 10 + 2",
+    "@3: mul r8, r6, r5 | ld r7, [1]   ; 3 - 0 = II of LD; 12 * 10",
+    "@4: nop",
+    "@5: nop            | st [2], r8   ; r8 visible from 5",
+    "@6: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 6,
+      "r2": 4
+    },
+    "memory": {
+      "0": 10,
+      "1": 7
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 7,
+    "registers": {
+      "r3": 10,
+      "r4": 2,
+      "r5": 10,
+      "r6": 12,
+      "r7": 7,
+      "r8": 120
+    },
+    "memory": {
+      "2": 120
+    }
+  }
+}

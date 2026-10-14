@@ -64,7 +64,7 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 | `operations` | ちょうど ADD、SUB、MUL、LD、ST、HALT の6つ |
 | `operations.<op>.slot` / `.writeback` | 固定: ADD/SUB/MUL は `compute` / `compute`、LD は `memory` / `memory`、ST は `memory` / `null` |
 | `operations.<op>.opcode` | 1〜15。同じスロット内で一意（HALTを含む）。`nop_opcode` と異なる |
-| `operations.<op>.latency` / `.ii` | 1〜8 |
+| `operations.<op>.latency` / `.ii` | 1〜8。ii は演算ごとの演算器の発行間隔（[ISA.md](ISA.md) の L9） |
 | `operations.HALT` | `slot` は `compute`。`requires_no_pending_operations` と `requires_memory_nop` は `true`、`done_after_cycles` は1 |
 | `nop_opcode` | 固定: 0 |
 | `instruction_memory.bundles` | 1〜4096 |
@@ -72,3 +72,23 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 | `timing` | 固定: `source_read` は `issue_cycle`、`availability` は `issue_cycle_plus_latency`、`dependency_constraint` は `consumer_issue_gte_producer_issue_plus_latency`、`writeback_cycle_reservation` は `true`、`kernel_cycles` は `halt_issue_cycle_plus_1` |
 
 規則を変えるときは、`schema_version` を上げ、この表、ローダ、`MachineDescriptionSpec` を同時に変える。
+
+## 実装ごとの対応範囲
+
+machine description の契約は3段に分かれる。ローダが受け付ける構成は、すべて verifier と参照モデルで扱える。RTL はその一部だけを実装し、範囲外の構成は組み立て時に理由付きで拒否する（[ADR-0009](DECISIONS.md)）。
+
+| 段 | 判定する場所 | 範囲 |
+|---|---|---|
+| 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
+| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10 |
+| RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体 |
+
+RTL が対応しない理由は次のとおり。
+
+| 制約 | 理由 |
+|---|---|
+| ii が1 | 全演算器を毎サイクル発行できるパイプラインにしている。II が2以上の演算器の予約は実装していない |
+| LD の latency が2以上 | Scratchpad は同期読出しメモリで、発行の次のサイクルに値が出る |
+| ST の latency が1 | 書込みを発行の境界で行う。2以上にすると、STの書込みと後続のLDの読出しが同じ bank で同じ境界に重なり得る。1RW の bank でこれを扱う設計は未定 |
+
+RTL のテスト（`hw`）は、範囲外の構成のケースをスキップとして表示し、検証済みには数えない。
