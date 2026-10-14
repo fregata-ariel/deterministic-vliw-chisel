@@ -2,7 +2,7 @@ package vliw.compiler.schedule
 
 import scala.collection.mutable
 
-import vliw.compiler.dag.{Dag, Node}
+import vliw.compiler.dag.{Dag, EdgeKind, Node}
 import vliw.isa.Slot
 
 /** Operations issued in one bundle, as DAG node ids. Values are still virtual registers: the result
@@ -62,7 +62,18 @@ object ListScheduler {
     case _: Node.Store   => None
   }
 
-  def schedule(dag: Dag, priority: Priority = Priority.CriticalPath): Schedule = {
+  /** Schedules without a register limit (values are virtual registers). */
+  def schedule(dag: Dag, priority: Priority = Priority.CriticalPath): Schedule =
+    run(dag, priority, None).getOrElse(sys.error("list scheduling without a register limit failed"))
+
+  /** Register limit for [[run]]: at most `registers` values live at any cycle (docs/COMPILER.md,
+    * "register allocation"). A load may issue only while `loadReserve` more registers stay free, so
+    * that loaded operands leave room for the results computed from them.
+    */
+  final case class Limit(registers: Int, loadReserve: Int)
+
+  /** List scheduling; with a limit, None when it cannot place every node within it. */
+  def run(dag: Dag, priority: Priority, limit: Option[Limit]): Option[Schedule] = {
     val n = dag.nodes.size
     val issue = Array.fill(n)(-1)
     val missing = Array.tabulate(n)(i => dag.predecessors(i).size) // unscheduled predecessors
@@ -70,16 +81,31 @@ object ListScheduler {
     val ports = mutable.Set.empty[(Slot, Int)] // write-back reservations (port, boundary)
     val unitFree = mutable.Map.empty[String, Int].withDefaultValue(0) // L9
     val ready = mutable.Set.from((0 until n).filter(missing(_) == 0))
+    // A value is live from its issue until its last reader issues (interval [s, u)).
+    val operands = dag.predecessors.map(_.filter(_.kind == EdgeKind.Data).map(_.from).distinct)
+    val readers = Array.tabulate(n)(i => dag.successors(i).count(_.kind == EdgeKind.Data))
+    var live = 0
     var cycle = 0
     var left = n
+    var idle = 0
+    val stuck = dag.nodes.indices.map(i => dag.latency(i)).maxOption.getOrElse(0) +
+      dag.machine.operations.values.map(_.ii).max + 2
     def latency(i: Int) = dag.latency(i)
     def mnemonic(i: Int) = dag.nodes(i).mnemonic
+    def produces(i: Int) = !dag.nodes(i).isInstanceOf[Node.Store]
+    def liveAfter(i: Int) = live - operands(i).count(readers(_) == 1) + (if (produces(i)) 1 else 0)
 
     def fits(i: Int): Boolean =
       readyAt(i) <= cycle && unitFree(mnemonic(i)) <= cycle &&
-        port(dag.nodes(i)).forall(p => !ports.contains((p, cycle + latency(i))))
+        port(dag.nodes(i)).forall(p => !ports.contains((p, cycle + latency(i)))) &&
+        limit.forall { l =>
+          val reserve = if (dag.nodes(i).isInstanceOf[Node.Load]) l.loadReserve else 0
+          liveAfter(i) <= l.registers - reserve
+        }
 
     def place(i: Int): Unit = {
+      live = liveAfter(i)
+      operands(i).foreach(o => readers(o) -= 1)
       issue(i) = cycle
       ready -= i
       left -= 1
@@ -92,21 +118,29 @@ object ListScheduler {
       }
     }
 
-    while (left > 0) {
-      // Pick both slots from the nodes ready at the start of the cycle: a node made ready by a
-      // placement in this cycle has distance >= 0 and is considered from this cycle on only if its
-      // distance is 0, which the slot it shares (memory, LD -> ST) excludes anyway.
+    // Under register pressure, prefer the nodes that free the most registers.
+    def key(i: Int) = limit match {
+      case Some(l) if live >= l.registers - 1 => (liveAfter(i) - live, -priority.key(dag, i), i)
+      case _                                  => (0, -priority.key(dag, i), i)
+    }
+
+    while (left > 0 && idle <= stuck) {
+      // A node made ready by a placement in this cycle has distance >= 1, except LD -> ST (0),
+      // which shares the memory slot; so both slots can be filled in one pass.
+      val before = left
       Seq(Slot.Compute, Slot.Memory).foreach { s =>
         ready.toSeq
           .filter(i => slot(dag.nodes(i)) == s && fits(i))
-          .sortBy(i => (-priority.key(dag, i), i))
+          .sortBy(key)
           .headOption
           .foreach(place)
       }
+      idle = if (left < before) 0 else idle + 1
       cycle += 1
-      require(cycle <= 64 * (n + 1) * 8, "list scheduling made no progress") // cannot happen
     }
-    val halt = (0 until n).map(i => issue(i) + latency(i)).maxOption.getOrElse(0)
-    Schedule(dag, issue.toVector, halt)
+    Option.when(left == 0) {
+      val halt = (0 until n).map(i => issue(i) + latency(i)).maxOption.getOrElse(0)
+      Schedule(dag, issue.toVector, halt)
+    }
   }
 }

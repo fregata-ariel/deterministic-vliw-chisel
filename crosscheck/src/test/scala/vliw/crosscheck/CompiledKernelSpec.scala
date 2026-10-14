@@ -7,36 +7,26 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.dag.Dag
 import vliw.compiler.dsl._
-import vliw.compiler.schedule.{ListScheduler, NaiveCodegen, Priority}
+import vliw.compiler.regalloc.RegisterAllocator
 import vliw.hw.{Core, CoreDriver, CoreParams}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
-private final case class Compiled(
-    kernel: Kernel,
-    layout: MemoryLayout,
-    words: Vector[Long],
-    cycles: Int
-)
+private final case class Compiled(layout: MemoryLayout, words: Vector[Long], cycles: Int)
 
-/** Small DSL kernels, list-scheduled and given one register per value (no register allocation yet,
-  * #50), run on the reference model and the RTL: the outputs must equal the DSL reference
-  * implementation, and cycles must equal the schedule's.
+/** The benchmark kernels, scheduled and register-allocated, run on the reference model and the RTL:
+  * the outputs must equal the DSL reference implementation, in the scheduled cycles.
   */
-class ScheduledKernelSpec extends AnyFunSuite with ChiselSim {
+class CompiledKernelSpec extends AnyFunSuite with ChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
-  private val small = Seq(Benchmarks.saxpy(2), Benchmarks.saxpy(3), Benchmarks.fir(Seq(1L, 2L), 2))
 
-  private def compile(k: Kernel, m: MachineDescription, p: Priority): Compiled = {
+  private def compile(k: Kernel, m: MachineDescription): Compiled = {
     val layout = MemoryLayout.fixedOrder(k, m).fold(e => fail(e), identity)
-    val s = ListScheduler.schedule(Dag.of(Lowering.lower(layout), m), p)
-    val bundles = NaiveCodegen.bundles(s).getOrElse(fail(s"${k.name}: too many values"))
-    Compiled(
-      k,
-      layout,
-      new BundleCodec(m).encodeAll(bundles).fold(e => fail(e), identity),
-      s.cycles
-    )
+    val a = RegisterAllocator
+      .scheduleAndAllocate(Dag.of(Lowering.lower(layout), m))
+      .fold(e => fail(s"${k.name} on ${m.machineId}: $e"), identity)
+    val words = new BundleCodec(m).encodeAll(a.allocation.bundles).fold(e => fail(e), identity)
+    Compiled(layout, words, a.schedule.cycles)
   }
 
   private def values(k: Kernel, rng: Random) = Values(
@@ -44,17 +34,15 @@ class ScheduledKernelSpec extends AnyFunSuite with ChiselSim {
     k.scalars.map(_ -> (rng.nextLong() & 0xffffffffL)).toMap
   )
 
-  test(
-    "on the reference model, scheduled kernels compute the DSL results in the scheduled cycles"
-  ) {
-    val rng = new Random(49L)
+  test("on the reference model, compiled kernels compute the DSL results in the scheduled cycles") {
+    val rng = new Random(50L)
     val machines = Seq(machine) ++ Seq("slow_units.json", "ii_units.json").map { f =>
       MachineDescription
         .load(java.nio.file.Paths.get("tests", "machines", f))
         .fold(es => fail(es.mkString), identity)
     }
-    for (m <- machines; k <- small; p <- Priority.all) {
-      val c = compile(k, m, p)
+    for (m <- machines; k <- Benchmarks.all) {
+      val c = compile(k, m)
       (0 until 10).foreach { _ =>
         val in = values(k, rng)
         val inputs = c.layout.inputs(in).fold(e => fail(e), identity)
@@ -71,11 +59,11 @@ class ScheduledKernelSpec extends AnyFunSuite with ChiselSim {
     }
   }
 
-  test("on the RTL, scheduled kernels compute the DSL results in the scheduled cycles") {
-    val rng = new Random(4949L)
+  test("on the RTL, compiled kernels compute the DSL results in the scheduled cycles") {
+    val rng = new Random(5050L)
     simulate(new Core(CoreParams(machine))) { dut =>
-      for (k <- small; p <- Priority.all) {
-        val c = compile(k, machine, p)
+      for (k <- Benchmarks.all) {
+        val c = compile(k, machine)
         val outAddrs =
           k.outputs.flatMap(o => (0 until o.length).map(c.layout.elem(o.name, _))).toSet
         (0 until 5).foreach { _ =>
