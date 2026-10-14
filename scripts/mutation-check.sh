@@ -29,7 +29,7 @@ while IFS=$'\t' read -r id file original mutated what; do
   # Replace the original text, which must occur exactly once.
   if ! python3 -I - "$file" "$original" "$mutated" <<'PY'
 import sys
-path, old, new = sys.argv[1:4]
+path, old, new = (a.replace("\\n", "\n") for a in sys.argv[1:4])
 text = open(path, encoding="utf-8").read()
 if text.count(old) != 1:
     sys.exit(1)

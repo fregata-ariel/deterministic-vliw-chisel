@@ -38,7 +38,7 @@
 
 ## 出力方法
 
-RTL のトレースは、テスト用の `vliw.hw.CoreDriver` がコアの観測ポート（各サイクルの命令語と commit）から同じ形式で作る。`hw/CaseSpec` が golden trace と、`crosscheck/RtlDifferentialSpec` が参照モデルのトレースと、1行ずつ照合する。
+RTL のトレースは、テスト用の `vliw.hw.CoreDriver` がコアの観測ポートから同じ形式で作る。`issue` 欄は、命令語を復号し直すのではなく、RTL の `Decoder` が出した演算の種類・レジスタ・アドレスから組み立てる（#56）。そのため、Decoder の誤りは、値に影響しなくても（例えば可換な演算のソースの入れ替え）トレースの照合で見つかる。L1 に違反する bundle は `?` と表示する。`hw/CaseSpec` が golden trace と、`crosscheck/RtlDifferentialSpec` が参照モデルのトレースと、1行ずつ照合する。
 
 
 ```sh

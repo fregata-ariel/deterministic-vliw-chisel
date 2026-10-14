@@ -33,7 +33,9 @@ class HostIO(val p: CoreParams) extends Bundle {
 class ObserveIO(val p: CoreParams) extends Bundle {
   val issue = Bool()
   val pc = UInt(p.pcBits.W)
-  val word = UInt(64.W)
+
+  /** What the decoder made of the issued bundle: the operations the slots actually execute. */
+  val decoded = new DecodedBundle(p)
   val rfCommit = Vec(2, Valid(new RegWrite(p.regBits))) // compute port, memory port
   val memCommit = Valid(new MemWrite)
 }
@@ -151,7 +153,7 @@ class Core(p: CoreParams) extends Module {
 
   io.observe.issue := busy
   io.observe.pc := pc
-  io.observe.word := word
+  io.observe.decoded := d
   io.observe.rfCommit(0) := compute.io.commit
   io.observe.rfCommit(1) := memory.io.commit
   io.observe.memCommit := memory.io.storeCommit
