@@ -6,7 +6,7 @@
 |---|---|---|---|
 | メモリ配置・lowering | `Kernel` → `LoweredKernel`（アドレス単位の式） | `vliw.compiler.dsl` | #47 |
 | DAG | `LoweredKernel` → `Dag` | `vliw.compiler.dag` | #48 |
-| list scheduling | `Dag` → 仮想レジスタの bundle 列 | 未実装 | #49 |
+| list scheduling | `Dag` → `Schedule`（各ノードの発行サイクルと HALT。値は仮想レジスタ） | `vliw.compiler.schedule` | #49 |
 | register allocation | → 物理レジスタの bundle 列 | 未実装 | #50 |
 | コード生成と検証 | → 命令語、verifier による最終検査 | 未実装 | #51 |
 
@@ -65,3 +65,51 @@
 ### テスト
 
 `compiler/src/test/.../dag/DagSpec`：ISA の命令例の DAG（ノード・辺・距離・下限）、machine description による距離の変化、値番号付け、メモリ順序の4種類の辺、ベンチマークのノード数と下限、辺が ASAP で満たされること、DAG をノード順に実行した結果が lowering の評価と一致すること。
+
+## list scheduling
+
+`ListScheduler.schedule(dag, priority)` は、サイクルの順に、準備のできたノードを優先度の高い順に置く。結果の `Schedule` は、各ノードの発行サイクルと HALT のサイクルを持つ。値はまだ仮想レジスタで、ノード n の結果を仮想レジスタ n とする（レジスタ割り当ては #50）。
+
+### 守る制約
+
+| 制約 | 方法 | 規則（[ISA.md](ISA.md)） |
+|---|---|---|
+| 依存 | 辺 `(from, to, d)` について、`to` は `issue(from) + d` 以降 | L3、L8、L10 |
+| スロット | 各サイクルに Compute・Memory それぞれ高々1つ | 構造 |
+| 書戻しポート | ADD/SUB/MUL は Compute ポートを、LD は Memory ポートを、境界 E_(s+L) に予約する。予約済みの境界を使う配置はしない（例: MUL(s) の後の ADD(s+1)） | L5 |
+| II | 同じ演算の発行は II 以上空ける | L9 |
+| HALT | 全操作が完了する境界 `max(s+L)` に置く。HALT の bundle には他の操作を置かない | L2、L6 |
+
+同じレジスタへの書込み区間の重複（L4）と、書込み中のレジスタの読出し（L3 のうち、レジスタの再利用によるもの）は、レジスタ割り当て（#50）で扱う。
+
+### 優先度
+
+| 方式 | 内容 |
+|---|---|
+| `CriticalPath`（既定） | DAG の高さ（完了までの最長経路）が大きい順 |
+| `ProgramOrder` | ノード番号（lowering の順）の順。比較用 |
+
+同じ優先度なら、ノード番号の小さい方を先に置く。結果は決定的である。
+
+### 結果（既定の構成）
+
+| カーネル | `CriticalPath` | `ProgramOrder` | 下限（依存 / スロット） |
+|---|---|---|---|
+| `saxpy8` | 26 | 28 | 7 / 26 |
+| `fir4x8` | 63 | 63 | 9 / 57 |
+| `matmul3` | 52 | 53 | 8 / 46 |
+
+`saxpy8` は Memory スロットが律速で、スロットの下限に一致する。`fir4x8` と `matmul3` は Compute スロットが律速である。下限との差は、次の3つでほぼ説明できる。
+
+- 開始: 最初の MUL は2つの LD を待つ（3サイクル）
+- 終了: 最後の ADD の後の ST と HALT
+- Compute スロットの空き（高々2つ）: MUL(s) と ADD(s+1) は同じ境界に Compute ポートを使う（L5）
+
+スロットの下限は、これらを数えていない。
+
+### テスト
+
+- `compiler/.../schedule/ScheduleSpec`: スケジューラとは独立に書いた検査で、依存・スロット・書戻しポート・II・HALT の位置を確かめる。対象はベンチマーク3つ × 構成3つ（既定、`slow_units`、`ii_units`）× 優先度2つ。cycles が両方の下限以上であることと、上の表の値も確かめる
+- 値ごとに別のレジスタを割り当てる、テスト用の素朴なコード生成（`NaiveCodegen`）で、小さなカーネルを命令列にする
+  - `ScheduleSpec`: verifier が合法と判定すること
+  - `crosscheck/ScheduledKernelSpec`: 参照モデルと RTL での実行結果が DSL の参照実装と一致し、cycles がスケジュールと一致すること
