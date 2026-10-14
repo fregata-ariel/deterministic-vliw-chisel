@@ -1,0 +1,36 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "slow_units_spacing",
+  "description": "MUL・LDのレイテンシーが3の構成。結果は s+3 から見える",
+  "machine": "tests/machines/slow_units.json",
+  "program": [
+    "@0: mul r3, r1, r2 | ld r4, [0]   ; both visible from 3",
+    "@1: nop",
+    "@2: nop",
+    "@3: add r5, r3, r4                ; 6 + 10",
+    "@4: nop            | st [1], r5   ; ST latency 2: memory[1] at E_6",
+    "@5: nop",
+    "@6: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3
+    },
+    "memory": {
+      "0": 10
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 7,
+    "registers": {
+      "r3": 6,
+      "r4": 10,
+      "r5": 16
+    },
+    "memory": {
+      "1": 16
+    }
+  }
+}

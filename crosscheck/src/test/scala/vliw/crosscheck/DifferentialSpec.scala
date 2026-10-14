@@ -15,6 +15,30 @@ class DifferentialSpec extends AnyFunSuite {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
   private val codec = new BundleCodec(machine)
 
+  /** Machine descriptions that differ in latencies and capacity (II stays 1, see #35). */
+  private def variant(edit: ujson.Value => Unit): MachineDescription = {
+    val v = ujson.read(machine.canonicalJson)
+    edit(v)
+    MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString("\n")), identity)
+  }
+  private val variants: Seq[(String, MachineDescription)] = Seq(
+    "slow_units (tests/machines)" -> MachineDescription
+      .load(java.nio.file.Paths.get("tests", "machines", "slow_units.json"))
+      .fold(es => fail(es.mkString("\n")), identity),
+    "add L=2, sub L=3, 4 banks x 64 words" -> variant { v =>
+      v("operations")("ADD")("latency") = 2
+      v("operations")("SUB")("latency") = 3
+      v("scratchpad")("banks") = 4
+      v("scratchpad")("words_per_bank") = 64
+      v("scratchpad")("bank_mapping") = "word_address_mod_4"
+      v("scratchpad")("row_mapping") = "word_address_div_4"
+    },
+    "all units L=1, 2 words" -> variant { v =>
+      Seq("MUL", "LD").foreach(op => v("operations")(op)("latency") = 1)
+      v("scratchpad")("words_per_bank") = 1
+    }
+  )
+
   /** Few registers and addresses so that hazards are frequent; HALT usually last. */
   private def program(rng: Random): Vector[Bundle] = {
     def r = rng.nextInt(4)
@@ -42,10 +66,59 @@ class DifferentialSpec extends AnyFunSuite {
     }
   }
 
-  private def inputs(rng: Random): Inputs = Inputs(
+  /** Declares a random subset of r0..r3 and of the addresses 0..3 that exist on `m`. */
+  private def inputs(rng: Random, m: MachineDescription = machine): Inputs = Inputs(
     (0 until 4).filter(_ => rng.nextInt(3) != 0).map(_ -> (rng.nextLong() & 0xffffffffL)).toMap,
-    (0 until 4).filter(_ => rng.nextInt(3) != 0).map(_ -> (rng.nextLong() & 0xffffffffL)).toMap
+    (0 until 4.min(m.scratchpadWords))
+      .filter(_ => rng.nextInt(3) != 0)
+      .map(_ -> (rng.nextLong() & 0xffffffffL))
+      .toMap
   )
+
+  /** Judges `count` random programs on machine `m` with both implementations. */
+  private def agree(m: MachineDescription, seed: Long, count: Int): (Int, Map[Rule, Int]) = {
+    val rng = new Random(seed)
+    val c = new BundleCodec(m)
+    var legal = 0
+    val firstRule = collection.mutable.Map.empty[Rule, Int].withDefaultValue(0)
+    (0 until count).foreach { i =>
+      val bundles = program(rng)
+      val in = inputs(rng, m)
+      val words = c.encodeAll(bundles).fold(e => fail(e), identity)
+      val findings = Verifier.verify(m, words, Verifier.Declaration.of(in))
+      val result = ReferenceModel.run(m, words, in)
+      def show = s"${m.machineId} #$i\n" + Disassembler.program(bundles) +
+        findings.mkString("verifier:\n  ", "\n  ", "\n") + s"model: $result"
+      (findings.isEmpty, result) match {
+        case (true, Right(run)) => legal += 1; assert(run.cycles == bundles.size, show)
+        case (false, Left(v))   =>
+          assert(findings.map(_.rule).contains(v.rule), show); firstRule(v.rule) += 1
+        case _ => fail(s"verdicts differ\n$show")
+      }
+    }
+    (legal, firstRule.toMap)
+  }
+
+  test(
+    "verifier and reference model agree under machine descriptions with other latencies and capacity"
+  ) {
+    variants.foreach { case (label, m) =>
+      val (legal, rules) = agree(m, 99L, 8000)
+      assert(legal > 100, s"$label: only $legal legal programs")
+      // With every latency 1 nothing is ever in flight, so L3, L5 and L6 cannot occur there.
+      val expected =
+        if (label.startsWith("all units L=1"))
+          Set[Rule](Rule.ProgramShape, Rule.AddressRange, Rule.UndefinedRead)
+        else
+          Set[Rule](
+            Rule.ProgramShape,
+            Rule.InFlightRead,
+            Rule.OverlappingWrites,
+            Rule.WritebackPort
+          )
+      assert(expected.subsetOf(rules.keySet), s"$label: rules hit first: ${rules.keys.map(_.id)}")
+    }
+  }
 
   test("verifier and reference model agree on legality for random programs") {
     val rng = new Random(20261014L)

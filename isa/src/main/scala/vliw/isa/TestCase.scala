@@ -170,9 +170,25 @@ object TestCase {
       d <- description
       m <- machine
       (words, source) <- program
-      in <- inputs
+      in <- inputs.filter(in => inputsFit(root, m, in))
       ex <- expect
     } yield TestCase(n, d, m, words, source, in, ex)
+  }
+
+  /** Declared inputs must name locations that exist on the case's machine. */
+  private def inputsFit(root: Obj, m: MachineDescription, in: Inputs): Boolean = {
+    val regs = in.registers.keys.filter(_ >= m.registerCount).toSeq.sorted
+    val mem = in.memory.keys.filter(_ >= m.scratchpadWords).toSeq.sorted
+    regs.foreach(r =>
+      root.report("inputs", s"r$r does not exist on ${m.machineId} (r0..r${m.registerCount - 1})")
+    )
+    mem.foreach(a =>
+      root.report(
+        "inputs",
+        s"address $a does not exist on ${m.machineId} (0..${m.scratchpadWords - 1})"
+      )
+    )
+    regs.isEmpty && mem.isEmpty
   }
 
   private val RegisterKey = "r([0-9]|1[0-5])".r

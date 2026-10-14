@@ -1,0 +1,9 @@
+# Mutants for scripts/mutation-check.sh. Columns are separated by one TAB:
+# id	file	original text (must occur exactly once)	mutated text	what the mutant breaks
+verifier-l3-issue-cycle	compiler/src/main/scala/vliw/compiler/Verifier.scala	w.issue < r.cycle && r.cycle < w.end	w.issue <= r.cycle && r.cycle < w.end	L3 also rejects reads in the issue cycle
+verifier-l6-off-by-one	compiler/src/main/scala/vliw/compiler/Verifier.scala	late.filter(_._2 > h)	late.filter(_._2 >= h)	L6 rejects operations that complete exactly at HALT
+verifier-l8-store-issue	compiler/src/main/scala/vliw/compiler/Verifier.scala	st.cycle + st.latency <= l.cycle	st.cycle < l.cycle	L8 treats a store as visible from the cycle after issue
+model-ld-latency	sim/src/main/scala/vliw/sim/ReferenceModel.scala	s + latency("LD"), Left(d)	s + latency("ST"), Left(d)	LD commits with the ST latency
+model-l5-port	sim/src/main/scala/vliw/sim/ReferenceModel.scala	o.port.contains(p) && o.commitAt == op.commitAt	o.port.contains(p) && o.commitAt == op.commitAt + 1	write-back port conflicts are missed
+model-sub-adds	sim/src/main/scala/vliw/sim/ReferenceModel.scala	binary(d, a, b, "SUB")(_ - _)	binary(d, a, b, "SUB")(_ + _)	SUB computes a sum (values only; verdicts unchanged)
+codec-swap-sources	isa/src/main/scala/vliw/isa/BundleCodec.scala	(a << 20) | (b << 16)	(b << 20) | (a << 16)	rs1 and rs2 swap places in the encoding
