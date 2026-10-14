@@ -7,3 +7,6 @@ model-ld-latency	sim/src/main/scala/vliw/sim/ReferenceModel.scala	s + latency("L
 model-l5-port	sim/src/main/scala/vliw/sim/ReferenceModel.scala	o.port.contains(p) && o.commitAt == op.commitAt	o.port.contains(p) && o.commitAt == op.commitAt + 1	write-back port conflicts are missed
 model-sub-adds	sim/src/main/scala/vliw/sim/ReferenceModel.scala	binary(d, a, b, "SUB")(_ - _)	binary(d, a, b, "SUB")(_ + _)	SUB computes a sum (values only; verdicts unchanged)
 codec-swap-sources	isa/src/main/scala/vliw/isa/BundleCodec.scala	(a << 20) | (b << 16)	(b << 20) | (a << 16)	rs1 and rs2 swap places in the encoding
+hw-mul-latency	hw/src/main/scala/vliw/hw/ComputeSlot.scala	ComputeKind.Mul -> p.latency("MUL").U	ComputeKind.Mul -> p.latency("ADD").U	RTL MUL commits with the ADD latency
+hw-rs2-reads-rs1	hw/src/main/scala/vliw/hw/Core.scala	rf.io.read(1).addr := d.rs2	rf.io.read(1).addr := d.rs1	RTL reads rs1 in place of rs2
+hw-ld-capture-late	hw/src/main/scala/vliw/hw/MemorySlot.scala	schedule.io.issue.bits.latency := (p.latency("LD") - 1).U	schedule.io.issue.bits.latency := p.latency("LD").U	RTL writes a load one cycle late

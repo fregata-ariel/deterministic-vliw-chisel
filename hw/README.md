@@ -29,3 +29,15 @@ ChiselSim の作業ファイルは `build/chiselsim/` に作られる（gitignor
 | `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1）を検査する |
 
 ホストは停止中に、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける。実行中は内部状態を変更しない。
+
+## テスト
+
+| テスト | 内容 |
+|---|---|
+| 単体（`RegisterFileSpec` ほか） | 各モジュールのタイミングと違反信号 |
+| `CoreSpec` | ISA例、HALT のみ、再スタート |
+| `CaseSpec` | `tests/cases` の全ての合法ケース（cycles、最終状態、golden trace） |
+| `AssertionSpec` | `tests/cases` の全ての不正ケース（期待した規則の assertion） |
+| `EmitSpec` | SystemVerilog の生成と、対応しない構成の拒否 |
+
+RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。

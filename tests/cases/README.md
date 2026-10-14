@@ -46,6 +46,11 @@
 | `sim/ReferenceModelSpec` | 参照モデルの結果（cycles、最終状態、golden trace、最初の違反）が期待値と合うこと |
 | `crosscheck/DifferentialSpec` | 乱数で作ったプログラムで、verifierと参照モデルの判定が一致すること（既定の構成と、レイテンシー・容量を変えた3構成）。合法なプログラムで、cyclesとcommit時刻が入力値に依存しないこと |
 | `sim/MetricsSpec` | 合法な全ケースで、メトリクスの値が命令列と整合すること |
+| `hw/CaseSpec` | 合法な全ケースを RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
+| `hw/AssertionSpec` | 不正な全ケースで、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
+| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること。RTL のタイミングが入力値に依存しないこと |
+
+RTL が対応しない構成（`slow_units.json`、ST のレイテンシー2）のケースは、`hw` のテストではスキップとして表示する。
 
 新しいケースは `tests/cases/<name>.json` に置けば、上のテストすべてが自動的に対象にする。
 
