@@ -20,7 +20,7 @@ val chiselVersion = "7.15.0"
 // instead of downloading it at run time.
 val firtoolVersion = "1.158.0"
 
-// Tests and `run` fork with the repository root as working directory, so paths such as
+// Tests, `run` and `Test/runMain` fork with the repository root as working directory, so paths such as
 // config/machine.json resolve the same way as in the CLI.
 lazy val commonSettings = Seq(
   libraryDependencies += "org.scalatest" %% "scalatest" % scalatestVersion % Test,
@@ -32,6 +32,9 @@ lazy val commonSettings = Seq(
   Test / forkOptions := (Test / forkOptions).value
     .withWorkingDirectory((LocalRootProject / baseDirectory).value),
   Compile / run / forkOptions := (Compile / run / forkOptions).value
+    .withWorkingDirectory((LocalRootProject / baseDirectory).value),
+  Test / run / fork := true,
+  Test / run / forkOptions := (Test / run / forkOptions).value
     .withWorkingDirectory((LocalRootProject / baseDirectory).value)
 )
 
