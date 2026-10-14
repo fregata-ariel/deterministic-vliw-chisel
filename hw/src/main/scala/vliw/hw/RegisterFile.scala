@@ -41,10 +41,13 @@ class RegisterFile(count: Int) extends Module {
 
   private val regs = Reg(Vec(count, UInt(32.W)))
 
-  io.read.foreach(p => p.data := regs(p.addr))
+  /** With a single register the index has no bits; a dynamic index would be too wide. */
+  private def reg(i: UInt) = if (count == 1) regs(0) else regs(i)
+
+  io.read.foreach(p => p.data := reg(p.addr))
   io.write.foreach { w =>
     when(w.valid) {
-      regs(w.bits.reg) := w.bits.data
+      reg(w.bits.reg) := w.bits.data
     }
   }
 }
@@ -92,6 +95,8 @@ class WriteReservations(count: Int, maxLatency: Int, queries: Int) extends Modul
     )
   }
 
-  io.query.zip(io.inFlight).foreach { case (q, f) => f := remaining(q) =/= 0.U }
+  io.query.zip(io.inFlight).foreach { case (q, f) =>
+    f := (if (count == 1) remaining(0) else remaining(q)) =/= 0.U
+  }
   io.anyInFlight := remaining.map(_ =/= 0.U).reduce(_ || _)
 }

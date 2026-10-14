@@ -91,4 +91,6 @@ RTL が対応しない理由は次のとおり。
 | LD の latency が2以上 | Scratchpad は同期読出しメモリで、発行の次のサイクルに値が出る |
 | ST の latency が1 | 書込みを発行の境界で行う。2以上にすると、STの書込みと後続のLDの読出しが同じ bank で同じ境界に重なり得る。1RW の bank でこれを扱う設計は未定 |
 
-RTL のテスト（`hw`）は、範囲外の構成のケースをスキップとして表示し、検証済みには数えない。
+`CoreParams.check` は、範囲外の設定を理由付きですべて返す。`sbt "hw/run [dir] [machine.json]"` は理由を表示して終了し、`CoreParams` を直接作ると組み立て時に例外になる。
+
+RTL のテスト（`hw`）は、範囲外の構成のケースを、理由を付けてスキップとして表示し、検証済みには数えない。範囲内の別の構成（レイテンシー、レジスタ数、bank 数を変えたもの）は、`crosscheck/RtlDifferentialSpec` で RTL と参照モデルを照合する。範囲の両端（latency 1 と 8、レジスタ1個と16個、Scratchpad 1 word と 512 word、命令領域 1 と 4096 bundle）は `hw/EmitSpec` で組み立てられることを確かめる。
