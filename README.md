@@ -24,7 +24,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 |---|---|
 | 名前 | deterministic-vliw-chisel |
 | 説明 | Compiler-scheduled, fixed-cycle VLIW microengine in Chisel |
-| 公開範囲 | private |
+| 公開範囲 | public（GitHub上の設定に合わせる。変更する場合はこの行も更新する） |
 | 既定ブランチ | main（PRとCIを経てマージする） |
 | ライセンス | 未選定。公開や外部コード導入時に決定 |
 
