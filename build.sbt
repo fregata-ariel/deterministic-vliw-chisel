@@ -67,7 +67,7 @@ lazy val hw = (project in file("hw"))
 // Differential tests between the verifier, the reference model and the RTL (ADR-0002).
 // Test code only.
 lazy val crosscheck = (project in file("crosscheck"))
-  .dependsOn(compiler, sim, hw % "compile->compile;test->test")
+  .dependsOn(compiler % "compile->compile;test->test", sim, hw % "compile->compile;test->test")
   .settings(commonSettings)
   .settings(publish / skip := true)
 
