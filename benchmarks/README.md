@@ -1,6 +1,6 @@
 # Benchmarks
 
-Phase 2以降の整数SAXPY、FIR、固定サイズ行列積を配置する。カーネル自体は未実装で、自動命令生成（Phase 2）と一緒に追加する。
+Phase 2以降の整数SAXPY、FIR、固定サイズ行列積を配置する。カーネルの定義は DSL で書いた `vliw.compiler.dsl.Benchmarks`（`saxpy8`、`fir4x8`、`matmul3`。[docs/DSL.md](../docs/DSL.md)）。自動生成した命令列と記録は、命令生成（#51）とベンチマーク（#52）で追加する。
 
 各kernelで算術仕様、入力サイズ、期待出力、期待cycles、machine revision、コンパイラ設定を記録する。単一発行モデル・固定パイプラインとの比較条件を揃える。
 

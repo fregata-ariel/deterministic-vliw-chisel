@@ -15,7 +15,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 - [開発順序・完了条件](docs/ROADMAP.md)
 - [設計判断記録（ADR）](docs/DECISIONS.md)
 - [Phase 0 完了報告](docs/PHASE0.md)・[Phase 1 完了報告](docs/PHASE1.md)
-- 形式: [machine description](docs/MACHINE.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[メトリクス](docs/METRICS.md)・[verifier](docs/VERIFIER.md)
+- 形式: [machine description](docs/MACHINE.md)・[カーネルDSL](docs/DSL.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[メトリクス](docs/METRICS.md)・[verifier](docs/VERIFIER.md)
 - [一次資料](docs/REFERENCES.md)
 
 ## リポジトリの定義

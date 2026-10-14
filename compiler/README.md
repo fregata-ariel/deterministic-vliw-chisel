@@ -10,3 +10,7 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 
 - `Verifier`: 合法性規則 L1〜L10 の静的verifier（[docs/VERIFIER.md](../docs/VERIFIER.md)）。値を持たず、書込み区間・読出し・メモリアクセスの表で判定し、全違反を報告する。
 - CLI: `sbt "compiler/run verify <case.json>..."`
+
+## 実装（Phase 2）
+
+- `dsl`: カーネルDSL（`Kernel`、`Expr`）、参照実装（`Interpreter`）、メモリ配置（`MemoryLayout`）、lowering（`Lowering`）、ベンチマークのカーネル（`Benchmarks`）。[docs/DSL.md](../docs/DSL.md)
