@@ -15,7 +15,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 - [開発順序・完了条件](docs/ROADMAP.md)
 - [設計判断記録（ADR）](docs/DECISIONS.md)
 - [Phase 0 完了報告](docs/PHASE0.md)
-- 形式: [machine description](docs/MACHINE.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[verifier](docs/VERIFIER.md)
+- 形式: [machine description](docs/MACHINE.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[メトリクス](docs/METRICS.md)・[verifier](docs/VERIFIER.md)
 - [一次資料](docs/REFERENCES.md)
 
 ## リポジトリの定義
@@ -61,7 +61,7 @@ sbt "isa/run machine"                                   # machine description �
 sbt "isa/run asm prog.asm prog.hex"                     # アセンブル（.hex / .bin）
 sbt "isa/run disasm prog.hex"                           # 逆アセンブル
 sbt "compiler/run verify tests/cases/isa_example.json"  # 合法性の静的検査
-sbt "sim/run tests/cases/isa_example.json --trace out.jsonl"  # 参照モデルで実行
+sbt "sim/run tests/cases/isa_example.json --trace out.jsonl --metrics out.json"  # 参照モデルで実行
 ```
 
 `compiler` と `sim` は `isa` にのみ依存し、互いに依存しません。両者の突き合わせは `crosscheck` で行います（[ADR-0002](docs/DECISIONS.md#adr-0002-相互検査は言語ではなく状態表現と判定方法の違いで設計する)）。
