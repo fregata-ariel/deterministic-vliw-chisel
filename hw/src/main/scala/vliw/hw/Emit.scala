@@ -21,8 +21,15 @@ object Emit {
         errors.foreach(System.err.println)
         sys.exit(1)
     }
+    val params = CoreParams.check(machine) match {
+      case Right(p)      => p
+      case Left(reasons) =>
+        System.err.println(s"the RTL cannot implement ${machine.machineId} (docs/MACHINE.md):")
+        reasons.foreach(r => System.err.println(s"  $r"))
+        sys.exit(1)
+    }
     ChiselStage.emitSystemVerilogFile(
-      new Core(CoreParams(machine)),
+      new Core(params),
       args = Array("--target-dir", targetDir),
       firtoolOpts = FirtoolOptions
     )

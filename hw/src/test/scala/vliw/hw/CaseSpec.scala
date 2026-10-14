@@ -3,8 +3,6 @@ package vliw.hw
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
-import scala.util.Try
-
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -14,12 +12,16 @@ import vliw.isa._
 class CaseSpec extends AnyFunSuite with ChiselSim {
   private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)
 
+  /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */
+  private def outside(c: TestCase) =
+    CoreParams.check(c.machine).left.toOption.get.map(_.takeWhile(_ != ';')).mkString(", ")
+
   private def canonical(v: ujson.Value): String =
     Json.canonical(v).fold(e => fail(e.message), identity)
 
   cases.filter(_.expect.verdict == Verdict.Legal).foreach { c =>
-    if (Try(CoreParams(c.machine)).isFailure)
-      ignore(s"${c.name}: machine ${c.machine.machineId} is outside what the RTL implements") {}
+    if (CoreParams.check(c.machine).isLeft)
+      ignore(s"${c.name}: outside the RTL's range (${outside(c)})") {}
     else
       test(s"${c.name}: cycles, final state and trace match the expectations") {
         simulate(new Core(CoreParams(c.machine))) { dut =>

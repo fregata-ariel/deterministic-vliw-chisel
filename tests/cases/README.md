@@ -53,7 +53,7 @@
 | `sim/MetricsSpec` | 合法な全ケースで、メトリクスの値が命令列と整合すること |
 | `hw/CaseSpec` | 合法な全ケースを RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
 | `hw/AssertionSpec` | 不正な全ケースで、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
-| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること。RTL のタイミングが入力値に依存しないこと |
+| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成）。RTL のタイミングが入力値に依存しないこと |
 
 RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
 
@@ -69,7 +69,7 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 
 ## mutation チェック
 
-`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダに1か所ずつ入れる）を順に適用し、そのたびに `sbt test` が**失敗する**ことを確かめる。テストが検出できない種類の誤りがあれば「SURVIVED」と表示する。実行時間がかかるため、CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義を変えたPRでだけ実行する。
+`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し、そのたびに `sbt test` が**失敗する**ことを確かめる。テストが検出できない種類の誤りがあれば「SURVIVED」と表示する。mutant ごとに全テストを実行するため時間がかかる（14 mutant で約50分。timeout は120分）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義を変えたPRでだけ実行し、required にはしない。
 
 ```sh
 scripts/mutation-check.sh                    # 全mutant

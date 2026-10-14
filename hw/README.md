@@ -26,7 +26,7 @@ ChiselSim の作業ファイルは `build/chiselsim/` に作られる（gitignor
 | `ComputeSlot` | ADD/SUB/MUL と、Compute書戻しポートの予約表 |
 | `MemorySlot` | bank分割した Scratchpad、LD/ST と、Memory書戻しポートの予約表 |
 | `WritebackSchedule` | 1つの書戻しポートの予約表。E_(s+L) での書込みと、L5 の検出 |
-| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1）を検査する |
+| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1）を検査し、`CoreParams.check` で範囲外の理由をすべて返す（[docs/MACHINE.md](../docs/MACHINE.md)「実装ごとの対応範囲」） |
 
 ホストは停止中に、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける。実行中は内部状態を変更しない。
 

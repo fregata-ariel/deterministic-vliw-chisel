@@ -1,7 +1,5 @@
 package vliw.hw
 
-import scala.util.Try
-
 import chisel3.simulator.Exceptions.AssertionFailed
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
@@ -15,12 +13,16 @@ class AssertionSpec extends AnyFunSuite with ChiselSim {
   private val FiredRule = """Assertion failed: (L\d+) """.r.unanchored
 
   private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)
+
+  /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */
+  private def outside(c: TestCase) =
+    CoreParams.check(c.machine).left.toOption.get.map(_.takeWhile(_ != ';')).mkString(", ")
   private val illegal = cases.collect {
     case c @ TestCase(_, _, _, _, _, _, Expectation(Verdict.Illegal(r), _, _, _, _)) =>
       (c, r)
   }
 
-  private def supported(c: TestCase) = Try(CoreParams(c.machine)).isSuccess
+  private def supported(c: TestCase) = CoreParams.check(c.machine).isRight
 
   test("illegal cases exist for every rule the RTL checks") {
     val covered = illegal.filter(x => supported(x._1)).flatMap(_._2).toSet
@@ -33,7 +35,7 @@ class AssertionSpec extends AnyFunSuite with ChiselSim {
   illegal.foreach { case (c, rules) =>
     val rtlRules = rules - Rule.UndefinedRead
     if (!supported(c)) {
-      ignore(s"${c.name}: machine ${c.machine.machineId} is outside what the RTL implements") {}
+      ignore(s"${c.name}: outside the RTL's range (${outside(c)})") {}
     } else if (rtlRules.isEmpty) {
       test(s"${c.name}: L8 only, so the RTL runs to completion without an assertion") {
         simulate(new Core(CoreParams(c.machine))) { dut =>
