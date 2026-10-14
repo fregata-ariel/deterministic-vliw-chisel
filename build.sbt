@@ -64,9 +64,10 @@ lazy val hw = (project in file("hw"))
     scalacOptions += "-Ymacro-annotations"
   )
 
-// Differential tests between the verifier and the reference model (ADR-0002). Test code only.
+// Differential tests between the verifier, the reference model and the RTL (ADR-0002).
+// Test code only.
 lazy val crosscheck = (project in file("crosscheck"))
-  .dependsOn(compiler, sim)
+  .dependsOn(compiler, sim, hw % "compile->compile;test->test")
   .settings(commonSettings)
   .settings(publish / skip := true)
 

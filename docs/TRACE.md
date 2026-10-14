@@ -38,6 +38,9 @@
 
 ## 出力方法
 
+RTL のトレースは、テスト用の `vliw.hw.CoreDriver` がコアの観測ポート（各サイクルの命令語と commit）から同じ形式で作る。`hw/CaseSpec` が golden trace と、`crosscheck/RtlDifferentialSpec` が参照モデルのトレースと、1行ずつ照合する。
+
+
 ```sh
 sbt "sim/run tests/cases/isa_example.json --trace out.jsonl"
 ```
