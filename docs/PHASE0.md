@@ -47,7 +47,7 @@ ISAや machine description を変える場合は、`revision` を上げる。ト
 | 参照モデル | `vliw.sim.ReferenceModel` | golden trace の無いケースや乱数プログラムで、RTLのトレースと突き合わせる |
 | verifier | `vliw.compiler.Verifier` | RTLに入れる命令列を事前に検査する。不正ケースでRTLのassertionが発火することを確かめる |
 
-### 合法性規則と RTL assertion の対応（案）
+### 合法性規則と RTL assertion の対応（案。実装後の確定版は [VERIFIER.md](VERIFIER.md)）
 
 | 規則 | RTLでの扱い |
 |---|---|

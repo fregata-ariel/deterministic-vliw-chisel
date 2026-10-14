@@ -42,6 +42,21 @@ sbt "compiler/run verify tests/cases/isa_example.json ..."
 # 終了コード: 0 = すべて合法、1 = 違反あり、2 = 入力エラー
 ```
 
-## RTLのassertionとの対応（Phase 1）
+## RTLのassertionとの対応
 
-RTLは、L3〜L6 に相当する違反を実行時のassertionで検出する（書込み中のレジスタの読出し、同一レジスタへの重複書込み、同一境界での同一ポートの二重commit、HALT時に残る操作）。ストールで違反を隠すことはしない。L1・L2・L7・L8 はロード時、または命令列の生成時に検査する。
+RTL（`vliw.hw.Core`）は、違反をサイクルごとの信号（`io.violation`）として出し、シミュレーション用の `assert` で停止する。メッセージは `L3 (read of a register being written) at pc 1` のように規則IDで始まる。合法なプログラムでは発火せず、ストールで違反を隠すことはしない。
+
+| 規則 | RTLでの検出 |
+|---|---|
+| L1 符号化 | `Decoder` が、未知opcode・予約bit・NOP/HALT のオペランドbit・範囲外のレジスタ・HALT と memory操作の組合せを検出する |
+| L2 プログラム形状 | 命令領域を超えるプログラムは、ロード時に拒否する（ホストが書き込めない）。実行中は、PC がプログラム長に達した場合と、最後以外の bundle の HALT で発火する |
+| L3 書込み中の読出し | `WriteReservations` で、読むレジスタ（rs1、rs2、ST のソース）が書込み中なら発火する |
+| L4 書込み区間の重複 | 書込み中のレジスタへの新しい書込みと、同じ bundle の Compute と LD の書込み先の一致で発火する |
+| L5 書戻しポート | `WritebackSchedule` が、同じ境界に予約済みのポートへの書込みを検出する |
+| L6 HALT時の完了 | HALT の発行時に、書込み予約・予約表・LD の取り込み段のいずれかが残っていれば発火する |
+| L7 アドレス範囲 | `MemorySlot` が、容量を超えるアドレスを検出する（そのアクセスは行わない） |
+| L8 未定義値 | RTL は値の定義状態を持たないので対象外。verifier と参照モデルだけで検査する |
+
+このほか、ホストが実行中に状態を変更すると `HOST` の assertion が発火する。
+
+`hw/AssertionSpec` は、`tests/cases` のすべての不正ケースについて、期待した規則の assertion が発火することを確かめる。RTL が対応しない構成（ST のレイテンシー2など）のケースはスキップし、その旨を表示する。

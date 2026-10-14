@@ -19,7 +19,7 @@ ChiselSim の作業ファイルは `build/chiselsim/` に作られる（gitignor
 
 | モジュール | 役割 |
 |---|---|
-| `Core` | トップ。Instruction memory（`Mem`、組合せ読出し）、PC、start/busy/done、ホストポート、観測ポート、違反信号 |
+| `Core` | トップ。Instruction memory（`Mem`、組合せ読出し）、PC、start/busy/done、ホストポート、観測ポート、違反信号と assertion（[docs/VERIFIER.md](../docs/VERIFIER.md)） |
 | `Decoder` | 64bit bundle のデコードと、規則 L1 の検出（`vliw.isa.BundleCodec` とは独立に実装） |
 | `RegisterFile` | 3R/2W のレジスタファイル |
 | `WriteReservations` | レジスタごとの書込み区間（L3・L4・L6 の検出用） |

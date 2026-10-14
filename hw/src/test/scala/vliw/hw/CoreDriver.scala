@@ -18,6 +18,10 @@ final case class CoreRun(
     violations: Set[Rule]
 )
 
+/** The program cannot be loaded: it does not fit the instruction memory (checked at load, rule L2).
+  */
+final class LoadRejected(message: String) extends Exception(message)
+
 /** Loads a program and inputs through the host port, starts the core and records every cycle. */
 object CoreDriver {
   private val Mask64 = (BigInt(1) << 64) - 1
@@ -30,6 +34,10 @@ object CoreDriver {
       readBack: Set[Int],
       maxCycles: Int = 2000
   ): CoreRun = {
+    if (words.size > machine.instructionMemoryBundles)
+      throw new LoadRejected(
+        s"L2: ${words.size} bundles exceed the instruction memory (${machine.instructionMemoryBundles})"
+      )
     val host = dut.io.host
     host.start.poke(false.B)
     host.imemWrite.valid.poke(false.B)
