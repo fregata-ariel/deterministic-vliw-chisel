@@ -10,7 +10,22 @@ Machine Descriptionの読み込み、RF、Compute slot、Memory slot、Instructi
 
 ```sh
 sbt hw/test                 # ChiselSim のテスト（Verilator が必要）
-sbt "hw/run [target-dir]"   # SystemVerilog を出力（既定は generated/）
+sbt "hw/run [target-dir] [machine.json]"   # Core の SystemVerilog を出力（既定は generated/ と config/machine.json）
 ```
 
 ChiselSim の作業ファイルは `build/chiselsim/` に作られる（gitignore 済み）。
+
+## 構成（Phase 1）
+
+| モジュール | 役割 |
+|---|---|
+| `Core` | トップ。Instruction memory（`Mem`、組合せ読出し）、PC、start/busy/done、ホストポート、観測ポート、違反信号 |
+| `Decoder` | 64bit bundle のデコードと、規則 L1 の検出（`vliw.isa.BundleCodec` とは独立に実装） |
+| `RegisterFile` | 3R/2W のレジスタファイル |
+| `WriteReservations` | レジスタごとの書込み区間（L3・L4・L6 の検出用） |
+| `ComputeSlot` | ADD/SUB/MUL と、Compute書戻しポートの予約表 |
+| `MemorySlot` | bank分割した Scratchpad、LD/ST と、Memory書戻しポートの予約表 |
+| `WritebackSchedule` | 1つの書戻しポートの予約表。E_(s+L) での書込みと、L5 の検出 |
+| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1）を検査する |
+
+ホストは停止中に、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける。実行中は内部状態を変更しない。
