@@ -11,7 +11,7 @@ import vliw.isa.{MachineDescription, ProgramFile, TestCase}
 
 /** `sbt "compiler/run verify <case.json>..."`: exit 0 if all are legal, 1 on violations.
   *
-  * `sbt "compiler/run compile <kernel>... [--machine m.json] [--out dir] [--seed n] [--priority p]"`:
+  * `sbt "compiler/run compile <kernel>... [--machine m.json] [--out dir] [--seed n] [--priority p] [--single-issue]"`:
   * compiles benchmark kernels and writes `<kernel>.hex` and the test case `<kernel>.json`; exit 2
   * on input errors, 3 on compiler errors (docs/COMPILER.md).
   */
@@ -19,6 +19,7 @@ object Main {
   private val usage =
     s"""usage: verify <case.json>...
        |       compile <kernel>... [--machine <machine.json>] [--out <dir>] [--seed <n>] [--priority <p>]
+       |               [--single-issue]
        |         kernels: ${Benchmarks.all.map(_.name).mkString(", ")}
        |         priorities: ${Priority.all
         .map(_.name)
@@ -57,13 +58,15 @@ object Main {
       machine: Option[String] = None,
       out: Path = Paths.get("generated", "kernels"),
       seed: Long = 1L,
-      priorities: Seq[Priority] = Priority.all
+      priorities: Seq[Priority] = Priority.all,
+      singleIssue: Boolean = false
   )
 
   @annotation.tailrec
   private def parse(args: List[String], o: Options): Options = args match {
     case Nil                      => o
     case "--machine" :: m :: rest => parse(rest, o.copy(machine = Some(m)))
+    case "--single-issue" :: rest => parse(rest, o.copy(singleIssue = true))
     case "--out" :: d :: rest     => parse(rest, o.copy(out = Paths.get(d)))
     case "--seed" :: n :: rest    =>
       parse(rest, o.copy(seed = Try(n.toLong).getOrElse(exit(2, s"not a number: $n"))))
@@ -88,7 +91,7 @@ object Main {
     kernels.foreach { k =>
       // A kernel that does not fit the machine is an input error; rejected code is a compiler error.
       val c = KernelCompiler
-        .compile(k, machine, o.priorities)
+        .compile(k, machine, o.priorities, o.singleIssue)
         .fold(e => exit(if (e.startsWith("compiler error")) 3 else 2, e), identity)
       val tc = KernelCompiler
         .testCase(c, KernelCompiler.sampleInputs(k, o.seed), o.machine)

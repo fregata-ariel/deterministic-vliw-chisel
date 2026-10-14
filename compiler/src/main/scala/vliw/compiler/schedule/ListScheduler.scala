@@ -72,8 +72,15 @@ object ListScheduler {
     */
   final case class Limit(registers: Int, loadReserve: Int)
 
-  /** List scheduling; with a limit, None when it cannot place every node within it. */
-  def run(dag: Dag, priority: Priority, limit: Option[Limit]): Option[Schedule] = {
+  /** List scheduling; with a limit, None when it cannot place every node within it. With
+    * `singleIssue`, at most one operation issues per bundle (the single-issue baseline of #52).
+    */
+  def run(
+      dag: Dag,
+      priority: Priority,
+      limit: Option[Limit],
+      singleIssue: Boolean = false
+  ): Option[Schedule] = {
     val n = dag.nodes.size
     val issue = Array.fill(n)(-1)
     val missing = Array.tabulate(n)(i => dag.predecessors(i).size) // unscheduled predecessors
@@ -128,13 +135,15 @@ object ListScheduler {
       // A node made ready by a placement in this cycle has distance >= 1, except LD -> ST (0),
       // which shares the memory slot; so both slots can be filled in one pass.
       val before = left
-      Seq(Slot.Compute, Slot.Memory).foreach { s =>
-        ready.toSeq
-          .filter(i => slot(dag.nodes(i)) == s && fits(i))
-          .sortBy(key)
-          .headOption
-          .foreach(place)
-      }
+      if (singleIssue) ready.toSeq.filter(fits).sortBy(key).headOption.foreach(place)
+      else
+        Seq(Slot.Compute, Slot.Memory).foreach { s =>
+          ready.toSeq
+            .filter(i => slot(dag.nodes(i)) == s && fits(i))
+            .sortBy(key)
+            .headOption
+            .foreach(place)
+        }
       idle = if (left < before) 0 else idle + 1
       cycle += 1
     }

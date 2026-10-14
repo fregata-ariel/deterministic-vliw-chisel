@@ -36,12 +36,18 @@ final case class Allocation(schedule: Schedule, register: Map[Int, Int]) {
   }
 }
 
-/** How a schedule was obtained: the priority, and the register limit of the scheduler if any. */
-final case class Attempt(priority: Priority, limit: Option[ListScheduler.Limit]) {
+/** How a schedule was obtained: the priority, the register limit of the scheduler if any, and
+  * whether it issues one operation per bundle (the single-issue baseline).
+  */
+final case class Attempt(
+    priority: Priority,
+    limit: Option[ListScheduler.Limit],
+    singleIssue: Boolean = false
+) {
   override def toString: String =
     priority.name + limit.fold(", no register limit")(l =>
       s", ${l.registers} registers, load reserve ${l.loadReserve}"
-    )
+    ) + (if (singleIssue) ", single issue" else "")
 }
 
 final case class Allocated(attempt: Attempt, allocation: Allocation) {
@@ -89,11 +95,11 @@ object RegisterAllocator {
   /** Every attempt, in order: each priority without a register limit, then with the machine's
     * registers as the limit and a growing load reserve.
     */
-  def attempts(dag: Dag, priorities: Seq[Priority]): Seq[Attempt] = {
+  def attempts(dag: Dag, priorities: Seq[Priority], singleIssue: Boolean = false): Seq[Attempt] = {
     val r = dag.machine.registerCount
-    priorities.map(Attempt(_, None)) ++
+    priorities.map(Attempt(_, None, singleIssue)) ++
       (for (p <- priorities; reserve <- 0 to r / 2)
-        yield Attempt(p, Some(ListScheduler.Limit(r, reserve))))
+        yield Attempt(p, Some(ListScheduler.Limit(r, reserve)), singleIssue))
   }
 
   /** Schedules and allocates, rescheduling under register limits when the registers do not suffice
@@ -102,18 +108,19 @@ object RegisterAllocator {
     */
   def scheduleAndAllocate(
       dag: Dag,
-      priorities: Seq[Priority] = Priority.all
+      priorities: Seq[Priority] = Priority.all,
+      singleIssue: Boolean = false
   ): Either[String, Allocated] = {
-    val done = attempts(dag, priorities).flatMap { a =>
+    val done = attempts(dag, priorities, singleIssue).flatMap { a =>
       ListScheduler
-        .run(dag, a.priority, a.limit)
+        .run(dag, a.priority, a.limit, a.singleIssue)
         .flatMap(s => allocate(s).toOption)
         .map(Allocated(a, _))
     }
     done
       .minByOption(_.schedule.cycles)
       .toRight(
-        s"no schedule fits ${dag.machine.registerCount} registers (tried ${attempts(dag, priorities).size} attempts; spilling is not supported)"
+        s"no schedule fits ${dag.machine.registerCount} registers (tried ${attempts(dag, priorities, singleIssue).size} attempts; spilling is not supported)"
       )
   }
 }

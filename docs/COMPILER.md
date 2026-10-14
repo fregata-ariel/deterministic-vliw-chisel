@@ -91,6 +91,8 @@
 
 同じ優先度なら、ノード番号の小さい方を先に置く。結果は決定的である。
 
+`singleIssue` を指定すると、1サイクルに1操作だけを置く（Compute と Memory のどちらか）。単一発行ベースライン（[benchmarks/README.md](../benchmarks/README.md)）に使う。CLI では `--single-issue`。
+
 ### 結果（既定の構成）
 
 | カーネル | `CriticalPath` | `ProgramOrder` | 下限（依存 / スロット） |

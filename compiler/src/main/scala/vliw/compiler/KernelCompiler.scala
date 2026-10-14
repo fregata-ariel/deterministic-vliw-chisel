@@ -34,13 +34,14 @@ object KernelCompiler {
   def compile(
       kernel: Kernel,
       machine: MachineDescription,
-      priorities: Seq[Priority] = Priority.all
+      priorities: Seq[Priority] = Priority.all,
+      singleIssue: Boolean = false
   ): Either[String, CompiledKernel] =
     for {
       layout <- MemoryLayout.fixedOrder(kernel, machine)
       dag = Dag.of(Lowering.lower(layout), machine)
       allocated <- RegisterAllocator
-        .scheduleAndAllocate(dag, priorities)
+        .scheduleAndAllocate(dag, priorities, singleIssue)
         .left
         .map(e => s"${kernel.name}: $e")
       bundles = allocated.allocation.bundles
@@ -80,12 +81,14 @@ object KernelCompiler {
 
   /** A `vliw-testcase/1` test case (docs/TESTCASE.md) for `c` with inputs `in`. The expected
     * outputs come from the DSL reference implementation, not from the generated code, and the
-    * expected cycles are the scheduler's prediction. `machinePath` is written when given.
+    * expected cycles are the scheduler's prediction. `machinePath` is written when given; `name`
+    * defaults to the kernel's.
     */
   def testCase(
       c: CompiledKernel,
       in: Values,
-      machinePath: Option[String]
+      machinePath: Option[String],
+      name: Option[String] = None
   ): Either[String, ujson.Obj] =
     for {
       image <- c.layout.memoryImage(in)
@@ -97,7 +100,7 @@ object KernelCompiler {
       } yield c.layout.elem(o.name, i).toString -> ujson.Num(out.arrays(o.name)(i).toDouble)
       val doc = ujson.Obj(
         "format" -> TestCase.Format,
-        "name" -> c.kernel.name,
+        "name" -> ujson.Str(name.getOrElse(c.kernel.name)),
         "description" -> s"generated from the DSL kernel ${c.kernel.name}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (${c.allocated.attempt})",
         "program" -> ujson.Arr.from(
           Disassembler.program(c.bundles).linesIterator.map(ujson.Str(_))
