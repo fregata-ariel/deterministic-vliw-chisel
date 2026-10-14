@@ -14,3 +14,4 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 ## 実装（Phase 2）
 
 - `dsl`: カーネルDSL（`Kernel`、`Expr`）、参照実装（`Interpreter`）、メモリ配置（`MemoryLayout`）、lowering（`Lowering`）、ベンチマークのカーネル（`Benchmarks`）。[docs/DSL.md](../docs/DSL.md)
+- `dag`: 依存 DAG（データ依存とメモリ順序、レイテンシーによる距離、クリティカルパスと資源による下限）。[docs/COMPILER.md](../docs/COMPILER.md)
