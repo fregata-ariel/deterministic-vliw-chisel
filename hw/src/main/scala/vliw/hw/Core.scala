@@ -170,4 +170,22 @@ class Core(p: CoreParams) extends Module {
   io.violation.writebackPort := compute.io.conflict || memory.io.conflict
   io.violation.haltCompletion := halt && (reservations.io.anyInFlight || compute.io.pending || memory.io.pending)
   io.violation.addressRange := issue && memory.io.outOfRange
+
+  // Assertions (simulation): a legal program never fires them; nothing stalls to hide a violation.
+  private val v = io.violation
+  Seq(
+    v.encoding -> "L1 (encoding)",
+    v.programShape -> "L2 (program shape)",
+    v.inFlightRead -> "L3 (read of a register being written)",
+    v.overlappingWrites -> "L4 (overlapping writes to a register)",
+    v.writebackPort -> "L5 (write-back port conflict)",
+    v.haltCompletion -> "L6 (operation pending at HALT)",
+    v.addressRange -> "L7 (scratchpad address out of range)"
+  ).foreach { case (violated, rule) =>
+    assert(!violated, cf"$rule at pc $pc")
+  }
+  assert(
+    !(busy && (io.host.imemWrite.valid || io.host.rfWrite.valid || io.host.memWrite.valid)),
+    cf"HOST (the host changed state while the core is busy) at pc $pc"
+  )
 }
