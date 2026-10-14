@@ -6,7 +6,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 設計原則：**コンパイラが時間配置を決め、ハードウェアがそのスケジュールを実行する。**
 
-Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）が完了しています（[完了報告](docs/PHASE0.md)）。次は Phase 1 の Chisel RTL です。性能値は未測定です。
+Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）と、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md) の完了報告）。次は Phase 2 の自動命令生成です。性能値は未測定です。
 
 ## 最初に読む文書
 
@@ -14,7 +14,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 - [ISAとサイクル契約](docs/ISA.md)
 - [開発順序・完了条件](docs/ROADMAP.md)
 - [設計判断記録（ADR）](docs/DECISIONS.md)
-- [Phase 0 完了報告](docs/PHASE0.md)
+- [Phase 0 完了報告](docs/PHASE0.md)・[Phase 1 完了報告](docs/PHASE1.md)
 - 形式: [machine description](docs/MACHINE.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[メトリクス](docs/METRICS.md)・[verifier](docs/VERIFIER.md)
 - [一次資料](docs/REFERENCES.md)
 
