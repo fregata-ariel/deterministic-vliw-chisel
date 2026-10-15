@@ -1,0 +1,2 @@
+build	result=success,seconds=348,compiler warnings=3
+sbt	missing (the job failed before it uploaded its results)
