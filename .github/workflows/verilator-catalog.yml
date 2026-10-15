@@ -163,7 +163,9 @@ jobs:
 
   collect:
     needs: [plan, build, measure]
-    if: always() && needs.plan.result == 'success' && needs.plan.outputs.measure == 'true'
+    # Also after failed jobs (their results say what failed), but not in a run that a newer push
+    # cancelled: that run's results are incomplete.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.measure == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -173,8 +175,6 @@ jobs:
       VARIANTS: ${{ needs.plan.outputs.variants }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
       - uses: actions/download-artifact@v7
         with:
           path: build/artifacts
@@ -182,21 +182,29 @@ jobs:
         run: |
           for variant in $(jq -r '.[]' <<<"$VARIANTS"); do
             printf '### %s\n\n~~~\n' "$variant" >>"$GITHUB_STEP_SUMMARY"
-            scripts/verilator-catalog-collect.sh build/artifacts "$variant" "docs/verilator-versions/$variant" |
+            scripts/verilator-catalog-collect.sh build/artifacts "$variant" "build/results/$variant" |
               tee -a "$GITHUB_STEP_SUMMARY"
             printf '~~~\n' >>"$GITHUB_STEP_SUMMARY"
-            printf 'run: %s/%s/actions/runs/%s (attempt %s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" \
-              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >"docs/verilator-versions/$variant/run.txt"
+            printf 'run: %s/%s/actions/runs/%s (attempt %s, commit %s)\n' "$GITHUB_SERVER_URL" \
+              "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" >"build/results/$variant/run.txt"
           done
+      # Onto the branch's current head (a report may have been pushed meanwhile): the results of each
+      # variant replace that variant's directory.
       - name: Commit the results to this branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add docs/verilator-versions
-          git commit -q -m "test: Verilator $VERSION catalog results of run $GITHUB_RUN_ID (#85)" || exit 0
           for i in 1 2 3 4; do
-            git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            git fetch -q origin "$GITHUB_REF_NAME"
+            git checkout -q -B results FETCH_HEAD
+            for variant in $(jq -r '.[]' <<<"$VARIANTS"); do
+              rm -rf "docs/verilator-versions/$variant"
+              mkdir -p docs/verilator-versions
+              cp -R "build/results/$variant" "docs/verilator-versions/$variant"
+            done
+            git add -A docs/verilator-versions
+            git commit -q -m "test: Verilator $VERSION catalog results of run $GITHUB_RUN_ID (#85)" || exit 0
+            git push -q origin "HEAD:$GITHUB_REF_NAME" && exit 0
             sleep $((i * 5))
-            git pull -q --rebase origin "$GITHUB_REF_NAME"
           done
           exit 1
