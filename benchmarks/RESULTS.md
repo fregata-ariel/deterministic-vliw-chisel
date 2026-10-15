@@ -15,7 +15,7 @@
 | コンパイラ | 優先度（クリティカルパス、プログラム順）× レジスタ上限の試行のうち cycles 最小（[docs/COMPILER.md](../docs/COMPILER.md)） |
 | 入力 | `KernelCompiler.sampleInputs(kernel, 1)`。結果と cycles は入力値によらない |
 | 実行 | 参照モデル（`vliw.sim.ReferenceModel`）。RTL でも同じ cycles と出力になることを `BenchmarkSpec` が確かめる |
-| 方式 | `vliw`: 1 bundle に Compute 1・Memory 1。`single`: 同じ machine・DAG・配置で、1サイクルに1操作だけ発行する（単一発行ベースライン） |
+| 方式 | `vliw`: 1 bundle に Compute 1・Memory 1。`single`: 同じ machine・DAG・配置で、1サイクルに1操作だけ発行する（単一発行ベースライン）。どちらも、試行のうち cycles 最小のものを方式ごとに選ぶ |
 
 ## 結果
 
@@ -31,6 +31,8 @@
 演算数は ADD・SUB・MUL・LD・ST の合計で、HALT を含まない。単一発行の cycles は「演算数 + HALT」以上になる。
 
 ## 選ばれた試行
+
+方式ごとに選ばれた試行（優先度・レジスタ割り当て）が違うので、上の cycles の比は発行幅だけの効果ではない。戦略を固定した系列は #79 で加える。
 
 | カーネル | 方式 | 試行 |
 |---|---|---|

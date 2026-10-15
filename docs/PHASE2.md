@@ -44,7 +44,8 @@ Phase 2 の最初に、レビュー対応 P1 として合法性規則 L9（II）
   - 終了時の ST と HALT
   - MUL と ADD の書戻しポートの競合（L5）による空き
   - レジスタの上限による再スケジュール（それぞれ +2、+4 cycles）
-- 2スロットの効果は、Memory 律速の `saxpy8` で大きく、Compute 律速の2つでは小さい。Compute 側の改善（MAC、複数 Compute スロット）は Phase 3 の課題である（#69）
+- 2スロットの効果は、Memory 律速の `saxpy8` で大きく、Compute 律速の2つでは小さい。Compute 側の改善は Phase 3 の課題である（MAC は #69・#77、SIMD・複数 Compute スロットは #78）
+- ただし、方式ごとに cycles 最小の試行を選んでいるため、選ばれた優先度・レジスタ割り当ても方式ごとに違う（第三者レビュー、#46）。上の比は発行幅だけを変えた効果ではない。戦略を固定した比較は #79 で加える
 
 ## 既知の制約
 
@@ -62,4 +63,4 @@ Phase 2 の最初に、レビュー対応 P1 として合法性規則 L9（II）
 - ベンチマークの記録と、CI での一致の確認（`benchmarks/`、`BenchmarkSpec`）
 - 単一発行ベースライン
 
-Phase 3（Modulo Scheduling、MAC/SIMD）は #66（Milestone 3）で追跡する。最初に、ループの扱い（#67）と MAC/SIMD の ISA 拡張（#69）をオーナーが決める。
+Phase 3（Modulo Scheduling、MAC）は #66（Milestone 3）で追跡する。ループの扱いは案A（ISA を変えずに展開し、IR に反復の情報を残す。#67、ADR-0011）、MAC/SIMD は MAC を先に（#69、ADR-0012）とオーナーが決めた（2026-10-15）。
