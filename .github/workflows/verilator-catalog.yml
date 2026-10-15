@@ -120,6 +120,7 @@ jobs:
         run: |
           if [[ "$VARIANT" == *-apt ]]; then bin=/usr/bin; else bin="$HOME/verilator/$VERSION/bin"; fi
           echo "BIN=$bin" >>"$GITHUB_ENV"
+          echo "$bin" >>"$GITHUB_PATH" # for scripts/check.sh in the race job
           mkdir -p "$OUT"
           {
             printf 'job: %s %s, run %s attempt %s\n' "$VARIANT" "$PART" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
