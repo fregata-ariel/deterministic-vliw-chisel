@@ -60,3 +60,4 @@ B・C の abort は「upstream issue 4931 の abort / 回数」で、p は 5.020
 ### 回数
 - B・C は、全版で各 10000 回（2000 回 × 5 つの runner）。0 回なら、5.020 の 8/9663（#74）との片側 Fisher 検定で p ≈ 0.0034、95% の上限は約 0.03% になる。当初は二段（全版 3000 回、候補だけ 10000 回）としたが、runner で並行に測れるので、全版を 10000 回にした
 - D は1回、E は2回
+- 第2段（`race-cpu`）: B だけを、全版で 60000 回（3000 回 × 20 の runner）。5.020 の abort は runner の CPU で違い、Intel Xeon の runner でだけ起きた（AMD EPYC の runner では 0 回）。runner の CPU は選べないので、shard を増やして、CPU ごとに数える（`race-by-cpu.tsv`）。結果は `docs/verilator-versions/<版>/race-cpu/` に置く。ワークフローの `STAGE` で段を選ぶ
