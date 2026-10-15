@@ -201,7 +201,7 @@
 - **背景**: 手元で、テストがまれに失敗した（Verilator のビルドの `make: *** [Makefile:12: simulation] Error 255` など）。CI ではまだ起きていなかった。失敗したビルドのログを残すようにしたところ、mutant を入れない `sbt test` で再現した。C++ のビルドが終わった後、`verilator_bin` が終了するときに `%Error: Internal Error: attempted to destroy locked Thread Pool` で abort していた。
   - 原因は Verilator 5.020 の不具合（upstream issue 4931）である。スレッドプールの破棄の処理が、プールのロックを1回だけ試す。終了の直前に起こされた worker がロックを持っていると abort する。
   - svsim の既定は `-j 0` で、verilation もコアの数のスレッドで行う。このため、ビルドのたびにこの abort が起こりうる。
-  - 測定（同じ設計の verilation だけを繰り返した）では、複数スレッドで 8/9663 回（約 0.08%）abort した。`--verilate-jobs 1` では 0/6000 回だった。テスト全体では約 56 回ビルドするので、1回の `sbt test` が失敗する確率は数 % になる。
+  - 測定（同じ設計の verilation だけを繰り返した）では、複数スレッドで 8/9663 回（約 0.08%）abort した。`--verilate-jobs 1` では 0/6000 回だった。1回の `sbt test` は少なくとも 53 回ビルドするので、1回の `sbt test` が失敗する確率は約 4% になる。
   - 修正は Verilator 5.024・5.026 で入り、5.030 でこの処理は書き直された。ubuntu-24.04 の apt には 5.020 しかない。
 - **決定**:
   - ChiselSim のテストは `vliw.hw.VliwChiselSim` を mix in する（`scripts/check.sh static` が `with ChiselSim` を拒否する）
