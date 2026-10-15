@@ -51,7 +51,7 @@ B・C の abort は「upstream issue 4931 の abort / 回数」で、p は 5.020
 | C | 終了時の race（`--build-jobs 0 --verilate-jobs 1`） | `race`: B と交互に同じ回数 |
 | D | svsim との互換性 | `sbt`: `scripts/repeat-tests.sh full 1`（`sbt test`、`VliwChiselSimSpec` を含む） |
 | E | ADR-0013 の対処を外した状態 | `nofix`: HEAD の worktree で `VliwChiselSim` の jobs の上書きを外し（svsim 既定の `-j 0`）、`VliwChiselSimSpec` を除いて `sbt test` を2回 |
-| F | 乱数の seed | `seed`: `$urandom` を4回表示する設計を `--binary` でビルドし、seed なし（3回）、`+verilator+seed+1`（2回）、`+verilator+seed+2`、`+verilator+seed+0` で実行する |
+| F | 乱数の seed | `seed`: `$urandom` を4回表示する設計を `--binary` でビルドし、seed なし（3回）、`+verilator+seed+1`（2回）、`+verilator+seed+2`、`+verilator+seed+0`（2回）で実行する |
 | G | 結果の同一性 | `sbt`: `crosscheck` の差分テスト（RTL と参照モデルの結果・cycles の一致）が通るか |
 | H | 診断 | `sbt`: `compilation-log.txt` の `%Warning-<CODE>` の数 |
 | I | 性能 | `race` の verilation 1回の時間、`sbt` の `sbt test` 全体の時間、ビルドの時間 |

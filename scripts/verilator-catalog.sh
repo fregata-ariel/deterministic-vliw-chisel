@@ -9,7 +9,8 @@
 #     sbt     sbt test once, as in CI (items D, G, H, I)                            -> sbt/
 #     nofix   sbt test CATALOG_NOFIX_RUNS times (default 2) without ADR-0013's jobs,
 #             i.e. with svsim's default -j 0, on a copy of HEAD (item E)            -> nofix/
-#     seed    $urandom with and without +verilator+seed+ (item F)                   -> seed.tsv
+#     seed    $urandom with and without +verilator+seed+ (item F; seed 0 twice: random since 5.050)
+#                                                                           -> seed.tsv
 #     race    scripts/verilator-exit-race.py, CATALOG_RACE_RUNS runs (default 3000) per jobs
 #             configuration, on CATALOG_RACE_DIR (items B, C)                       -> race.tsv
 # CATALOG_RACE_JOBS lists the race's jobs configurations, separated by ';' (default: the race
@@ -137,7 +138,7 @@ SV
     return
   fi
   printf 'plusargs\trun\turandom x4\n' >"$out/seed.tsv"
-  for args in '' '' '' '+verilator+seed+1' '+verilator+seed+1' '+verilator+seed+2' '+verilator+seed+0'; do
+  for args in '' '' '' '+verilator+seed+1' '+verilator+seed+1' '+verilator+seed+2' '+verilator+seed+0' '+verilator+seed+0'; do
     # shellcheck disable=SC2086 # the plusargs are split on purpose
     line="$("$dir/obj/urandom" $args 2>&1 | tr '\t' ' ' | grep -m 1 -E '^[0-9a-f]{8} ' ||
       { "$dir/obj/urandom" $args 2>&1 || true; } | tr '\t' ' ' | head -n 1)"
