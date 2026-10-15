@@ -12,7 +12,7 @@
 | 参照モデルと RTL の両方で、結果が手で計算した期待値と一致する | `crosscheck/HandComputedSpec`（3カーネルを記録した規模で、手計算の出力と比べる。vliw と単一発行の両方、参照モデルと RTL の両方）。乱数入力では、DSL の参照実装と素の Scala の実装（`compiler/dsl/KernelSpec`）、生成コード（`crosscheck/CompiledKernelSpec`）を比べる |
 | cycles が、スケジューラの予測と一致する | `CompiledKernelSpec`・`HandComputedSpec`・`BenchmarkSpec`（参照モデルと RTL）、`crosscheck/RandomKernelSpec`（乱数カーネル400個。参照モデル、うち60個は RTL） |
 | 各カーネルの `vliw-metrics/1` 記録が残り、単一発行ベースラインと比較できる | [benchmarks/RESULTS.md](../benchmarks/RESULTS.md)、`benchmarks/metrics/`。`BenchmarkSpec` が、コミットした記録とソースから生成し直した内容の一致を確かめる |
-| 上記が CI で自動検証される | `scala` ジョブ。mutation ジョブ（15 mutant、CI 上約45分）は required にしない |
+| 上記が CI で自動検証される | `scala` ジョブ。mutation ジョブ（15 mutant、CI 上約45分）は required にしない。15 killed / 0 survived / 0 stale の結果は PR #63 のコミット 5b87a47（actions run 38562969235）でのもので、最終の main（be06208）での再実行ではない |
 
 ## 実装（`compiler/`）
 
@@ -44,7 +44,7 @@ Phase 2 の最初に、レビュー対応 P1 として合法性規則 L9（II）
   - 終了時の ST と HALT
   - MUL と ADD の書戻しポートの競合（L5）による空き
   - レジスタの上限による再スケジュール（それぞれ +2、+4 cycles）
-- 2スロットの効果は、Memory 律速の `saxpy8` で大きく、Compute 律速の2つでは小さい。Compute 側の改善は Phase 3 の課題である（MAC は #69・#77、SIMD・複数 Compute スロットは #78）
+- 2スロットの効果は、Memory 律速の `saxpy8` で大きく、Compute 律速の2つでは小さい。Compute 側の改善のうち MAC は Phase 3 の課題である（#69・#77）。SIMD・複数 Compute スロットは MAC 単独の評価の後に回す（#78、Milestone は未定。ADR-0012）
 - ただし、方式ごとに cycles 最小の試行を選んでいるため、選ばれた優先度・レジスタ割り当ても方式ごとに違う（第三者レビュー、#46）。上の比は発行幅だけを変えた効果ではない。戦略を固定した比較は #79 で加える
 
 ## 既知の制約
