@@ -146,13 +146,15 @@ final case class LoopGraph(
 
 object LoopGraph {
 
-  /** Builds the graph of `loop` for `machine` (docs/COMPILER.md, "ループ IR"). Words the body never
-    * writes are loaded once: a word with stride 0 before the loop (held in a register), and a word
-    * that later iterations read again by the first iteration that reads it, the others using that
-    * value `back` iterations later (a word that no iteration of the loop loads first is loaded
-    * before the loop). Loads of words the body writes are never shared. Equal operations share one
-    * node; an operation of Before values is itself Before. States are registers: a state's value is
-    * its next-value node one iteration back, and its initial value before the first iteration.
+  /** Builds the graph of `loop` for `machine` (docs/COMPILER.md, "ループ IR"). Loads of words the body
+    * never writes are shared in two ways. A read with stride 0 (and an initial value) loads its
+    * word before the loop, once, and the value stays in a register. Reads with the same stride and
+    * base modulo the stride form chains: the first reader of each word loads it, and the others use
+    * that value `back` iterations later (a word that no iteration loads first is loaded before the
+    * loop). A word read both ways, or with two strides, is loaded by each. Loads of words the body
+    * writes are never shared. Equal operations share one node; an operation of Before values is
+    * itself Before. States are registers: a state's value is its next-value node one iteration
+    * back, and its initial value before the first iteration.
     */
   def build(machine: MachineDescription, loop: Loop): LoopGraph = {
     val nodes = mutable.ArrayBuffer.empty[LoopNode]

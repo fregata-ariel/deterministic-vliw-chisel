@@ -14,10 +14,22 @@ class LoopKernelSpec extends AnyFunSuite {
 
   test("the loop benchmarks unroll to the Phase 2 kernels exactly") {
     for (n <- Seq(1, 2, 8)) assert(LoopBenchmarks.saxpy(n).unroll == Benchmarks.saxpy(n))
-    for (taps <- Seq(Seq(5L), Seq(1L, 2L, 3L, 4L)); n <- Seq(1, 3, 8))
+    // Constants that are not words yet (-1, 2^33 + 5) are normalised as in dsl.Kernel.
+    for (
+      taps <- Seq(Seq(5L), Seq(1L, 2L, 3L, 4L), Seq(-1L, 2L), Seq(-3L, (1L << 33) + 5));
+      n <- Seq(1, 3, 8)
+    )
       assert(LoopBenchmarks.fir(taps, n).unroll == Benchmarks.fir(taps, n))
     for (n <- Seq(1, 2, 3)) assert(LoopBenchmarks.matmulRows(n).unroll == Benchmarks.matmul(n))
     for (n <- Seq(2, 3)) assert(LoopBenchmarks.matmulAcc(n).unroll == Benchmarks.matmul(n))
+  }
+
+  test("constants are normalised to 32-bit words") {
+    val k = LoopKernel("neg", "i", 1) { b =>
+      val out = b.output("out", 1)
+      b.body(i => out(i) = b.const(-1))
+    }
+    assert(k.constants == Vector(0xffffffffL) && k.unroll.constants == Vector(0xffffffffL))
   }
 
   test("the IR keeps the loop: index, trips, affine indices, states") {
@@ -210,6 +222,15 @@ class LoopKernelSpec extends AnyFunSuite {
         val s = b.state("s", b.const(0))
         b.body(_ => s := a * a)
         out(0) = s
+      }
+    }
+    rejects("state s is updated outside the body") {
+      LoopKernel("k", "i", 2) { b =>
+        val x = b.input("x", 2)
+        val out = b.output("out", 2)
+        val s = b.state("s", b.const(1))
+        b.body(i => out(i) = s.value + x(i))
+        s := s.value * x(0)
       }
     }
     rejects("state s is never read in the body") {

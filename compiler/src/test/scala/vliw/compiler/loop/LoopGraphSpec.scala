@@ -9,6 +9,8 @@ import vliw.compiler.dsl._
 import vliw.compiler.loop.Loop.{Bin, Final, Read, StateRef, Update, Write}
 import vliw.isa.MachineDescription
 
+import LoopGraphSpec.{Cycles, Hand}
+
 class LoopGraphSpec extends AnyFunSuite {
   private def machineFile(name: String) = MachineDescription
     .load(java.nio.file.Paths.get("tests", "machines", name))
@@ -239,7 +241,12 @@ class LoopGraphSpec extends AnyFunSuite {
       val in = values(k.unroll, rng)
       val (mem, _) =
         execute(g.expanded.dag, g.expanded.dag.nodes.indices, layout.memoryImage(in).toOption.get)
-      assert(layout.outputs(mem) == Interpreter.run(k.unroll, in).toOption.get, k.toString)
+      val want = Interpreter.run(k.unroll, in).toOption.get
+      assert(layout.outputs(mem) == want, k.toString)
+      // The sequential semantics of the lowered loop, against the same reference.
+      val image = layout.memoryImage(in).toOption.get
+      val lowered = LoopLowering.lower(k, layout).loop
+      assert(layout.outputs(LoopLowering.evaluate(lowered, image)) == want, k.toString)
     }
   }
 
@@ -259,6 +266,16 @@ class LoopGraphSpec extends AnyFunSuite {
         case Node.Store(a, v) => assert(value(v) == byAddress.toMap.apply(a), s"${k.name}: [$a]")
         case _                => ()
       }
+      // LoopGraph.states: each state's initial value before the loop and its next value, an
+      // operation, in each iteration.
+      assert(g.states.size == k.states.size, k.name)
+      assert(
+        g.states.forall(st =>
+          g.places(st.init) == Place.Before && g.places(st.next) == Place.Each &&
+            g.nodes(st.next).isInstanceOf[LoopNode.Compute]
+        ),
+        k.name
+      )
       // Each state, before the loop and after each iteration, against its unrolled expression.
       if (k.states.nonEmpty) {
         val n = k.trips + 1
@@ -308,6 +325,21 @@ class LoopGraphSpec extends AnyFunSuite {
     val (mem, _) =
       execute(g.expanded.dag, g.expanded.dag.nodes.indices, layout.memoryImage(in).toOption.get)
     assert(layout.outputs(mem).arrays("out") == Vector(15L))
+    // The initial value of a state that is not stored, with the constant 9: s(1) is never used.
+    val init = LoopKernel("deadinit", "i", 1) { b =>
+      val x = b.input("x", 1)
+      val out = b.output("out", 1)
+      val s = b.state("s", b.const(9))
+      b.body { i =>
+        s := s.value + x(i)
+        out(i) = x(i) * x(i)
+      }
+    }
+    val (l2, g2) = graph(init, machine)
+    assert(l2.constants == Map(9L -> 2) && l2.words == 3)
+    val (m2, _) =
+      execute(g2.expanded.dag, g2.expanded.dag.nodes.indices, l2.memoryImage(in).toOption.get)
+    assert(l2.outputs(m2).arrays("out") == Vector(100L))
   }
 
   test("every dependence within an iteration goes to a higher id") {
@@ -318,90 +350,249 @@ class LoopGraphSpec extends AnyFunSuite {
     }
   }
 
-  // Hand-made loops that read and write the same words (a LoopKernel never does), with the
-  // dependences between Each nodes (from, to, cycles, iterations, kind).
+  // Hand-made loops that read and write the same words (a LoopKernel never does). `edges` are the
+  // dependences between Each nodes (from, to, cycles, iterations, kind), with cycles from the
+  // machine; `outside` are the memory dependences of `expanded` with a Before or After node.
+  private def lat(op: String) = Cycles(_.operation(op).latency)
+  private val zero = Cycles(_ => 0)
+  private val one = Cycles(_ => 1)
   private val st = EdgeKind.StoreToLoad
   private val lds = EdgeKind.LoadToStore
   private val sts = EdgeKind.StoreToStore
   private val dt = EdgeKind.Data
-  private val aliasing: Seq[(String, Loop, Set[LoopEdge])] = Seq(
-    (
+  private def before(n: Int) = Instance(n, None)
+  private def each(n: Int, k: Int) = Instance(n, Some(k))
+  private def add(a: Loop.Value, b: Loop.Value) = Bin(Op.Add, a, b)
+  private def mul(a: Loop.Value, b: Loop.Value) = Bin(Op.Mul, a, b)
+  private def rd(base: Int, stride: Int) = Read(Address(base, stride))
+  private val hand: Seq[Hand] = Seq(
+    Hand(
       "shift left: [k] = [k + 1]",
-      Loop(3, Vector(), Vector(Write(Address(0, 1), Read(Address(1, 1)))), Vector()),
-      Set(LoopEdge(0, 1, 2, 0, dt), LoopEdge(0, 1, 0, 1, lds))
+      Loop(3, Vector(), Vector(Write(Address(0, 1), rd(1, 1))), Vector()),
+      Set((0, 1, lat("LD"), 0, dt), (0, 1, zero, 1, lds))
     ),
-    (
+    Hand(
       "through memory: [k + 1] = [k] + [10]",
-      Loop(
-        3,
-        Vector(),
-        Vector(Write(Address(1, 1), Bin(Op.Add, Read(Address(0, 1)), Read(Address(10, 0))))),
-        Vector()
-      ),
-      Set(LoopEdge(0, 2, 2, 0, dt), LoopEdge(2, 3, 1, 0, dt), LoopEdge(3, 0, 1, 1, st))
+      Loop(3, Vector(), Vector(Write(Address(1, 1), add(rd(0, 1), rd(10, 0)))), Vector()),
+      Set((0, 2, lat("LD"), 0, dt), (2, 3, lat("ADD"), 0, dt), (3, 0, lat("ST"), 1, st))
     ),
-    (
+    Hand(
       "the same word in every iteration: [5] = [k]",
-      Loop(3, Vector(), Vector(Write(Address(5, 0), Read(Address(0, 1)))), Vector()),
-      Set(LoopEdge(0, 1, 2, 0, dt), LoopEdge(1, 1, 1, 1, sts))
+      Loop(3, Vector(), Vector(Write(Address(5, 0), rd(0, 1))), Vector()),
+      Set((0, 1, lat("LD"), 0, dt), (1, 1, one, 1, sts))
     ),
-    (
+    Hand(
+      "a word read and written in every iteration, with stride 0: [5] = [5] + [k]",
+      Loop(3, Vector(), Vector(Write(Address(5, 0), add(rd(5, 0), rd(0, 1)))), Vector()),
+      Set(
+        (0, 2, lat("LD"), 0, dt),
+        (1, 2, lat("LD"), 0, dt),
+        (2, 3, lat("ADD"), 0, dt),
+        (0, 3, zero, 0, lds),
+        (3, 0, lat("ST"), 1, st),
+        (3, 3, one, 1, sts)
+      )
+    ),
+    Hand(
+      "two reads of one stride of written words: [k + 1] = [k] + [k + 1]",
+      Loop(3, Vector(), Vector(Write(Address(1, 1), add(rd(0, 1), rd(1, 1)))), Vector()),
+      Set(
+        (0, 2, lat("LD"), 0, dt),
+        (1, 2, lat("LD"), 0, dt),
+        (2, 3, lat("ADD"), 0, dt),
+        (1, 3, zero, 0, lds),
+        (3, 0, lat("ST"), 1, st)
+      )
+    ),
+    Hand(
+      "words written in a later iteration only: [2] = [k] + [k + 1]",
+      Loop(3, Vector(), Vector(Write(Address(2, 0), add(rd(0, 1), rd(1, 1)))), Vector()),
+      Set(
+        (0, 2, lat("LD"), 0, dt),
+        (1, 2, lat("LD"), 0, dt),
+        (2, 3, lat("ADD"), 0, dt),
+        (3, 1, lat("ST"), 1, st),
+        (3, 0, lat("ST"), 1, st),
+        (1, 3, zero, 0, lds),
+        (0, 3, zero, 0, lds),
+        (3, 3, one, 1, sts)
+      )
+    ),
+    Hand(
+      "words that a store with another stride writes: [1 + 2k] = [k + 2] + [k + 3]",
+      Loop(4, Vector(), Vector(Write(Address(1, 2), add(rd(2, 1), rd(3, 1)))), Vector()),
+      Set(
+        (0, 2, lat("LD"), 0, dt),
+        (1, 2, lat("LD"), 0, dt),
+        (2, 3, lat("ADD"), 0, dt),
+        (1, 3, zero, 1, lds),
+        (0, 3, zero, 0, lds),
+        (1, 3, zero, 0, lds),
+        (3, 0, lat("ST"), 1, st)
+      )
+    ),
+    Hand(
       "a store, then a load of its word: [k] = [10 + k]; [20 + k] = [k]",
       Loop(
         2,
         Vector(),
+        Vector(Write(Address(0, 1), rd(10, 1)), Write(Address(20, 1), rd(0, 1))),
+        Vector()
+      ),
+      Set((0, 1, lat("LD"), 0, dt), (1, 2, lat("ST"), 0, st), (2, 3, lat("LD"), 0, dt))
+    ),
+    Hand(
+      "two loads of a word with its store between: [30 + k] = [k]; [k] = [10 + k]; [20 + k] = [k]",
+      Loop(
+        2,
+        Vector(),
         Vector(
-          Write(Address(0, 1), Read(Address(10, 1))),
-          Write(Address(20, 1), Read(Address(0, 1)))
+          Write(Address(30, 1), rd(0, 1)),
+          Write(Address(0, 1), rd(10, 1)),
+          Write(Address(20, 1), rd(0, 1))
         ),
         Vector()
       ),
-      Set(LoopEdge(0, 1, 2, 0, dt), LoopEdge(1, 2, 1, 0, st), LoopEdge(2, 3, 2, 0, dt))
+      Set(
+        (0, 1, lat("LD"), 0, dt),
+        (0, 3, zero, 0, lds),
+        (2, 3, lat("LD"), 0, dt),
+        (3, 4, lat("ST"), 0, st),
+        (4, 5, lat("LD"), 0, dt)
+      )
     ),
-    (
+    Hand(
       "an initial value read from a word the body writes: s = [0]; [0] = s + [1 + k]",
       Loop(
         2,
-        Vector(Read(Address(0, 0))),
+        Vector(rd(0, 0)),
         Vector(
-          Write(Address(0, 0), Bin(Op.Add, StateRef(0), Read(Address(1, 1)))),
-          Update(0, Bin(Op.Add, StateRef(0), Read(Address(1, 1))))
+          Write(Address(0, 0), add(StateRef(0), rd(1, 1))),
+          Update(0, add(StateRef(0), rd(1, 1)))
         ),
         Vector(Final(9, 0))
       ),
       Set(
-        LoopEdge(1, 2, 2, 0, dt),
-        LoopEdge(2, 3, 1, 0, dt),
-        LoopEdge(2, 2, 1, 1, dt),
-        LoopEdge(3, 3, 1, 1, sts)
-      )
+        (1, 2, lat("LD"), 0, dt),
+        (2, 3, lat("ADD"), 0, dt),
+        (2, 2, lat("ADD"), 1, dt),
+        (3, 3, one, 1, sts)
+      ),
+      Set((before(0), each(3, 0), zero, lds))
     ),
-    (
-      "a final store to a word the body reads: s = [1]; s = s + [9]; [9] = s",
+    Hand(
+      "a load before the loop, then a store not fed by it: s = [0]; [0] = [1 + k] * [2 + k]; s += [1 + k]",
       Loop(
         2,
-        Vector(Read(Address(1, 0))),
-        Vector(Update(0, Bin(Op.Add, StateRef(0), Read(Address(9, 0))))),
+        Vector(rd(0, 0)),
+        Vector(
+          Write(Address(0, 0), mul(rd(1, 1), rd(2, 1))),
+          Update(0, add(StateRef(0), rd(1, 1)))
+        ),
         Vector(Final(9, 0))
       ),
-      Set(LoopEdge(2, 2, 1, 1, dt))
+      Set(
+        (1, 3, lat("LD"), 1, dt),
+        (1, 3, lat("LD"), 0, dt),
+        (3, 4, lat("MUL"), 0, dt),
+        (1, 5, lat("LD"), 1, dt),
+        (5, 5, lat("ADD"), 1, dt),
+        (4, 4, one, 1, sts)
+      ),
+      Set((before(0), each(4, 0), zero, lds))
+    ),
+    Hand(
+      "a final store to a word the body reads: s = [1]; s = s + [9]; [9] = s",
+      Loop(2, Vector(rd(1, 0)), Vector(Update(0, add(StateRef(0), rd(9, 0)))), Vector(Final(9, 0))),
+      Set((2, 2, lat("ADD"), 1, dt)),
+      Set((before(1), Instance(3, None), zero, lds))
+    ),
+    Hand(
+      "a final store after the body's stores to its word: s = [0]; [9] = [1 + k]; s += [1 + k]",
+      Loop(
+        2,
+        Vector(rd(0, 0)),
+        Vector(Write(Address(9, 0), rd(1, 1)), Update(0, add(StateRef(0), rd(1, 1)))),
+        Vector(Final(9, 0))
+      ),
+      Set(
+        (1, 2, lat("LD"), 0, dt),
+        (1, 3, lat("LD"), 0, dt),
+        (3, 3, lat("ADD"), 1, dt),
+        (2, 2, one, 1, sts)
+      ),
+      Set((each(2, 1), Instance(4, None), one, sts))
+    ),
+    Hand(
+      "a final store to a word that the last iteration loads: s = [5]; [20 + k] = [k]; s += [10 + k]",
+      Loop(
+        2,
+        Vector(rd(5, 0)),
+        Vector(Write(Address(20, 1), rd(0, 1)), Update(0, add(StateRef(0), rd(10, 1)))),
+        Vector(Final(1, 0))
+      ),
+      Set((1, 2, lat("LD"), 0, dt), (3, 4, lat("LD"), 0, dt), (4, 4, lat("ADD"), 1, dt)),
+      Set((each(1, 1), Instance(5, None), zero, lds))
+    ),
+    Hand(
+      "states read at the start of the iteration: s0 += [2 + k]; s1 *= s0; [10 + k] = s0 * [2 + k]",
+      Loop(
+        2,
+        Vector(rd(0, 0), rd(1, 0)),
+        Vector(
+          Update(0, add(StateRef(0), rd(2, 1))),
+          Update(1, mul(StateRef(1), StateRef(0))),
+          Write(Address(10, 1), mul(StateRef(0), rd(2, 1)))
+        ),
+        Vector(Final(20, 0), Final(21, 1))
+      ),
+      Set(
+        (2, 3, lat("LD"), 0, dt),
+        (3, 3, lat("ADD"), 1, dt),
+        (4, 4, lat("MUL"), 1, dt),
+        (3, 4, lat("ADD"), 1, dt),
+        (3, 5, lat("ADD"), 1, dt),
+        (2, 5, lat("LD"), 0, dt),
+        (5, 6, lat("MUL"), 0, dt)
+      )
     )
   )
 
   test("hand-made loops: dependences through memory, within and across iterations") {
     val rng = new Random(9)
-    for ((name, loop, edges) <- aliasing) {
-      val g = LoopGraph.build(machine, loop)
-      assert(g.edges.toSet == edges, name)
+    for (h <- hand; m <- machines) {
+      val g = LoopGraph.build(m, h.loop)
+      val where = s"${h.name} on ${m.machineId}"
+      assert(
+        g.edges.toSet == h.edges.map { case (f, t, c, i, k) => LoopEdge(f, t, c.f(m), i, k) },
+        where
+      )
+      val o = g.expanded.origin
+      val outside = g.expanded.dag.edges.collect {
+        case e if e.kind != dt && (o(e.from).iteration.isEmpty || o(e.to).iteration.isEmpty) =>
+          (o(e.from), o(e.to), e.distance, e.kind)
+      }
+      assert(outside.toSet == h.outside.map { case (f, t, c, k) => (f, t, c.f(m), k) }, where)
       val dag = g.expanded.dag
-      for (_ <- 0 until 20) {
+      for (_ <- 0 until 10) {
         val memory = (0 until 32).map(_ -> word(rng)).toMap
-        val want = LoopLowering.evaluate(loop, memory)
+        val want = LoopLowering.evaluate(h.loop, memory)
         // Any order that respects the expanded edges gives the result of the sequential loop.
         for (order <- Seq(dag.nodes.indices.toVector) ++ Seq.fill(5)(randomOrder(dag, rng)))
-          assert(execute(dag, order, memory)._1 == want, name)
+          assert(execute(dag, order, memory)._1 == want, where)
       }
     }
+  }
+
+  test("the sequential semantics: states are read at the start of the iteration") {
+    val loop = hand.last.loop
+    val m = (0 until 32).map(i => i -> (i + 1).toLong * 10).toMap
+    val got = LoopLowering.evaluate(loop, m)
+    val (s0, s1) = (m(0), m(1))
+    val (s0a, s1a) = (s0 + m(2), s1 * s0) // after iteration 0
+    val (s0b, s1b) = (s0a + m(3), s1a * s0a) // after iteration 1
+    assert(got(10) == s0 * m(2) && got(11) == s0a * m(3))
+    assert(got(20) == s0b && got(21) == s1b)
   }
 
   test("the benchmarks give the same result in any order that respects the expanded edges") {
@@ -444,4 +635,18 @@ class LoopGraphSpec extends AnyFunSuite {
       )
     }
   }
+}
+
+object LoopGraphSpec {
+
+  /** The cycles of an expected dependence, from the machine description. */
+  final case class Cycles(f: MachineDescription => Int)
+
+  /** A hand-made loop and its expected dependences. */
+  final case class Hand(
+      name: String,
+      loop: Loop,
+      edges: Set[(Int, Int, Cycles, Int, EdgeKind)],
+      outside: Set[(Instance, Instance, Cycles, EdgeKind)] = Set.empty
+  )
 }
