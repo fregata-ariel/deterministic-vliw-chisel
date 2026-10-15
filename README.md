@@ -72,6 +72,8 @@ sbt "sim/run tests/cases/isa_example.json --trace out.jsonl --metrics out.json" 
 
 `scripts/check.sh` の `scala` と `sbt` は、sbt の出力（`sbt.log`）、環境（JDK・sbt・Verilator の版、CPU・メモリ、同時に動いていたプロセス）、5秒ごとのプロセスとメモリの記録、テストの並行性を決める sbt の実効設定（`show` の出力）を `build/check-logs/<UTC時刻>/`（`CHECK_LOG_DIR` で変更可）に残します。失敗したときは、その時点のプロセス・メモリ・カーネルログと、その実行で書かれた ChiselSim のログ・JUnit レポートを加えます。`CHECK_TIMEOUT`（秒）を与えると、その時間で sbt を止め、失敗として同じ記録を残します。CI の `scala` ジョブは `CHECK_TIMEOUT` を付けて実行し、失敗したときにこれらを artifact として残します（#74）。ChiselSim の乱数の seed と Verilator の設定は [hw/README.md](hw/README.md) を参照してください。
 
+同じチェックアウトで sbt を2つ同時に動かさないでください（`scripts/check.sh` や `scripts/repeat-tests.sh` から起動するものも含みます）。2つめの sbt は、先の sbt のサーバーの起動を検出して `ServerAlreadyBootingException` で終了するか、起動しても同じ `build/chiselsim/<Suite>/<test>/` を使うので、Verilator のビルドが `make: *** [Makefile:12: simulation] Error 2` で失敗します（#74 の `scripts/repeat-tests.sh` の `hw-concurrent` で10回中10回）。並行に動かすときは、`git worktree add` などで別のチェックアウトを使ってください。
+
 `compiler` と `sim` は `isa` にのみ依存し、互いに依存しません。両者の突き合わせは `crosscheck` で行います（[ADR-0002](docs/DECISIONS.md#adr-0002-相互検査は言語ではなく状態表現と判定方法の違いで設計する)）。
 
 ## MVP
