@@ -10,6 +10,8 @@
 | register allocation | `Dag` → `Allocated`（スケジュールと物理レジスタ、bundle 列） | `vliw.compiler.regalloc` | #50 |
 | コード生成と検証 | → 命令語（verifier の最終検査に通ったもの）、`.hex`、テストケース | `vliw.compiler.KernelCompiler` | #51 |
 
+Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節にある（#76）。
+
 ## DAG
 
 `Dag.build(machine, writes)`（または `Dag.of(lowered, machine)`）は、lowering した式から演算の DAG を作る。
@@ -40,7 +42,7 @@
 | LD → ST | 同じアドレスの古い値を読む LD の後の ST | 0 | ソースは発行サイクルで読むので、同じサイクルの ST の前の値を読む。実際には Memory スロットが1つなので1以上離れる |
 | ST → ST | 同じアドレスへの2つの ST | 1 | ST のレイテンシーは共通なので、発行順に commit する |
 
-現在の DSL は入力が読出し専用、出力が書込み専用なので、メモリ順序の辺は生じない。lowering 後の一般の形に対して正しく作り、手作りの例でテストする。
+現在の DSL は入力が読出し専用、出力が書込み専用なので、メモリ順序の辺は生じない。lowering 後の一般の形に対して正しく作り、手作りの例でテストする。ループ IR（下記）も同じ制約で、反復をまたぐ値はメモリではなくレジスタの状態で渡すので、メモリ順序の辺は生じない（[ADR-0014](DECISIONS.md#adr-0014-ループ-ir-では状態をレジスタで渡し複数の反復が読む語は1回だけ-ld-する)）。
 
 ### 下限と優先度
 
@@ -223,3 +225,106 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
   - 参照モデルでの結果が DSL の参照実装と、cycles が予測と一致すること
   - 生成したテストケースが参照モデルで成り立つこと（100個）
   - RTL でも結果と cycles が一致すること（60個）
+
+## ループ IR
+
+Modulo Scheduling（#68）の入力として、反復の単位と反復をまたぐ依存を残す IR（ADR-0011、[ADR-0014](DECISIONS.md#adr-0014-ループ-ir-では状態をレジスタで渡し複数の反復が読む語は1回だけ-ld-する)、#76）。実装は `vliw.compiler.loop`。Phase 2 の段と同じく、3つの段からなる。
+
+| 段 | 入力 → 出力 | Phase 2 の対応 |
+|---|---|---|
+| 組み立て | `LoopKernel.apply` → `LoopKernel`（名前と、反復番号の一次式の添字） | `dsl.Kernel` |
+| メモリ配置・lowering | `LoopKernel` → `LoweredLoop`（`Loop`。アドレスが反復番号の一次式） | `Lowering.lower` |
+| 依存グラフ | `Loop` → `LoopGraph`（ノードの場所と、反復距離付きの依存） | `Dag.build` |
+
+### 反復と II
+
+- **反復**は、ループ本体を1回実行すること。反復番号 k は 0 から trips − 1 で、反復回数 trips は組み立て時に決まる
+- 添字とアドレスは、反復番号の一次式 `stride × k + offset` である（`Index`、`Address`）。stride 0 は全反復で同じ語
+- **反復距離** d の依存は、反復 k の演算が、反復 k − d の演算の値（またはメモリへの書込み）を使うこと。d = 0 は同じ反復の中の依存である
+- II には2つの意味がある
+  - **演算器の II**: `operations.<op>.ii`。同じ演算の2つの発行の間隔の下限（[ISA.md](ISA.md) の L9）。machine description が決める。この文書の list scheduling と register allocation の節の II は、こちらである
+  - **ループの II**: 反復の開始間隔。反復 k の各演算は、反復 0 の同じ演算の k × II サイクル後に発行する。Modulo Scheduling（#68）が決め、`vliw-metrics/1` の `ii` 欄に記録する（[METRICS.md](METRICS.md)）
+
+### 組み立て
+
+`LoopKernel` は、1つの数え上げのループを持つカーネルである。書き方と制約は [DSL.md](DSL.md) の「ループ IR」にある。
+
+- 本体のストア `out(index) = value` は、各反復 k で `out(index.at(k))` に書く
+- 状態は、初期値（ループ不変の式。ループの前に評価する）と次の値（演算）を持つ。本体の中の状態は、その反復の開始時の値である。反復 k の次の値が、反復 k + 1 の開始時の値になる
+- 後の格納 `out(i) = s` は、最後の反復の後の状態の値を書く
+- 入力は読出し専用、出力は書込み専用で、各出力要素にちょうど1回だけ書く（`dsl.Kernel` と同じ）。このため、ストアの順序は結果に影響しない
+- `LoopKernel.unroll` は、ループを完全に展開した `dsl.Kernel` を返す。反復の順に本体のストアを並べ、最後に後の格納を置く。`stateValues(k)` は、反復 k の開始時の各状態の式（k = trips はループの後）
+
+`LoopBenchmarks` に、記録するループを置く。最初の4つは、展開すると Phase 2 のカーネル（`Benchmarks`）とまったく同じになる。
+
+| ループ | 展開した結果 | ループにした段 | 反復 |
+|---|---|---|---|
+| `saxpy(8)` | `saxpy8` | 出力 i | 8 |
+| `fir(Seq(1, 2, 3, 4), 8)` | `fir4x8` | 出力 i（タップ t は本体に展開） | 8 |
+| `matmulRows(3)` | `matmul3` | 行 i（j と m は本体に展開） | 3 |
+| `matmulAcc(3)` | `matmul3` | m についての累算（m = 1, 2。m = 0 は状態の初期値）。状態は c の要素ごとに9つ | 2 |
+| `product(8)` | `product8`（`out(0) = x(0) × … × x(7)`） | 積 `p ← p × x(i)`（i = 1〜7） | 7 |
+| `dot(8)` | `dot8`（`out(0) = Σ a(i) × b(i)`） | 累算 `acc ← acc + a(i) × b(i)`（i = 1〜7） | 7 |
+
+`matmul3` の2つのループは、展開した結果の名前が同じなので、（カーネル、ループの段）の組で区別する。FIR のタップのループは作らない（ADR-0014）。
+
+### メモリ配置と lowering
+
+- 配置は、展開したカーネルの `MemoryLayout.fixedOrder` である（`LoopLowering.layout`）。ループと list scheduling は、同じ語を同じアドレスで読む。使われない値（格納しない状態の、最後の反復の次の値など）だけが読む定数は、出力の後の語に置く
+- `LoopLowering.lower` は、葉を `Read(Address)` に、状態を `StateRef` に、本体のストアを `Write` に、状態の次の値を `Update` に、後の格納を `Final` に置き換える
+- `Loop` は一般の形で、ループが書く語を読んでもよい（`LoopKernel` からは生じない）。意味は `LoopLowering.evaluate` が与える。初期値をループの前に評価し、各反復で本体の文を順に実行する（`Write` はすぐに書き、`Update` の値は次の反復から見える）。最後に `Final` を書く
+
+### 依存グラフ
+
+`LoopGraph.build(machine, loop)`（または `LoopGraph.of(lowered, machine)`）は、`Loop` の依存グラフを作る。各ノードは、実行する場所を持つ。
+
+| 場所 | 実行 | ノード |
+|---|---|---|
+| Before | ループの前に1回 | 状態の初期値、ループ不変の LD、Before の値だけを使う演算 |
+| Each | 各反復に1回 | 本体の LD・演算・ST、状態の次の値 |
+| After | ループの後に1回 | 状態を格納する ST |
+
+オペランドは `Ref(node, back, initial)` で、`node` の `back` 反復前の値を表す。反復 k < back ではその反復が無いので、Before のノード `initial(k)` の値を使う。Each のノードの番号は本体の順で、back = 0 のオペランドは小さい番号である。
+
+LD の共有（ADR-0014）。本体が書かない語について、次のようにする。
+
+- stride 0 の語は、Before で1回だけ LD する
+- stride が0でない LD は、stride と「base を |stride| で割った余り」が同じものを組にする。base の差が |stride| × trips 以上の所では、組を分ける（共有する語が無い）。組の中で、各語を最初に読む LD（stride > 0 なら base が最大のもの）だけを Each に置く。他の LD は、それを `back` = (その LD の base − 自分の base) / stride だけ前の反復から使う `Ref` にする。k < back の値は、Before で LD する
+- 本体が書く語の LD は、共有しない
+- 等しい演算は1つのノードにまとめる（値番号付け）。Before の値だけを使う演算は Before に置く
+
+状態はレジスタで渡す。状態 s の値は、反復 k ≥ 1 では次の値のノードの1反復前（back = 1）、反復 0 では初期値（Before）である。ループの後の値は、最後の反復の次の値である。`LoopGraph.states` が、各状態の初期値と次の値のノードを持つ。
+
+依存は2つの形で持つ。
+
+- `LoopGraph.expanded`: ループを完全に展開した `dag.Dag`（Before、反復ごとの Each、After の順）と、その各ノードの（ループのノード、反復）。辺は `Dag.build` と同じ規則で作る。データ依存と、語ごとの実行順の ST → LD・LD → ST・ST → ST である。#68 は、ループの前後の演算との制約、レジスタの生存期間、(bundle, スロット) → (反復、演算) の対応表をここから得る
+- `LoopGraph.edges`: Each のノードどうしの依存 `LoopEdge(from, to, cycles, iterations, kind)`。意味は、すべての反復 k で `issue(to, k + iterations) >= issue(from, k) + cycles` である。`expanded` の辺のうち Each どうしのものを（from、to、反復の差、種類）でまとめて作る。modulo schedule はどの反復にも同じ時刻を使うので、ある反復で見つかった辺はすべての反復に課す。iterations = 0 の辺は小さい番号から大きい番号へ向かう。このため、依存の閉路は必ず iterations > 0 の辺を含む（RecMII の入力）
+
+### 記録（既定の構成）
+
+| ループ | Before | Each（1反復） | After | 反復をまたぐ依存（cycles、反復距離） | LD の合計（list scheduling の DAG） |
+|---|---|---|---|---|---|
+| `saxpy8`（i） | LD 1（`a`） | LD 2、MUL 1、ADD 1、ST 1 | - | なし | 1 + 2 × 8 = 17（17） |
+| `fir4x8`（i） | LD 7（`h` 4、`x(0)`〜`x(2)` 3） | LD 1（`x(i+3)`）、MUL 4、ADD 3、ST 1 | - | `x(i+3)` の LD → MUL が3つ（2、1）（2、2）（2、3）。それぞれ `x(i+2)`・`x(i+1)`・`x(i)` の分で、閉路は無い | 7 + 1 × 8 = 15（15） |
+| `matmul3`（i） | LD 9（`b`） | LD 3（`a`）、MUL 9、ADD 6、ST 3 | - | なし | 9 + 3 × 3 = 18（18） |
+| `matmul3`（m） | LD 6、MUL 9（m = 0） | LD 6、MUL 9、ADD 9 | ST 9 | 状態ごとに ADD → 自分の ADD（1、1）。9つ | 6 + 6 × 2 = 18（18） |
+| `product8`（i） | LD 1（`x(0)`） | LD 1、MUL 1 | ST 1 | MUL → 自分の MUL（2、1） | 1 + 1 × 7 = 8（8） |
+| `dot8`（i） | LD 2、MUL 1 | LD 2、MUL 1、ADD 1 | ST 1 | ADD → 自分の ADD（1、1） | 2 + 2 × 7 = 16（16） |
+
+依存の cycles は生産者のレイテンシーで、machine description から取る（`slow_units` では `product8` の MUL → MUL が 3）。反復をまたぐ依存の閉路（RecMII > 0）を持つのは、`matmul3`（m）、`product8`、`dot8` である。#68 の受入テストのうち、RecMII が II を決めるループは `product`、MUL 1つ・ADD 1つの累算は `dot` で作れる。
+
+### テスト
+
+- `compiler/.../loop/LoopKernelSpec`
+  - ベンチマークのループを展開すると、Phase 2 のカーネルとまったく同じになること（いくつかの大きさで）
+  - IR に、ループの段、反復回数、添字、状態が残ること
+  - `product` と `dot` の値。`matmulAcc` の、各反復の開始時の状態の値（部分和）
+  - 自分の状態を2回使う次の値でも、展開した式と配置が反復回数に対して線形のままであること
+  - 不正なループを、組み立て時に拒否すること
+- `compiler/.../loop/LoopGraphSpec`
+  - ベンチマークのループのグラフを展開すると、展開したカーネルの Phase 2 の DAG と、ノードも辺も一致すること（3構成）
+  - 上の表の値
+  - 展開したグラフの実行結果が、DSL の参照実装と一致すること。各反復の ST の値と、各反復の後の状態の値も一致すること。対象は、ベンチマークと、乱数で作った300のループ（stride −2〜2、1〜6反復、状態0〜2、本体のストアと後の格納）
+  - 各配列を1つの stride で読むループは、各語を1回だけ LD すること（Phase 2 の DAG と同じ LD の数）
+  - 読み書きする語が重なる、手作りの6つのループ（左へのずらし、メモリを通る漸化式、毎反復同じ語へのストア、同じ反復のストアの後の LD、本体が書く語を初期値に読む、本体が読む語へ後で格納する）。Each どうしの依存（反復距離を含む）が期待どおりであること。展開した辺を守るどの順序（乱数で作る）で実行しても、`LoopLowering.evaluate` の結果と一致すること
+  - 不正な `Loop` を拒否すること
