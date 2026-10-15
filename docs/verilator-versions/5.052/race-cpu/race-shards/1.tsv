@@ -1,0 +1,3 @@
+# Verilator 5.052 2026-09-05 rev v5.052
+jobs	runs	pool aborts	other aborts	other errors	seconds per run	p (lower than 8/9663)
+-j 0	3000	0	0	0	0.098	0.115
