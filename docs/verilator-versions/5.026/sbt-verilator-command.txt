@@ -1,0 +1,37 @@
+	$(compilerEnvironment) \
+	/home/runner/verilator/5.026/bin/verilator \
+		'--cc' \
+		'--exe' \
+		'--build' \
+		'-o' \
+		'../simulation' \
+		'--top-module' \
+		'svsimTestbench' \
+		'--Mdir' \
+		'verilated-sources' \
+		'--assert' \
+		'--build-jobs' \
+		'0' \
+		'--verilate-jobs' \
+		'1' \
+		'+incdir+/home/runner/work/deterministic-vliw-chisel/deterministic-vliw-chisel/build/chiselsim/ComputeSlotSpec/ADD-and-SUB--L-1--are-written-at-the-end-of-the-issue-cycle--modulo-2-32/primary-sources/verification/assert' \
+		'+incdir+/home/runner/work/deterministic-vliw-chisel/deterministic-vliw-chisel/build/chiselsim/ComputeSlotSpec/ADD-and-SUB--L-1--are-written-at-the-end-of-the-issue-cycle--modulo-2-32/primary-sources/verification/assume' \
+		'+incdir+/home/runner/work/deterministic-vliw-chisel/deterministic-vliw-chisel/build/chiselsim/ComputeSlotSpec/ADD-and-SUB--L-1--are-written-at-the-end-of-the-issue-cycle--modulo-2-32/primary-sources/verification/cover' \
+		'+incdir+/home/runner/work/deterministic-vliw-chisel/deterministic-vliw-chisel/build/chiselsim/ComputeSlotSpec/ADD-and-SUB--L-1--are-written-at-the-end-of-the-issue-cycle--modulo-2-32/primary-sources/verification' \
+		'+incdir+/home/runner/work/deterministic-vliw-chisel/deterministic-vliw-chisel/build/chiselsim/ComputeSlotSpec/ADD-and-SUB--L-1--are-written-at-the-end-of-the-issue-cycle--modulo-2-32/primary-sources' \
+		'--timescale' \
+		'1ns/100ps' \
+		'-CFLAGS' \
+		'-std=c++17 -I$(shell pwd) -DSVSIM_ENABLE_VERILATOR_SUPPORT' \
+		'+define+ASSERT_VERBOSE_COND=!svsimTestbench.reset' \
+		'+define+PRINTF_COND=!svsimTestbench.reset' \
+		'+define+STOP_COND=!svsimTestbench.reset' \
+		'+define+layer$$Verification$$Assert$$Temporal' \
+		'+define+layer$$Verification$$Assume$$Temporal' \
+		'+define+layer$$Verification$$Cover$$Temporal' \
+		'+define+RANDOMIZE_REG_INIT' \
+		'+define+RANDOMIZE_MEM_INIT' \
+		'+define+RANDOMIZE_DELAY=1' \
+		'+define+RANDOM=$$urandom' \
+'-F' \
+		'/home/runner/work/deterministic-vliw-chisel/deterministic-vliw-chisel/build/chiselsim/ComputeSlotSpec/ADD-and-SUB--L-1--are-written-at-the-end-of-the-issue-cycle--modulo-2-32/workdir-verilator/sourceFiles.F'
