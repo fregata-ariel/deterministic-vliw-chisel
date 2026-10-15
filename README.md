@@ -18,6 +18,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 - [命令生成](docs/COMPILER.md)
 - 形式: [machine description](docs/MACHINE.md)・[カーネルDSL](docs/DSL.md)・[アセンブリ](docs/ASM.md)・[テストケース](docs/TESTCASE.md)・[トレース](docs/TRACE.md)・[メトリクス](docs/METRICS.md)・[verifier](docs/VERIFIER.md)
 - [一次資料](docs/REFERENCES.md)
+- [Verilator の版ごとの挙動](docs/VERILATOR_VERSIONS.md)
 
 ## リポジトリの定義
 
@@ -49,6 +50,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `scripts/mutation-check.sh` | mutation チェック（[tests/cases/README.md](tests/cases/README.md#mutation-チェック)） |
 | `scripts/repeat-tests.sh` | テストの繰り返し実行（間欠的な失敗の頻度を測る。#74） |
 | `scripts/verilator-exit-race.py` | Verilator の終了時の abort の頻度を、jobs の設定ごとに測る（[ADR-0013](docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)） |
+| `scripts/verilator-catalog.sh` | Verilator の1つの版を、ChiselSim のテスト・終了時の abort・seed で調べる（[docs/VERILATOR_VERSIONS.md](docs/VERILATOR_VERSIONS.md)、#85） |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
 
 ## 開発
