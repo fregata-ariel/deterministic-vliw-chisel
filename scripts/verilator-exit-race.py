@@ -6,9 +6,10 @@ Usage: python3 -I scripts/verilator-exit-race.py TEST_DIR RUNS [JOBS...]
   JOBS      Verilator job options, one configuration per argument (default: "-j 0" and
             "--build-jobs 0 --verilate-jobs 1", what svsim does by default and what VliwChiselSim uses)
 
-Verilates the design of TEST_DIR with the arguments of its workdir-verilator/Makefile (without
---build, which does not change the exit path) into a fresh directory per run, the configurations
-taking turns, one run at a time. Prints the runs and aborts per configuration. Verilator 5.020 with
+Verilates with the arguments of TEST_DIR's workdir-verilator/Makefile (without --build, which does not
+change the exit path) into a fresh directory per run, the configurations taking turns, one run at a
+time. The Makefile names its sources by absolute paths, so a copy of TEST_DIR still verilates the
+sources at the place where ChiselSim wrote them. Prints the runs and aborts per configuration. Verilator 5.020 with
 more than one verilation thread aborts in about 0.1 % of the runs (Verilator issue 4931).
 """
 import os

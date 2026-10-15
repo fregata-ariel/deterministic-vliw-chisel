@@ -20,6 +20,10 @@ on:
         description: VLIW_SIM_SEED per run (empty for the default, run, random or a number)
         type: string
         default: ""
+      run_timeout:
+        description: Seconds after which a hanging run is stopped and counted as failed
+        type: number
+        default: 1800
 
 permissions:
   contents: read
@@ -56,6 +60,7 @@ jobs:
           MODE: ${{ matrix.mode }}
           RUNS: ${{ inputs.runs }}
           REPEAT_SEED: ${{ inputs.seed }}
+          REPEAT_RUN_TIMEOUT: ${{ inputs.run_timeout }}
       - name: Upload counts and logs
         if: always()
         uses: actions/upload-artifact@v7

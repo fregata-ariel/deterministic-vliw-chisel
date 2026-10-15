@@ -23,6 +23,14 @@ sbt_cmd="${SBT:-sbt}"
 command -v "$sbt_cmd" >/dev/null 2>&1 || die "sbt is required (or set SBT): $sbt_cmd"
 command -v python3 >/dev/null 2>&1 || die 'python3 is required'
 command -v timeout >/dev/null 2>&1 || die 'timeout (coreutils) is required'
+# Checked here because these fail every ChiselSim test in the same way, which the baseline only
+# catches when it runs (MUTATION_BASELINE=0 skips it).
+verilator --version >/dev/null 2>&1 || die 'verilator is required by the hw tests (ChiselSim)'
+if [[ -n "${VLIW_SIM_SEED:-}" && "$VLIW_SIM_SEED" != random ]]; then
+  if ! [[ "$VLIW_SIM_SEED" =~ ^[1-9][0-9]{0,9}$ ]] || ((VLIW_SIM_SEED > 2147483647)); then
+    die "VLIW_SIM_SEED must be 1 to 2147483647 or random: '$VLIW_SIM_SEED'"
+  fi
+fi
 
 log_dir="${MUTATION_LOG_DIR:-$repo_root/build/mutation/$(date -u +%Y%m%dT%H%M%SZ)}"
 limit="${MUTATION_TIMEOUT:-1200}"
@@ -54,7 +62,9 @@ run_tests() {
   mkdir -p "$dir"
   rm -rf -- ./*/target/test-reports # sbt never deletes old reports, so they would mix with this run's
   : >"$dir/start"
-  timeout --kill-after=60 "$limit" "$sbt_cmd" test </dev/null >"$dir/sbt.log" 2>&1 &
+  # Without a parent make's flags, svsim's `make` behaves as on CI.
+  env -u MAKEFLAGS -u MAKELEVEL -u MFLAGS \
+    timeout --kill-after=60 "$limit" "$sbt_cmd" test </dev/null >"$dir/sbt.log" 2>&1 &
   sbt_pid=$!
   wait "$sbt_pid" || code=$?
   sbt_pid=''
@@ -86,6 +96,8 @@ run_with_retries() {
   while :; do
     run_dir="$log_dir/$1"
     [[ $attempt -gt 0 ]] && run_dir="$log_dir/$1.retry$attempt"
+    # A reused MUTATION_LOG_DIR must not mix an earlier invocation's reports into this run.
+    rm -rf -- "$run_dir"
     mkdir -p "$run_dir"
     [[ -z "$current" ]] || git diff -- "$current" >"$run_dir/mutant.diff"
     run_tests "$run_dir"
@@ -94,9 +106,9 @@ run_with_retries() {
     verdict="${verdict:-ERROR}"
     attempt=$((attempt + 1))
     case "$verdict:$category" in
-      ERROR:scalac | ERROR:firtool | ERROR:elaboration | ERROR:aborted) return ;;
-      ERROR:*) [[ $attempt -le $retries ]] || return ;;
-      *) return ;;
+      ERROR:scalac | ERROR:firtool | ERROR:elaboration | ERROR:aborted) return 0 ;;
+      ERROR:*) ((attempt <= retries)) || return 0 ;;
+      *) return 0 ;;
     esac
   done
 }

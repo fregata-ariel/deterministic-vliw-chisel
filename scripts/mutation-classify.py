@@ -36,10 +36,17 @@ SBT_ENV = re.compile(
 # (make output, assertion texts) are never read as a class; any class name is accepted after it, since
 # many do not end in Exception or Error (Exceptions$FirtoolNotFound, chisel3.internal.Errors).
 CHAIN = re.compile(r"^(?:Caused by: )?(?:sbt\.ForkMain\$ForkError: )+([A-Za-z_$][\w$]*(?:\.[\w$]+)*): ?(.*)$", re.M)
-# svsim Workspace.compile: `make -C <workdir> simulation` exited non-zero -> java.lang.Exception whose
-# message is the whole make output (make -C always prints "Entering directory").
-SIM_BUILD = re.compile(r"^(?:Caused by: )?(?:sbt\.ForkMain\$ForkError: )*java\.lang\.Exception: make: Entering directory '[^']*/workdir-\w+'", re.M)
-MAKE_ERR = re.compile(r"^make: \*\*\* \[Makefile:(\d+): (\w+)\] Error (\d+)", re.M)
+# The first stack frame after an exception line (the frames follow the line and its message).
+FRAME = re.compile(r"^\s+at ([\w$.]+)\(", re.M)
+# svsim.Workspace.compile: `make -C <workdir> simulation` exited non-zero -> java.lang.Exception whose
+# message is the whole make output. Recognised by the frame, else by the message starting with make's
+# name; make's own wording is not used, because it depends on the locale, the make version and flags.
+SIM_BUILD_FRAME = "svsim.Workspace.compile"
+SIM_BUILD_TEXT = re.compile(r"^make(?:\[\d+\])?: ")
+# make's error line; the word "Error" is translated in other locales.
+MAKE_ERR = re.compile(r"(?:^|java\.lang\.Exception: )make(?:\[\d+\])?: \*\*\* \[([^\]]*?):(\d+): ([^\]]+)\] \S+ (\d+)", re.M)
+# sbt colours its output on CI (it sees the CI variable) even into a pipe.
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # Why the build failed, first match wins (Verilator wrapper messages, C++ compiler, resources).
 BUILD_WHY = re.compile(
     r"^(%Error: Verilator (?:threw signal \d+|internal fault|aborted)[^\n]*|"
@@ -83,31 +90,45 @@ def first_line(s, n=160):
     return (s[0] if s else "")[:n]
 
 
+def exceptions(body):
+    """(class, first message line, first stack frame or '') for the exception and each cause."""
+    result = []
+    for m in CHAIN.finditer(body):
+        frame = FRAME.search(body, m.end())
+        result.append((m.group(1), m.group(2), frame.group(1) if frame else ""))
+    return result
+
+
 def classify_record(body):
     """Return (kind, detail) for one <failure>/<error> body.
 
     kind is 'env:<category>' for a failure of the environment, else 'assertion' or 'exception'.
     """
-    if SIM_BUILD.search(body):
-        m = MAKE_ERR.search(body)
-        why = BUILD_WHY.search(body)
-        code = f"make Error {m.group(3)} (Makefile:{m.group(1)} {m.group(2)})" if m else "make failed"
-        reason = re.sub(r"(/[^\s:/']+)+/", "", why.group(1).strip())[:160] if why else ""
-        return "env:sim-build", code + (f": {reason}" if reason else "")
-    chain = CHAIN.findall(body)
-    for cls, msg in chain:
-        category = ENV_CLASSES.get(cls) or next((c for p, c in ENV_PACKAGES if cls.startswith(p)), None)
-        if category:
-            return "env:" + category, f"{cls}: {msg[:160]}"
+    chain = exceptions(body)
+    for cls, msg, frame in chain:
+        if cls == "java.lang.Exception" and (frame == SIM_BUILD_FRAME or SIM_BUILD_TEXT.match(msg)):
+            m = MAKE_ERR.search(body)
+            why = BUILD_WHY.search(body)
+            code = f"make Error {m.group(4)} ({m.group(1)}:{m.group(2)} {m.group(3)})" if m else "make failed"
+            reason = re.sub(r"(/[^\s:/']+)+/", "", why.group(1).strip())[:160] if why else ""
+            return "env:sim-build", code + (f": {reason}" if reason else "")
     m = SIM_EXIT.search(body)
     if m:
         return "env:sim-exit", f"simulation exited with {m.group(1)}"
-    cls, msg = chain[0] if chain else ("?", first_line(body))
+    for cls, msg, frame in chain:
+        category = ENV_CLASSES.get(cls) or next((c for p, c in ENV_PACKAGES if cls.startswith(p)), None)
+        if category:
+            return "env:" + category, f"{cls}: {msg[:160]}"
+        # A plain exception thrown inside svsim: Verilator not found, a broken message from the
+        # simulation process. Assertions and expectations are thrown from chisel3.simulator instead.
+        if cls.startswith("java.lang.") and frame.startswith("svsim."):
+            return "env:svsim", f"{cls}: {msg[:160]} (at {frame})"
+    cls, msg = chain[0][:2] if chain else ("?", first_line(body))
     return ("assertion" if cls in ASSERTION_CLASSES else "exception"), f"{cls}: {msg[:160]}"
 
 
 def main(run_dir):
-    log = open(os.path.join(run_dir, "sbt.log"), encoding="utf-8", errors="replace").read()
+    log = ANSI.sub("", open(os.path.join(run_dir, "sbt.log"), encoding="utf-8", errors="replace").read())
     code = int(open(os.path.join(run_dir, "exit")).read().strip() or "1")
     rows = []  # (suite, test, kind, detail)
     suites = 0

@@ -5,6 +5,8 @@
 # Set SBT to override the sbt command, e.g. SBT=/path/to/sbt scripts/check.sh scala
 # sbt runs keep their output and diagnostics in $CHECK_LOG_DIR
 # (default: build/check-logs/<UTC time>/), so that an intermittent failure can be traced (#74).
+# CHECK_TIMEOUT (seconds) stops sbt after that time and still records the failure; CI sets it below
+# the step's timeout, which would stop only the outer shell.
 set -euo pipefail
 
 die() { printf 'check: %s\n' "$*" >&2; exit 1; }
@@ -42,7 +44,8 @@ run_static() {
   git diff --check "$(git hash-object -t tree /dev/null)" --
 
   step 'ChiselSim specs mix in VliwChiselSim (#74)'
-  if git grep -nE 'with ChiselSim\b' -- '*.scala'; then
+  if git grep -nE '(with|extends) +([a-z0-9]+\.)*ChiselSim\b|EphemeralSimulator' -- '*.scala' \
+    ':!hw/src/test/scala/vliw/hw/VliwChiselSim.scala'; then
     die 'mix in vliw.hw.VliwChiselSim instead of ChiselSim (seed and Verilator jobs, #74)'
   fi
 
@@ -67,6 +70,9 @@ run_static() {
     [[ "$got" == "$expected" ]] || { rm -rf -- "$tmp"; die "${dir##*/}: expected '$expected', got '$got'"; }
   done
   rm -rf -- "$tmp"
+
+  step 'mutation-check.sh with a fake sbt (scripts/test-mutation-check.sh)'
+  scripts/test-mutation-check.sh
 }
 
 # Lines of `ps` for the processes the tests start (sbt and test JVMs, Verilator, the C++ build,
@@ -140,8 +146,14 @@ run_sbt() {
   # shellcheck disable=SC2064 # expand now: $sampler is local
   trap "kill $sampler 2>/dev/null || true" EXIT
 
-  local status=0
-  "$sbt_cmd" "$@" 2>&1 | tee "$log_dir/sbt.log" || status=$?
+  local status=0 limit=()
+  if [[ -n "${CHECK_TIMEOUT:-}" ]]; then
+    [[ "$CHECK_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "CHECK_TIMEOUT must be a number of seconds: $CHECK_TIMEOUT"
+    command -v timeout >/dev/null 2>&1 || die 'timeout (coreutils) is required for CHECK_TIMEOUT'
+    limit=(timeout --kill-after=30 "$CHECK_TIMEOUT")
+  fi
+  ${limit[@]+"${limit[@]}"} "$sbt_cmd" "$@" </dev/null 2>&1 | tee "$log_dir/sbt.log" || status=$?
+  ((status != 124)) || printf 'check: sbt stopped after CHECK_TIMEOUT=%s s\n' "$CHECK_TIMEOUT" | tee -a "$log_dir/sbt.log" >&2
   kill "$sampler" 2>/dev/null || true
   if ((status != 0)); then
     record_failure "$log_dir"

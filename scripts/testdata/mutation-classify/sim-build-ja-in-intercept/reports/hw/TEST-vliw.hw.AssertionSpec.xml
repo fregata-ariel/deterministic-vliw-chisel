@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite hostname="vm" name="vliw.hw.AssertionSpec" tests="1" errors="0" failures="0" skipped="0" time="0.1" timestamp="2026-10-15T03:34:20">
+  <testcase classname="vliw.hw.AssertionSpec" name="no_halt" time="0.1">
+    <failure message="org.scalatest.exceptions.TestFailedException: Expected exception chisel3.simulator.Exceptions$AssertionFailed to be thrown, but java.lang.Exception was thrown" type="sbt.ForkMain$ForkError">sbt.ForkMain$ForkError: org.scalatest.exceptions.TestFailedException: Expected exception chisel3.simulator.Exceptions$AssertionFailed to be thrown, but java.lang.Exception was thrown
+	at org.scalatest.OutcomeOf.outcomeOf(OutcomeOf.scala:85)
+Caused by: sbt.ForkMain$ForkError: java.lang.Exception: make: ディレクトリ '/repo/build/chiselsim/CaseSpec/store_then_load/workdir-verilator' に入ります
+\
+/usr/bin/verilator \
+	'--cc' \
+%Error: Internal Error: attempted to destroy locked Thread Pool
+make: *** [Makefile:12: simulation] エラー 255
+make: ディレクトリ '/repo/build/chiselsim/CaseSpec/store_then_load/workdir-verilator' から出ます
+	at svsim.Workspace.compile(Workspace.scala:493)
+	at org.scalatest.OutcomeOf.outcomeOf(OutcomeOf.scala:85)
+</failure>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

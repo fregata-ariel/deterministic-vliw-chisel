@@ -18,7 +18,8 @@ import svsim.verilator.Backend.CompilationSettings.Parallelism
 /** The seed of Verilator's random numbers for every simulation in this test JVM (#74).
   *
   * ChiselSim builds with `RANDOMIZE_REG_INIT`, `RANDOMIZE_MEM_INIT` and `RANDOM=$urandom`, so
-  * registers and memories start from Verilator's random numbers until reset. Without
+  * registers and memories start from Verilator's random numbers. Registers with a reset lose them
+  * at reset; the register file (no reset) and the memories keep them until written. Without
   * `+verilator+seed+`, Verilator 5.020 always starts from the same state, which depends on its
   * version. The seed is therefore passed explicitly and recorded.
   *

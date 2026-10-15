@@ -12,6 +12,7 @@ ls . | grep -v Makefile | grep -v execution-script.txt | grep -v sourceFiles.F |
 %Error: Verilator aborted. Suggest trying --debug --gdbbt
 make: *** [Makefile:12: simulation] Error 255
 make: Leaving directory '/repo/build/chiselsim/CaseSpec/store_then_load/workdir-verilator'
+	at svsim.Workspace.compile(Workspace.scala:493)
 	at org.scalatest.OutcomeOf.outcomeOf(OutcomeOf.scala:85)
 </failure>
   </testcase>

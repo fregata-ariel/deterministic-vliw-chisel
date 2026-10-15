@@ -73,7 +73,7 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 
 ## mutation チェック
 
-`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**テストの失敗として**失敗することを確かめる。mutant ごとに全テストを実行するため時間がかかる（15 mutant で CI 上約45分。timeout は120分）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義・スクリプトを変えたPRでだけ実行し、required にはしない。
+`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**テストの失敗として**失敗することを確かめる。mutant ごとに全テストを実行するため時間がかかる（15 mutant と、最初の mutant なしの1回で、CI 上約50分）。1回の `sbt test` は `MUTATION_TIMEOUT`（既定 1200 秒）で打ち切る。CI では、ジョブの timeout が120分、mutation のステップの timeout が110分である（打ち切られてもログを残せるようにするため）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義・スクリプトを変えたPRでだけ実行し、required にはしない。
 
 `sbt test` が 0 以外で終わることだけでは、mutant を検出したとは言えない。Verilator・make のビルドの失敗も、ChiselSim ではそのテストの `*** FAILED ***` として表示されるからである（#74）。そこで、各実行の JUnit レポート（`*/target/test-reports`）と sbt のログを `scripts/mutation-classify.py` が読み、失敗したテストごとに原因を分類して、mutant を次のどれかと判定する。
 
@@ -81,12 +81,12 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 |---|---|---|
 | KILLED | `assertion` | テストが値を確かめて失敗した: ScalaTest の assertion（`intercept` を含む）、ChiselSim の `expect`、RTL の assertion、Scala の `assert`、ChiselSim の cycle の上限 |
 | KILLED | `exception` | それ以外の例外でテストが失敗した（assertion による失敗がないときだけこの区分になる） |
-| ERROR | `scalac` ほか | scalac（`-Werror` を含む）の失敗、Verilator・make のビルドの失敗（`sim-build`）、firtool・elaboration、シミュレーションの起動の失敗・異常終了、OOM・入出力などの環境の失敗、スイートの中止（`*** ABORTED ***`）、テストの JVM の終了、timeout |
+| ERROR | `scalac` ほか | scalac（`-Werror` を含む）の失敗、Verilator・make のビルドの失敗（`sim-build`）、firtool・elaboration、シミュレーションの起動の失敗・異常終了、svsim の中で起きた例外（Verilator が見つからないなど）、OOM・入出力などの環境の失敗、スイートの中止（`*** ABORTED ***`）、テストの JVM の終了、timeout |
 | SURVIVED | `passed` | `sbt test` が成功した |
 
-1つでも KILLED の区分に当たるテストがあれば KILLED とし、同じ実行の ERROR の数を併記する。ERROR は、scalac・firtool・elaboration・スイートの中止を除き、1回だけ再実行して判定する（最初の ERROR のログも `<id>` に残り、再実行は `<id>.retry1` に入る）。mutant を入れる前に、mutant なしで1回実行し（同じ規則で再実行する）、SURVIVED にならなければ中止する。ERROR・SURVIVED・STALE（元の文字列が1か所に見つからない）が1つでもあれば失敗で終わる。
+scalac が失敗した実行は、ほかのテストの結果によらず ERROR（`scalac`）とする（mutant がコンパイルできないので、検出したとは言えない）。それ以外では、1つでも KILLED の区分に当たるテストがあれば KILLED とし、同じ実行の ERROR の数を併記する。ERROR は1回だけ再実行して判定する（最初の ERROR のログも `<id>` に残り、再実行は `<id>.retry1` に入る）。ただし、毎回同じ結果になる `scalac`・`firtool`・`elaboration` と、環境の例外によらないスイートの中止（`aborted`）は再実行しない。再実行の後も ERROR なら、その mutant を ERROR と報告し、次の mutant に進む。mutant を入れる前に、mutant なしで1回実行し（同じ規則で再実行する）、SURVIVED にならなければ中止する。ERROR・SURVIVED・STALE（元の文字列が1か所に見つからない）が1つでもあれば失敗で終わる。
 
-結果は `build/mutation/<UTC時刻>/`（`MUTATION_LOG_DIR` で変更可）に残る。`results.tsv` に mutant ごとの判定・区分・最初の失敗を、mutant ごとのディレクトリに `sbt.log`、終了コード、`mutant.diff`、JUnit レポート、`classification.tsv`（失敗したテストごとの区分）、その実行で失敗した ChiselSim のビルドのログと、空でない `simulation-log.txt` を置く。CI ではこのディレクトリを artifact として残す。分類の規則は `scripts/testdata/mutation-classify/` の実例（sbt 1.12.15 の出力を縮めたもの）で `scripts/check.sh static` が検査する。
+結果は `build/mutation/<UTC時刻>/`（`MUTATION_LOG_DIR` で変更可）に残る。`results.tsv` に mutant ごとの判定・区分・最初の失敗を、mutant ごとのディレクトリに `sbt.log`、終了コード、`mutant.diff`、JUnit レポート、`classification.tsv`（失敗したテストごとの区分）、その実行で失敗した ChiselSim のビルドのログと、空でない `simulation-log.txt` を置く。CI ではこのディレクトリを artifact として残す。分類の規則は `scripts/testdata/mutation-classify/` の実例（sbt 1.12.15 の出力を縮めたもの。CI の色付きの出力、日本語のロケールの make の出力を含む）で、再実行と集計は偽の sbt を使う `scripts/test-mutation-check.sh` で、`scripts/check.sh static` が検査する。
 
 ```sh
 scripts/mutation-check.sh                    # 全mutant
