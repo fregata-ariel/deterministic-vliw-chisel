@@ -39,7 +39,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定 |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1）。`sbt "hw/run"` で `generated/` にSystemVerilogを出力 |
-| `compiler/` | 独立verifier、カーネルDSL、DAG、静的スケジューラ、register allocation、コード生成（[docs/COMPILER.md](docs/COMPILER.md)） |
+| `compiler/` | 独立verifier、カーネルDSL、DAG、静的スケジューラ、register allocation、コード生成、ループ IR（[docs/COMPILER.md](docs/COMPILER.md)） |
 | `sim/` | ISA参照モデル、サイクル精度モデル |
 | `tests/` | 実装をまたいで共有するテストデータ（[テストケース](tests/cases/README.md)、golden、縮小machine定義） |
 | `crosscheck/` | verifier・参照モデル・RTL・コンパイラの間の差分テストと、ベンチマーク記録の生成（テストコードのみ） |

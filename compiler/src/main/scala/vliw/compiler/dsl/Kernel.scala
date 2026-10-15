@@ -38,6 +38,12 @@ object Expr {
   final case class Const(value: Long) extends Expr
 
   final case class Bin(op: Op, a: Expr, b: Expr) extends Expr
+
+  /** A set of expressions by reference, to visit a shared subtree once (a loop kernel unrolled by
+    * `loop.LoopKernel` shares the states' values between iterations).
+    */
+  def identitySet(): java.util.Set[Expr] =
+    java.util.Collections.newSetFromMap(new java.util.IdentityHashMap[Expr, java.lang.Boolean])
 }
 
 final case class ArrayDecl(name: String, length: Int)
@@ -56,14 +62,19 @@ final case class Kernel(
     stores: Vector[Store]
 ) {
 
-  /** Distinct constants in order of first appearance (stores in order, operands left to right). */
+  /** Distinct constants in order of first appearance (stores in order, operands left to right). A
+    * subtree shared by reference is visited once, which does not change the order.
+    */
   def constants: Vector[Long] = {
-    def walk(e: Expr): Vector[Long] = e match {
-      case Expr.Const(v)     => Vector(v)
-      case Expr.Bin(_, a, b) => walk(a) ++ walk(b)
-      case _                 => Vector.empty
+    val seen = Expr.identitySet()
+    val found = Vector.newBuilder[Long]
+    def walk(e: Expr): Unit = if (seen.add(e)) e match {
+      case Expr.Const(v)     => found += v; ()
+      case Expr.Bin(_, a, b) => walk(a); walk(b)
+      case _                 => ()
     }
-    stores.flatMap(s => walk(s.value)).distinct
+    stores.foreach(s => walk(s.value))
+    found.result().distinct
   }
 }
 
