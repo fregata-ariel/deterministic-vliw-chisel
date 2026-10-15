@@ -73,6 +73,9 @@ run_static() {
 
   step 'mutation-check.sh with a fake sbt (scripts/test-mutation-check.sh)'
   scripts/test-mutation-check.sh
+
+  step 'repeat-tests.sh with a fake sbt (scripts/test-repeat-tests.sh)'
+  scripts/test-repeat-tests.sh
 }
 
 # Lines of `ps` for the processes the tests start (sbt and test JVMs, Verilator, the C++ build,
@@ -144,7 +147,7 @@ run_sbt() {
   sample_processes "$log_dir/ps.log" >/dev/null 2>&1 &
   local sampler=$!
   # shellcheck disable=SC2064 # expand now: $sampler is local
-  trap "kill $sampler 2>/dev/null || true" EXIT
+  trap "pkill -P $sampler 2>/dev/null || true; kill $sampler 2>/dev/null || true" EXIT
 
   local status=0 limit=()
   if [[ -n "${CHECK_TIMEOUT:-}" ]]; then
@@ -154,6 +157,8 @@ run_sbt() {
   fi
   ${limit[@]+"${limit[@]}"} "$sbt_cmd" "$@" </dev/null 2>&1 | tee "$log_dir/sbt.log" || status=$?
   ((status != 124)) || printf 'check: sbt stopped after CHECK_TIMEOUT=%s s\n' "$CHECK_TIMEOUT" | tee -a "$log_dir/sbt.log" >&2
+  # The sampler's `sleep` too, so that no process outlives the run.
+  pkill -P "$sampler" 2>/dev/null || true
   kill "$sampler" 2>/dev/null || true
   if ((status != 0)); then
     record_failure "$log_dir"

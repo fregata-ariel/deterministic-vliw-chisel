@@ -42,14 +42,21 @@ case "$mode" in
   serial) cmds=('set Global / concurrentRestrictions := Seq(Tags.limitAll(1))' test) ;;
   *) die "unknown mode: '$mode' (see the usage at the top of this script)" ;;
 esac
-[[ "$runs" =~ ^[1-9][0-9]*$ ]] || die "RUNS must be a positive integer: '$runs'"
+# A positive whole number. GitHub Actions passes `type: number` inputs as e.g. "10.0".
+whole() {
+  [[ "$1" =~ ^([1-9][0-9]*)(\.0*)?$ ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+runs="$(whole "$runs")" || die "RUNS must be a positive whole number: '${2:-}'"
 if [[ -n "$seed_mode" && "$seed_mode" != run && "$seed_mode" != random ]]; then
   if ! [[ "$seed_mode" =~ ^[1-9][0-9]{0,9}$ ]] || ((seed_mode > 2147483647)); then
     die "REPEAT_SEED must be empty, run, random or 1 to 2147483647: '$seed_mode'"
   fi
 fi
 if [[ "$seed_mode" == run ]] && ((runs > 2147483647)); then die 'too many runs for REPEAT_SEED=run'; fi
-export CHECK_TIMEOUT="${REPEAT_RUN_TIMEOUT:-1800}"
+CHECK_TIMEOUT="$(whole "${REPEAT_RUN_TIMEOUT:-1800}")" ||
+  die "REPEAT_RUN_TIMEOUT must be a positive whole number of seconds: '${REPEAT_RUN_TIMEOUT:-}'"
+export CHECK_TIMEOUT
 mkdir -p "$out"
 rm -rf -- "$out"/run-* "$out/summary.tsv"
 
