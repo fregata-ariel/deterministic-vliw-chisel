@@ -6,7 +6,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.{CompiledKernel, KernelCompiler}
 import vliw.compiler.dsl._
-import vliw.hw.{Core, CoreDriver, CoreParams, SeededChiselSim}
+import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
@@ -14,7 +14,7 @@ import vliw.sim.ReferenceModel
   * (KernelCompiler stops otherwise), and the generated code computes the DSL reference results in
   * the predicted cycles, on the reference model and on the RTL.
   */
-class RandomKernelSpec extends AnyFunSuite with SeededChiselSim {
+class RandomKernelSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
 
   /** One or two inputs of 1 to 6 words, maybe a scalar, one or two outputs of 1 to 4 words, and

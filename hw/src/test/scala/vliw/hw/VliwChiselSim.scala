@@ -6,7 +6,14 @@ import java.security.SecureRandom
 
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.TestSuite
-import svsim.{CommonCompilationSettings, CommonSettingsModifications, PlusArg}
+import svsim.{
+  Backend,
+  BackendSettingsModifications,
+  CommonCompilationSettings,
+  CommonSettingsModifications,
+  PlusArg
+}
+import svsim.verilator.Backend.CompilationSettings.Parallelism
 
 /** The seed of Verilator's random numbers for every simulation in this test JVM (#74).
   *
@@ -50,11 +57,31 @@ object SimSeed {
   lazy val announce: Unit = println(s"[sim-seed] $describe")
 }
 
-/** ChiselSim with the seed of [[SimSeed]]. Every simulation also gets `seed.txt` in its directory
-  * under `build/chiselsim/`, next to the logs that ChiselSim writes there. The Makefile `replay`
-  * target in that directory runs the simulation with the same seed.
+/** The Verilator jobs of every ChiselSim build (#74): Verilation in one thread, the C++ build on
+  * all cores (`--verilate-jobs 1 --build-jobs 0`).
+  *
+  * svsim's default is `-j 0`, which also verilates with one thread per core. Verilator 5.020 (the
+  * version of ADR-0004) then aborts now and then at exit, after a successful build, with
+  * `%Error: Internal Error: attempted to destroy locked Thread Pool` (`make ... Error 255`): the
+  * destructor of its thread pool tries the pool's lock once while a worker can still hold it
+  * (Verilator issue 4931, mitigated in 5.024 and 5.026, removed in 5.030). With one verilation
+  * thread there are no workers and the lock is disabled.
   */
-trait SeededChiselSim extends ChiselSim { this: TestSuite =>
+object SimVerilator {
+  val parallelism: Parallelism.Type = Parallelism.Different.default
+    .withBuild(Some(0))
+    .withVerilate(Some(1))
+}
+
+/** ChiselSim with the project's settings for every simulation:
+  *   - the seed of [[SimSeed]], also written to `seed.txt` in the simulation's directory under
+  *     `build/chiselsim/` (next to the logs that ChiselSim writes there; the Makefile `replay`
+  *     target in that directory uses the same seed);
+  *   - the Verilator jobs of [[SimVerilator]].
+  *
+  * ChiselSim specs mix in this trait instead of ChiselSim (`scripts/check.sh static` checks it).
+  */
+trait VliwChiselSim extends ChiselSim { this: TestSuite =>
   override implicit def commonSettingsModifications: CommonSettingsModifications = {
     val inherited = super.commonSettingsModifications
     (original: CommonCompilationSettings) => {
@@ -75,5 +102,15 @@ trait SeededChiselSim extends ChiselSim { this: TestSuite =>
         )
       )
     }
+  }
+
+  override implicit def backendSettingsModifications: BackendSettingsModifications = {
+    val inherited = super.backendSettingsModifications
+    (original: Backend.Settings) =>
+      inherited(original) match {
+        case verilator: svsim.verilator.Backend.CompilationSettings =>
+          verilator.withParallelism(Some(SimVerilator.parallelism))
+        case other => other
+      }
   }
 }

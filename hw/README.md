@@ -15,7 +15,10 @@ sbt "hw/run [target-dir] [machine.json]"   # Core の SystemVerilog を出力（
 
 ChiselSim の作業ファイルは `build/chiselsim/<Suite>/<test>/` に作られる（gitignore 済み）。
 
-ChiselSim のテストは `ChiselSim` ではなく `SeededChiselSim` を mix in する（`scripts/check.sh static` が検査する）。ChiselSim はレジスタとメモリを Verilator の乱数で初期化してビルドする（`RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT`、reset までの値）。`SeededChiselSim` は、その seed を `+verilator+seed+<n>` として毎回明示し、`[sim-seed]` の行で sbt のログに、`seed.txt` で各シミュレーションのディレクトリに記録する（#74）。seed は環境変数 `VLIW_SIM_SEED` で選ぶ。
+ChiselSim のテストは `ChiselSim` ではなく `VliwChiselSim` を mix in する（`scripts/check.sh static` が検査する。[ADR-0013](../docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)）。`VliwChiselSim` は、すべてのシミュレーションに次の2つを加える。
+
+- Verilator に `--build-jobs 0 --verilate-jobs 1` を渡す。verilation は1スレッドで、C++ のビルドは全コアで行う。svsim の既定の `-j 0` では、Verilator 5.020 がまれに終了時に `attempted to destroy locked Thread Pool` で abort し、`make ... Error 255` になる（#74）
+- 乱数の seed を明示し、記録する。ChiselSim はレジスタとメモリを Verilator の乱数で初期化してビルドする（`RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT`、reset までの値）。`VliwChiselSim` は、その seed を `+verilator+seed+<n>` として渡す。seed は、`[sim-seed]` の行で sbt のログに、`seed.txt` で各シミュレーションのディレクトリに残る。seed は環境変数 `VLIW_SIM_SEED` で選ぶ
 
 ```sh
 sbt hw/test                        # 既定の seed（1）

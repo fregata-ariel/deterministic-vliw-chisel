@@ -4,7 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.KernelCompiler
 import vliw.compiler.dsl._
-import vliw.hw.{Core, CoreDriver, CoreParams, SeededChiselSim}
+import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
@@ -12,7 +12,7 @@ import vliw.sim.ReferenceModel
   * outputs are computed by hand below (not by any implementation): the reference model and the RTL
   * must produce exactly these values.
   */
-class HandComputedSpec extends AnyFunSuite with SeededChiselSim {
+class HandComputedSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
 
   // saxpy8, a = 3, x = 1..8, y = 10, 20, ..., 80: out(i) = 3(i+1) + 10(i+1) = 13(i+1).

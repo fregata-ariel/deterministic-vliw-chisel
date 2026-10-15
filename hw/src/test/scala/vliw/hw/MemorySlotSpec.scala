@@ -5,7 +5,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.isa.MachineDescription
 
-class MemorySlotSpec extends AnyFunSuite with SeededChiselSim {
+class MemorySlotSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString), identity)
   private val params = CoreParams(machine)
 

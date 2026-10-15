@@ -7,7 +7,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.isa._
 
-class CoreSpec extends AnyFunSuite with SeededChiselSim {
+class CoreSpec extends AnyFunSuite with VliwChiselSim {
   private def load(name: String) =
     TestCase
       .load(Paths.get("tests", "cases", s"$name.json"))

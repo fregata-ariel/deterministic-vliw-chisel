@@ -8,7 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import vliw.isa._
 
 /** Every legal case in tests/cases, run on the RTL, against its hand-written expectations. */
-class CaseSpec extends AnyFunSuite with SeededChiselSim {
+class CaseSpec extends AnyFunSuite with VliwChiselSim {
   private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)
 
   /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */

@@ -8,7 +8,7 @@ import vliw.isa._
 /** Every illegal case in tests/cases must stop the RTL with an assertion of an expected rule. L8
   * (undefined values) is outside the RTL: the hardware holds no definedness state.
   */
-class AssertionSpec extends AnyFunSuite with SeededChiselSim {
+class AssertionSpec extends AnyFunSuite with VliwChiselSim {
   private val FiredRule = """Assertion failed: (L\d+) """.r.unanchored
 
   private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)

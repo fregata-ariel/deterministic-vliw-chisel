@@ -41,13 +41,19 @@ run_static() {
   # Compare the empty tree with the working tree so every tracked file is checked.
   git diff --check "$(git hash-object -t tree /dev/null)" --
 
-  step 'ChiselSim specs mix in SeededChiselSim (#74)'
+  step 'ChiselSim specs mix in VliwChiselSim (#74)'
   if git grep -nE 'with ChiselSim\b' -- '*.scala'; then
-    die 'mix in vliw.hw.SeededChiselSim instead of ChiselSim'
+    die 'mix in vliw.hw.VliwChiselSim instead of ChiselSim (seed and Verilator jobs, #74)'
   fi
 
-  step 'mutation classifier (scripts/testdata/mutation-classify)'
+  step 'Python syntax (scripts/*.py)'
   command -v python3 >/dev/null 2>&1 || die 'python3 is required'
+  for file in scripts/*.py; do
+    python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1])' "$file" ||
+      die "invalid Python: $file"
+  done
+
+  step 'mutation classifier (scripts/testdata/mutation-classify)'
   local dir tmp expected got
   tmp="$(mktemp -d)"
   for dir in scripts/testdata/mutation-classify/*/; do

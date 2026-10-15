@@ -5,14 +5,14 @@ import java.nio.file.Files
 
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.hw.{Core, CoreDriver, CoreParams, SeededChiselSim}
+import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
 /** The committed benchmark records (benchmarks/) are what the sources produce, and the recorded
   * programs give the expected results in the recorded cycles on the reference model and the RTL.
   */
-class BenchmarkSpec extends AnyFunSuite with SeededChiselSim {
+class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = BenchmarkRecords.machine
   private val records = BenchmarkRecords.records(machine)
   private val regenerate = "sbt \"crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords\""
