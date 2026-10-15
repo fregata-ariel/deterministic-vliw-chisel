@@ -1,0 +1,4 @@
+job: 5.026 race-11, run 38731052412 attempt 1
+image: ubuntu24 20261004.327.1
+cpu: AMD EPYC 9V45 96-Core Processor
+cpus: 4, memory: 15Gi
