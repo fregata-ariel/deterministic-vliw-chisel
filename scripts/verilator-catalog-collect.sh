@@ -8,7 +8,9 @@
 #   VARIANT        e.g. 5.030, or 5.020-apt for Debian's package
 #   DEST_DIR       e.g. docs/verilator-versions/5.030 (replaced)
 # Writes the small result files (no logs) into DEST_DIR, adds up the race shards with
-# scripts/verilator-exit-race.py --merge, and writes summary.txt with one line per step.
+# scripts/verilator-exit-race.py --merge (also per CPU model of the runners, race-by-cpu.tsv), and
+# writes summary.txt with one line per step. CATALOG_PARTS names the parts that the run measured
+# (default "sbt nofix race"); a missing one is reported as missing.
 set -euo pipefail
 
 die() { printf 'collect: %s\n' "$*" >&2; exit 2; }
@@ -35,6 +37,7 @@ line_of() {
   return 0
 }
 
+parts=" ${CATALOG_PARTS:-sbt nofix race} "
 version="${variant%-apt}"
 if [[ -d "$art/verilator-$version" && "$variant" != *-apt ]]; then
   take "$art/verilator-$version" build-info.txt build-info.txt
@@ -55,7 +58,7 @@ if [[ -d "$sbt" ]]; then
     line_of "$sbt" sbt
     line_of "$sbt" seed
   } >>"$summary"
-else
+elif [[ "$parts" == *" sbt "* ]]; then
   printf 'sbt\tmissing (the job failed before it uploaded its results)\n' >>"$summary"
 fi
 
@@ -66,7 +69,7 @@ if [[ -d "$nofix" ]]; then
   take "$nofix" nofix/verilator-command.txt nofix-verilator-command.txt
   take "$nofix" nofix/errors.txt nofix-errors.txt
   line_of "$nofix" nofix >>"$summary"
-else
+elif [[ "$parts" == *" nofix "* ]]; then
   printf 'nofix\tmissing (the job failed before it uploaded its results)\n' >>"$summary"
 fi
 
@@ -86,6 +89,16 @@ for dir in "$art/catalog-$variant-race-"*/; do
 done
 if ((${#shards[@]})); then
   python3 -I "$repo_root/scripts/verilator-exit-race.py" --merge "$dest/race.tsv" "$dest"/race-shards/*.tsv >/dev/null
+  # Per CPU model of the runners: the abort rate depends on it (#85).
+  for shard in "${shards[@]}"; do
+    cpu="$(sed -n 's/^cpu: //p' "$dest/race-shards/$shard-runner.txt" 2>/dev/null)"
+    awk -F'\t' -v cpu="${cpu:-unknown}" 'NR > 2 { print cpu "\t" $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 }' \
+      "$dest/race-shards/$shard.tsv"
+  done | awk -F'\t' '{ k = $1 "\t" $2; s[k]++; n[k] += $3; p[k] += $4; a[k] += $5; e[k] += $6 }
+    END {
+      print "cpu\tjobs\tshards\truns\tpool aborts\tother aborts\tother errors"
+      for (k in s) print k "\t" s[k] "\t" n[k] "\t" p[k] "\t" a[k] "\t" e[k]
+    }' | { IFS= read -r header; printf '%s\n' "$header"; sort; } >"$dest/race-by-cpu.tsv"
   printf 'race\t%s shards: %s\n' "${#shards[@]}" "$(awk -F'\t' 'NR > 2 { printf "%s[%s]: %s of %s pool aborts, %s other aborts, %s other errors, %s s/run, p=%s",
       sep, $1, $3, $2, $4, $5, $6, $7; sep = "; " }' "$dest/race.tsv")" >>"$summary"
 else
