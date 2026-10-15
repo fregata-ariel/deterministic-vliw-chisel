@@ -1,0 +1,2 @@
+[0m[[0m[31merror[0m] [0m[0m/repo/compiler/src/main/scala/vliw/compiler/Verifier.scala:138:36: value < is not a member of String[0m
+[0m[[0m[31merror[0m] [0m[0m(compiler / Compile / [31mcompileIncremental[0m) Compilation failed[0m

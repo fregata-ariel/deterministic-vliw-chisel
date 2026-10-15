@@ -3,17 +3,16 @@ package vliw.crosscheck
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
-import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.hw.{Core, CoreDriver, CoreParams}
+import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
 /** The committed benchmark records (benchmarks/) are what the sources produce, and the recorded
   * programs give the expected results in the recorded cycles on the reference model and the RTL.
   */
-class BenchmarkSpec extends AnyFunSuite with ChiselSim {
+class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = BenchmarkRecords.machine
   private val records = BenchmarkRecords.records(machine)
   private val regenerate = "sbt \"crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords\""

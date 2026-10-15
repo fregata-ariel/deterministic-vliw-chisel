@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite hostname="vm" name="vliw.hw.CaseSpec" tests="1" errors="0" failures="0" skipped="0" time="0.1" timestamp="2026-10-15T03:34:20">
+  <testcase classname="vliw.hw.CaseSpec" name="(It is not a test it is a sbt.testing.SuiteSelector)" time="0.1">
+    <error message="org.scalatest.exceptions.TestFailedException: bad case file" type="sbt.ForkMain$ForkError">sbt.ForkMain$ForkError: org.scalatest.exceptions.TestFailedException: bad case file
+	at vliw.hw.CaseSpec.&lt;init&gt;(CaseSpec.scala:20)
+</error>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

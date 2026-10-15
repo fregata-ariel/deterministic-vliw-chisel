@@ -16,6 +16,7 @@
 | [0010](#adr-0010-カーネルdslは-scala-内部dslとし配置と-lowering-を分ける) | カーネルDSLは Scala 内部DSLとし、配置と lowering を分ける | 採用 | 2026-10-14 |
 | [0011](#adr-0011-phase-3-のループは-isa-を変えずに展開しir-に反復の情報を残す) | Phase 3 のループは ISA を変えずに展開し、IR に反復の情報を残す | 採用 | 2026-10-15 |
 | [0012](#adr-0012-mac-を先に導入して評価しsimd-は後に分ける) | MAC を先に導入して評価し、SIMD は後に分ける | 採用 | 2026-10-15 |
+| [0013](#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する) | ChiselSim の Verilator は1スレッドで verilate し、乱数の seed を明示する | 採用 | 2026-10-15 |
 
 ---
 
@@ -67,7 +68,7 @@
 | sbt-scalafmt | 2.6.2 | `project/plugins.sbt` | |
 | Chisel | 7.15.0 | `build.sbt` | 2026-09-01公開。7.16.0（2026-10-01公開）は、Phase 1 着手時点（2026-10-14）で2週間に満たなかった |
 | firtool（llvm-firtool） | 1.158.0 | `build.sbt` | Chisel 7.15.0 が要求する版。依存に入れておくと firtool-resolver がjarから取り出すので、実行時のダウンロードが要らない |
-| Verilator | 5.020 | CIでは `apt-get install verilator`（ubuntu-24.04） | ChiselSim のバックエンド。手元でも同じ版を推奨する |
+| Verilator | 5.020 | CIでは `apt-get install verilator`（ubuntu-24.04） | ChiselSim のバックエンド。手元でも同じ版を推奨する。複数スレッドの verilation には終了時の不具合があるため、1スレッドで verilate する（ADR-0013） |
 
 - **コンパイラ設定**: `-deprecation -feature -unchecked -Xlint -Werror`。警告はすべてエラーとして扱う。
 - **sbtプロジェクト構成**:
@@ -85,13 +86,14 @@
 - **状態**: 採用（Issue #3）
 - **決定**:
   - 手元とCIの入口を `scripts/check.sh` に一本化する。CIのジョブはこのスクリプトを呼ぶだけにする。
-    - `static`: JSON構文、shellcheck、追跡ファイルの空白エラー
+    - `static`: JSON構文、shellcheck、Python の構文、追跡ファイルの空白エラー、ChiselSim のテストが `VliwChiselSim` を使うこと、mutation の判定と再実行の自己テスト（#74）
     - `scala`: `sbt scalafmtSbtCheck scalafmtCheckAll test`
   - 起動条件は、`main` へのpush、すべてのPR、手動実行とする。作業ブランチではPRを開いてCIを回す。（当初は全ブランチへのpushで起動し、PRでは二重実行を避けてジョブを`if`で飛ばしていたが、PR上に同名のskippedチェックが並び紛らわしいため変更した。）
   - `permissions: contents: read` にする。`main` 以外では、同じrefの古い実行をキャンセルする。
   - 使用するActionは、公式（`actions/*`）とsbt公式（`sbt/setup-sbt`）のメジャータグで固定する。第三者のActionを追加する場合はcommit SHAで固定する。
-- mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。
+- mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。mutation のスクリプト（`mutation-check.sh`・`mutation-classify.py`）とワークフロー自体を変えたPRでも実行する（#74）。
 - `scala` ジョブ（と `mutation` ジョブ）は Verilator を apt で入れ、`hw` の ChiselSim テストも実行する（#23）。firtool は sbt の依存として取得し、sbt のキャッシュに載る。
+- 間欠的な失敗を追えるよう、`scripts/check.sh` は sbt の出力・環境・プロセスの記録・テストの並行性の実効設定を `build/check-logs/` に残し、`scala` ジョブは失敗したときにそれらと ChiselSim の作業ディレクトリ・JUnit レポートを artifact として残す。テストが止まったときは、`check.sh` が `CHECK_TIMEOUT` で sbt を止めて失敗を記録し、ステップの timeout（job より短い）は予備とする。ステップの timeout が止めるのは外側のシェルだけで、sbt は動き続け、失敗の記録も残らないからである。`mutation` ジョブは mutant ごとの判定とログを常に残す。繰り返し実行のワークフロー `repeat-tests.yml` は手動実行だけとする（#74）。
 
 ## ADR-0006: MVPでは合法なプログラムを保守的に限定する
 
@@ -192,3 +194,21 @@
   - 凍結した mvp-0（revision 2）は変えない。MAC は新しい ISA の版で入れる
 - **理由**: 変更を1つずつ入れると、効果の原因を切り分けられる。MAC は cycles を減らしても、RF のポートや演算器の面積を増やし得るので、cycle と面積・Fmax を分けて評価する必要がある。
 - **影響**: ROADMAP の Phase 3 は「Modulo Scheduling、MAC」とし、SIMD は MAC の評価の後に置く。
+
+## ADR-0013: ChiselSim の Verilator は1スレッドで verilate し、乱数の seed を明示する
+
+- **状態**: 採用（Issue #74）
+- **背景**: 手元で、テストがまれに失敗した（Verilator のビルドの `make: *** [Makefile:12: simulation] Error 255` など）。CI ではまだ起きていなかった。失敗したビルドのログを残すようにしたところ、mutant を入れない `sbt test` で再現した。C++ のビルドが終わった後、`verilator_bin` が終了するときに `%Error: Internal Error: attempted to destroy locked Thread Pool` で abort していた。
+  - 原因は Verilator 5.020 の不具合（upstream issue 4931）である。スレッドプールの破棄の処理が、プールのロックを1回だけ試す。終了の直前に起こされた worker がロックを持っていると abort する。
+  - svsim の既定は `-j 0` で、verilation もコアの数のスレッドで行う。このため、ビルドのたびにこの abort が起こりうる。
+  - 測定（同じ設計の verilation だけを繰り返した）では、複数スレッドで 8/9663 回（約 0.08%）abort した。`--verilate-jobs 1` では 0/6000 回だった。1回の `sbt test` は少なくとも 53 回ビルドするので、1回の `sbt test` が失敗する確率は約 4% になる。
+  - 修正は Verilator 5.024・5.026 で入り、5.030 でこの処理は書き直された。ubuntu-24.04 の apt には 5.020 しかない。
+- **決定**:
+  - ChiselSim のテストは `vliw.hw.VliwChiselSim` を mix in する（`scripts/check.sh static` が `with ChiselSim` を拒否する）
+  - `VliwChiselSim` は Verilator に `--build-jobs 0 --verilate-jobs 1` を渡す。verilation は1スレッドで行い、C++ のビルドは今までどおり全コアで行う
+  - `VliwChiselSim` は乱数の seed を `+verilator+seed+<n>` で明示し、記録する（`VLIW_SIM_SEED`、既定 1）。Verilator 5.020 は seed がないと毎回同じ状態から乱数を始めるが、その値は版に依存し、どこにも記録されないからである
+- **理由**:
+  - verilation が1スレッドなら worker スレッドがなく、プールのロックも無効になる。このため、この abort は起こらない（5.020 のソースと、スレッド数の測定で確認した）
+  - verilation は1回 0.1〜0.2 秒で、ビルドの大半は C++ のコンパイルである。このため、1スレッドにしても時間はほとんど変わらない
+  - Verilator の版は ADR-0004 で固定しており、CI の環境では上げられない
+- **影響**: Verilator を 5.030 以降に上げるときは、この設定を外せるかを確かめる。`scripts/verilator-exit-race.py` で、同じ設計の verilation を繰り返し、構成ごとに abort の回数を数えられる。調べた経過と数値は #74 に記録する。

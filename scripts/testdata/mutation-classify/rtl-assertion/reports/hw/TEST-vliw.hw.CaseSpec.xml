@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite hostname="vm" name="vliw.hw.CaseSpec" tests="1" errors="0" failures="0" skipped="0" time="0.1" timestamp="2026-10-15T03:34:20">
+  <testcase classname="vliw.hw.CaseSpec" name="t1" time="0.1">
+    <failure message="chisel3.simulator.Exceptions$AssertionFailed: One or more assertions failed during Chiselsim simulation" type="sbt.ForkMain$ForkError">sbt.ForkMain$ForkError: chisel3.simulator.Exceptions$AssertionFailed: One or more assertions failed during Chiselsim simulation
+  0  [30] %Error: Core_Verification_Assert.sv:25: Assertion failed in TOP.svsimTestbench.dut: L3
+	at org.scalatest.OutcomeOf.outcomeOf(OutcomeOf.scala:85)
+</failure>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

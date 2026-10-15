@@ -7,6 +7,7 @@ on:
     paths:
       - scripts/mutants.tsv
       - scripts/mutation-check.sh
+      - scripts/mutation-classify.py
       - .github/workflows/mutation.yml
 
 permissions:
@@ -26,4 +27,19 @@ jobs:
       - uses: sbt/setup-sbt@v1
       - name: Install Verilator (ChiselSim backend)
         run: sudo apt-get update && sudo apt-get install -y verilator && verilator --version
+      # Runs the tests once without a mutant first, then each mutant (KILLED, SURVIVED or ERROR, #74).
       - run: scripts/mutation-check.sh
+        # Shorter than the job, so that a hang still leaves time to upload the logs.
+        timeout-minutes: 110
+        env:
+          MUTATION_LOG_DIR: build/mutation-logs
+      # Always: results.tsv and, per mutant, the sbt log, the JUnit reports, the classification and
+      # the ChiselSim logs of failed builds.
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-logs-attempt${{ github.run_attempt }}
+          path: build/mutation-logs/
+          if-no-files-found: ignore
+          retention-days: 14

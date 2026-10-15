@@ -2,13 +2,12 @@ package vliw.crosscheck
 
 import scala.util.Random
 
-import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.dag.Dag
 import vliw.compiler.dsl._
 import vliw.compiler.regalloc.RegisterAllocator
-import vliw.hw.{Core, CoreDriver, CoreParams}
+import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
@@ -17,7 +16,7 @@ private final case class Compiled(layout: MemoryLayout, words: Vector[Long], cyc
 /** The benchmark kernels, scheduled and register-allocated, run on the reference model and the RTL:
   * the outputs must equal the DSL reference implementation, in the scheduled cycles.
   */
-class CompiledKernelSpec extends AnyFunSuite with ChiselSim {
+class CompiledKernelSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
 
   private def compile(k: Kernel, m: MachineDescription): Compiled = {

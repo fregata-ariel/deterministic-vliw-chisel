@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite hostname="vm" name="vliw.crosscheck.RandomKernelSpec" tests="1" errors="0" failures="0" skipped="0" time="0.1" timestamp="2026-10-15T03:34:20">
+  <testcase classname="vliw.crosscheck.RandomKernelSpec" name="random kernels" time="0.1">
+    <failure message="java.lang.Exception: make: Entering directory '/repo/build/chiselsim/CaseSpec/store_then_load/workdir-verilator'" type="sbt.ForkMain$ForkError">sbt.ForkMain$ForkError: java.lang.Exception: make: Entering directory '/repo/build/chiselsim/CaseSpec/store_then_load/workdir-verilator'
+ls . | grep -v Makefile | grep -v execution-script.txt | grep -v sourceFiles.F | xargs rm -rf
+\
+/usr/bin/verilator \
+	'--cc' \
+	'--exe' \
+	'--build' \
+%Error: Internal Error: attempted to destroy locked Thread Pool
+%Error: Verilator aborted. Suggest trying --debug --gdbbt
+make: *** [Makefile:12: simulation] Error 255
+make: Leaving directory '/repo/build/chiselsim/CaseSpec/store_then_load/workdir-verilator'
+	at svsim.Workspace.compile(Workspace.scala:493)
+	at org.scalatest.OutcomeOf.outcomeOf(OutcomeOf.scala:85)
+</failure>
+  </testcase>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
