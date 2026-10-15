@@ -81,12 +81,12 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 |---|---|---|
 | KILLED | `assertion` | テストが値を確かめて失敗した: ScalaTest の assertion（`intercept` を含む）、ChiselSim の `expect`、RTL の assertion、Scala の `assert`、ChiselSim の cycle の上限 |
 | KILLED | `exception` | それ以外の例外でテストが失敗した（assertion による失敗がないときだけこの区分になる） |
-| ERROR | `scalac` ほか | scalac（`-Werror` を含む）の失敗、Verilator・make のビルドの失敗（`sim-build`）、firtool・elaboration、OOM・入出力などの環境の失敗、スイートの中止（`*** ABORTED ***`）、テストの JVM の終了、timeout |
+| ERROR | `scalac` ほか | scalac（`-Werror` を含む）の失敗、Verilator・make のビルドの失敗（`sim-build`）、firtool・elaboration、シミュレーションの起動の失敗・異常終了、OOM・入出力などの環境の失敗、スイートの中止（`*** ABORTED ***`）、テストの JVM の終了、timeout |
 | SURVIVED | `passed` | `sbt test` が成功した |
 
-1つでも KILLED の区分に当たるテストがあれば KILLED とし、同じ実行の ERROR の数を併記する。ERROR は、scalac・firtool・elaboration・スイートの中止を除き、1回だけ再実行して判定する（最初の ERROR のログも残す）。mutant を入れる前に、mutant なしで1回実行し、SURVIVED にならなければ中止する。ERROR・SURVIVED・STALE（元の文字列が1か所に見つからない）が1つでもあれば失敗で終わる。
+1つでも KILLED の区分に当たるテストがあれば KILLED とし、同じ実行の ERROR の数を併記する。ERROR は、scalac・firtool・elaboration・スイートの中止を除き、1回だけ再実行して判定する（最初の ERROR のログも `<id>` に残り、再実行は `<id>.retry1` に入る）。mutant を入れる前に、mutant なしで1回実行し（同じ規則で再実行する）、SURVIVED にならなければ中止する。ERROR・SURVIVED・STALE（元の文字列が1か所に見つからない）が1つでもあれば失敗で終わる。
 
-結果は `build/mutation/<UTC時刻>/`（`MUTATION_LOG_DIR` で変更可）に残る。`results.tsv` に mutant ごとの判定・区分・最初の失敗を、mutant ごとのディレクトリに `sbt.log`、終了コード、`mutant.diff`、JUnit レポート、`classification.tsv`（失敗したテストごとの区分）、その実行で失敗した ChiselSim のビルドのログを置く。CI ではこのディレクトリを artifact として残す。分類の規則は `scripts/testdata/mutation-classify/` の実例（sbt 1.12.15 の出力を縮めたもの）で `scripts/check.sh static` が検査する。
+結果は `build/mutation/<UTC時刻>/`（`MUTATION_LOG_DIR` で変更可）に残る。`results.tsv` に mutant ごとの判定・区分・最初の失敗を、mutant ごとのディレクトリに `sbt.log`、終了コード、`mutant.diff`、JUnit レポート、`classification.tsv`（失敗したテストごとの区分）、その実行で失敗した ChiselSim のビルドのログと、空でない `simulation-log.txt` を置く。CI ではこのディレクトリを artifact として残す。分類の規則は `scripts/testdata/mutation-classify/` の実例（sbt 1.12.15 の出力を縮めたもの）で `scripts/check.sh static` が検査する。
 
 ```sh
 scripts/mutation-check.sh                    # 全mutant

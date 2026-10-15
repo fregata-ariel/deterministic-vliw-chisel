@@ -23,7 +23,7 @@ VLIW_SIM_SEED=123 sbt hw/test      # 1 から 2147483647 の値
 VLIW_SIM_SEED=random sbt hw/test   # テストの JVM ごとに新しい seed（ログに残る）
 ```
 
-Verilator 5.020 は、`+verilator+seed+` がないと毎回同じ状態から乱数を始める（`srand48` を呼ばない）。このため seed を渡さなくても実行ごとの値は同じだが、その値は Verilator の版に依存する。`build/chiselsim/<Suite>/<test>/workdir-verilator/` で `make replay` を実行すると、同じ seed でシミュレーションを再実行する。
+Verilator 5.020 は、`+verilator+seed+` がないと毎回同じ状態から乱数を始める（`srand48` を呼ばない）。このため seed を渡さなくても実行ごとの値は同じだが、その値は Verilator の版に依存する。`build/chiselsim/<Suite>/<test>/workdir-verilator/` で `make replay` を実行すると、ビルドし直してから、同じ入力と seed でシミュレーションを再実行する。Makefile は絶対パスを含むので、そのディレクトリでだけ動く。また、ビルドし直すときに、そのディレクトリの `compilation-log.txt`・`simulation-log.txt` を消す。
 
 ## 構成（Phase 1）
 

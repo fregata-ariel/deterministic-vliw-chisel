@@ -41,7 +41,7 @@ jobs:
         timeout-minutes: 15
       # Traces an intermittent failure (#74): sbt log, environment, process samples, ChiselSim
       # directories (sources, Makefile, compilation-log.txt, seed.txt) and JUnit reports. The
-      # Verilator output (C++ and object files) is left out; the Makefile rebuilds it.
+      # Verilator output (C++ and object files) is left out to keep the artifact small.
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v7

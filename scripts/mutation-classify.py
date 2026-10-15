@@ -32,8 +32,10 @@ SBT_ENV = re.compile(
 #   sbt.ForkMain$ForkError: <class>: <message>            (the thrown exception)
 #   Caused by: sbt.ForkMain$ForkError: <class>: <message> (its causes)
 # An exception that escapes ScalaTest (e.g. OutOfMemoryError) is wrapped twice, so the wrapper's name
-# can repeat; CHAIN skips every repetition.
-CHAIN = re.compile(r"^(?:Caused by: )?(?:sbt\.ForkMain\$ForkError: )*([A-Za-z_][\w.$]*(?:Exception|Error|Failed|Timeout|Throwable)\b[\w$]*): ?(.*)$", re.M)
+# can repeat; CHAIN skips every repetition. The wrapper is required, so that other lines of the body
+# (make output, assertion texts) are never read as a class; any class name is accepted after it, since
+# many do not end in Exception or Error (Exceptions$FirtoolNotFound, chisel3.internal.Errors).
+CHAIN = re.compile(r"^(?:Caused by: )?(?:sbt\.ForkMain\$ForkError: )+([A-Za-z_$][\w$]*(?:\.[\w$]+)*): ?(.*)$", re.M)
 # svsim Workspace.compile: `make -C <workdir> simulation` exited non-zero -> java.lang.Exception whose
 # message is the whole make output (make -C always prints "Entering directory").
 SIM_BUILD = re.compile(r"^(?:Caused by: )?(?:sbt\.ForkMain\$ForkError: )*java\.lang\.Exception: make: Entering directory '[^']*/workdir-\w+'", re.M)
@@ -54,7 +56,12 @@ ENV_CLASSES = {
     "circt.stage.phases.Exceptions$FirtoolNonZeroExitCode": "firtool",
     "circt.stage.phases.Exceptions$FirtoolNotFound": "firtool",
     "chisel3.package$ChiselException": "elaboration",
+    "chisel3.internal.Errors": "elaboration",
+    # The simulation process ended while svsim was reading from it (killed, crashed).
+    "svsim.Simulation$UnexpectedEndOfMessages$": "sim-crash",
 }
+# Any other exception of these packages is a file or I/O failure (a deleted or shared work directory).
+ENV_PACKAGES = (("java.io.", "io"), ("java.nio.file.", "io"))
 SIM_EXIT = re.compile(r"java\.lang\.Exception: Nonzero exit status: (-?\d+)")
 # A test that checks a value and finds it wrong: ScalaTest assertions (intercept included), ChiselSim
 # `expect`, RTL assertions (`%Error: ... Assertion failed` in the simulation), Scala `assert`, and the
@@ -89,8 +96,9 @@ def classify_record(body):
         return "env:sim-build", code + (f": {reason}" if reason else "")
     chain = CHAIN.findall(body)
     for cls, msg in chain:
-        if cls in ENV_CLASSES:
-            return "env:" + ENV_CLASSES[cls], f"{cls}: {msg[:160]}"
+        category = ENV_CLASSES.get(cls) or next((c for p, c in ENV_PACKAGES if cls.startswith(p)), None)
+        if category:
+            return "env:" + category, f"{cls}: {msg[:160]}"
     m = SIM_EXIT.search(body)
     if m:
         return "env:sim-exit", f"simulation exited with {m.group(1)}"

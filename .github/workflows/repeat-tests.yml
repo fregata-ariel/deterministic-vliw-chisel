@@ -42,8 +42,11 @@ jobs:
       - uses: sbt/setup-sbt@v1
       - name: Install Verilator (ChiselSim backend)
         run: sudo apt-get update && sudo apt-get install -y verilator && verilator --version
-      # Compile once, so that the repeated runs measure the tests rather than the compiler.
-      - run: scripts/check.sh sbt Test/compile
+      # Compile once, so that the repeated runs measure the tests rather than the compiler. The test
+      # groups are printed here, after compiling (scripts/check.sh leaves them out of each run).
+      - run: >-
+          scripts/check.sh sbt Test/compile
+          'show hw/Test/testGrouping' 'show crosscheck/Test/testGrouping'
         env:
           CHECK_LOG_DIR: build/repeat/compile
       - name: Repeat

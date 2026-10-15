@@ -15,12 +15,13 @@ cd "$repo_root"
 check_args="$*"
 
 # Settings that decide which test JVMs and suites may run at the same time. They are printed
-# into sbt.log before the tests run.
+# into sbt.log before the tests run. `Test/testGrouping` is left out: it compiles the tests first,
+# which would change the order of compilation and tests that it is meant to record. Print it after
+# compiling, e.g. scripts/check.sh sbt Test/compile 'show hw/Test/testGrouping'.
 sbt_settings=(
   'show Global/concurrentRestrictions'
-  'show hw/Test/fork' 'show hw/Test/testForkedParallel' 'show hw/Test/testGrouping'
+  'show hw/Test/fork' 'show hw/Test/testForkedParallel'
   'show crosscheck/Test/fork' 'show crosscheck/Test/testForkedParallel'
-  'show crosscheck/Test/testGrouping'
 )
 
 run_static() {
@@ -54,8 +55,10 @@ run_static() {
     # The classifier writes classification.tsv into the run directory, so run it on a copy.
     cp -R "$dir" "$tmp/"
     expected="$(cat "$dir/expected")"
-    got="$(python3 -I scripts/mutation-classify.py "$tmp/${dir##*/}" | cut -f1,2)"
-    [[ "$got" == "$expected" ]] || die "${dir##*/}: expected '$expected', got '$got'"
+    got="$(python3 -I scripts/mutation-classify.py "$tmp/${dir##*/}")" ||
+      { rm -rf -- "$tmp"; die "${dir##*/}: mutation-classify.py failed"; }
+    got="$(printf '%s\n' "$got" | cut -f1,2)"
+    [[ "$got" == "$expected" ]] || { rm -rf -- "$tmp"; die "${dir##*/}: expected '$expected', got '$got'"; }
   done
   rm -rf -- "$tmp"
 }
@@ -92,7 +95,7 @@ sample_processes() {
   while :; do
     {
       printf '=== %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      free -m 2>/dev/null | sed -n 2p
+      free -m 2>/dev/null | sed -n 2p || true
       test_processes
     } >>"$1" 2>&1
     sleep 5
