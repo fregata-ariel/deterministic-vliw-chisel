@@ -12,6 +12,8 @@
 #     seed    $urandom with and without +verilator+seed+ (item F)                   -> seed.tsv
 #     race    scripts/verilator-exit-race.py, CATALOG_RACE_RUNS runs (default 3000) per jobs
 #             configuration, on CATALOG_RACE_DIR (items B, C)                       -> race.tsv
+# CATALOG_RACE_JOBS lists the race's jobs configurations, separated by ';' (default: the race
+# script's, "-j 0" and "--build-jobs 0 --verilate-jobs 1").
 # CATALOG_RACE_DIR is a ChiselSim directory of the sbt step, relative to build/chiselsim/
 # (default: RandomKernelSpec, its first test). The sbt and nofix steps keep scripts/check.sh's logs;
 # summary.txt collects one line per finished step. Exits 1 if a step failed; the steps after it
@@ -36,6 +38,8 @@ done
 nofix_runs="${CATALOG_NOFIX_RUNS:-2}"
 race_runs="${CATALOG_RACE_RUNS:-3000}"
 race_dir="${CATALOG_RACE_DIR:-}"
+race_jobs=()
+if [[ -n "${CATALOG_RACE_JOBS:-}" ]]; then IFS=';' read -r -a race_jobs <<<"$CATALOG_RACE_JOBS"; fi
 export PATH="$bin:$PATH"
 mkdir -p "$out"
 out="$(cd "$out" && pwd -P)"
@@ -160,6 +164,7 @@ step_race() {
     die "no ChiselSim directory for the race step: '${dir:-build/chiselsim/RandomKernelSpec/*}' (run the sbt step first)"
   printf '%s\n' "$dir" >"$out/race-design.txt"
   VERILATOR_EXIT_RACE_TSV="$out/race.tsv" python3 -I scripts/verilator-exit-race.py "$dir" "$race_runs" \
+    ${race_jobs[@]+"${race_jobs[@]}"} \
     >"$out/race.log" 2>&1 || status=$?
   tail -n 4 "$out/race.log"
   note race "$(awk -F'\t' 'NR > 2 { printf "%s[%s]: %s of %s pool aborts, %s other aborts, %s other errors, %s s/run, p=%s",
