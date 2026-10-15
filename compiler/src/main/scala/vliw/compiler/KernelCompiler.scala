@@ -31,6 +31,28 @@ object KernelCompiler {
   def declaration(layout: MemoryLayout): Verifier.Declaration =
     Verifier.Declaration(Set.empty, layout.initialized)
 
+  /** The input of scheduling: the layout of `kernel` and its DAG. */
+  final case class Prepared(
+      kernel: Kernel,
+      machine: MachineDescription,
+      layout: MemoryLayout,
+      dag: Dag
+  )
+
+  def prepare(kernel: Kernel, machine: MachineDescription): Either[String, Prepared] =
+    MemoryLayout
+      .fixedOrder(kernel, machine)
+      .map(layout => Prepared(kernel, machine, layout, Dag.of(Lowering.lower(layout), machine)))
+
+  /** Encodes and verifies the code of `allocated` (`checked`). */
+  def finish(p: Prepared, allocated: Allocated): Either[String, CompiledKernel] = {
+    val bundles = allocated.allocation.bundles
+    checked(p.machine, p.layout, bundles).map(words =>
+      CompiledKernel(p.kernel, p.machine, p.layout, p.dag, allocated, bundles, words)
+    )
+  }
+
+  /** Compiles with every attempt of `priorities` and keeps the one with the fewest cycles. */
   def compile(
       kernel: Kernel,
       machine: MachineDescription,
@@ -38,15 +60,13 @@ object KernelCompiler {
       singleIssue: Boolean = false
   ): Either[String, CompiledKernel] =
     for {
-      layout <- MemoryLayout.fixedOrder(kernel, machine)
-      dag = Dag.of(Lowering.lower(layout), machine)
+      p <- prepare(kernel, machine)
       allocated <- RegisterAllocator
-        .scheduleAndAllocate(dag, priorities, singleIssue)
+        .scheduleAndAllocate(p.dag, priorities, singleIssue)
         .left
         .map(e => s"${kernel.name}: $e")
-      bundles = allocated.allocation.bundles
-      words <- checked(machine, layout, bundles)
-    } yield CompiledKernel(kernel, machine, layout, dag, allocated, bundles, words)
+      c <- finish(p, allocated)
+    } yield c
 
   /** Encodes `bundles` and runs the independent verifier on them. Generated code that the verifier
     * rejects is a compiler error: nothing is returned for it.

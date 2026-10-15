@@ -105,6 +105,27 @@ class RegisterAllocatorSpec extends AnyFunSuite {
     assert(one.isRight)
   }
 
+  test("one attempt gives its schedule or why it does not fit") {
+    val layout = MemoryLayout
+      .fixedOrder(Benchmarks.fir(Seq(1L, 2L, 3L, 4L), 8), machine)
+      .fold(e => fail(e), identity)
+    val dag = Dag.of(Lowering.lower(layout), machine)
+    def run(p: Priority, limit: Option[ListScheduler.Limit]) =
+      RegisterAllocator.run(dag, Attempt(p, limit))
+    // Without a limit, 33 values are live at once (docs/COMPILER.md); with 16 registers and any load
+    // reserve, critical-path gets stuck; program-order with reserve 4 is the compiler's choice.
+    assert(run(Priority.CriticalPath, None) == Left(NoFit.TooManyLive(33, 16)))
+    (0 to 8).foreach { reserve =>
+      assert(
+        run(Priority.CriticalPath, Some(ListScheduler.Limit(16, reserve))) == Left(NoFit.Stuck),
+        reserve
+      )
+    }
+    val chosen = run(Priority.ProgramOrder, Some(ListScheduler.Limit(16, 4)))
+    assert(chosen.map(_.schedule.cycles) == Right(65))
+    assert(chosen.map(_.attempt) == RegisterAllocator.scheduleAndAllocate(dag).map(_.attempt))
+  }
+
   test("every successful attempt gives a legal program, not only the chosen one") {
     for (k <- Benchmarks.all) {
       val layout = MemoryLayout.fixedOrder(k, machine).fold(e => fail(e), identity)
