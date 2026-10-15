@@ -1,0 +1,4 @@
+job: 5.036 race-20, run 38731314069 attempt 1
+image: ubuntu24 20261012.334.1
+cpu: INTEL(R) XEON(R) PLATINUM 8573C
+cpus: 4, memory: 15Gi
