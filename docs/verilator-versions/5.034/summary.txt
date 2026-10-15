@@ -1,0 +1,2 @@
+build	result=success,seconds=278,compiler warnings=3
+env	Verilator 5.034 2025-02-24 rev v5.034
