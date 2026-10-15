@@ -50,6 +50,24 @@ final case class Attempt(
     ) + (if (singleIssue) ", single issue" else "")
 }
 
+/** Why one attempt does not fit the machine (no spilling). */
+sealed trait NoFit
+object NoFit {
+
+  /** The schedule keeps more values live at once than there are registers (only without a limit: a
+    * schedule under the limit never does).
+    */
+  final case class TooManyLive(live: Int, registers: Int) extends NoFit {
+    override def toString: String =
+      s"$live values are live at once; the machine has $registers registers"
+  }
+
+  /** Under the register limit, the scheduler reaches a point where no remaining operation fits. */
+  case object Stuck extends NoFit {
+    override def toString: String = "no remaining operation fits under the register limit"
+  }
+}
+
 final case class Allocated(attempt: Attempt, allocation: Allocation) {
   def schedule: Schedule = allocation.schedule
 }
@@ -102,6 +120,18 @@ object RegisterAllocator {
         yield Attempt(p, Some(ListScheduler.Limit(r, reserve)), singleIssue))
   }
 
+  /** One attempt: schedules with its priority, register limit and issue mode, then allocates. Left
+    * gives why the attempt does not fit the machine.
+    */
+  def run(dag: Dag, a: Attempt): Either[NoFit, Allocated] =
+    ListScheduler
+      .run(dag, a.priority, a.limit, a.singleIssue)
+      .toRight(NoFit.Stuck)
+      .flatMap(s =>
+        allocate(s).left.map(_ => NoFit.TooManyLive(maxLive(s), dag.machine.registerCount))
+      )
+      .map(Allocated(a, _))
+
   /** Schedules and allocates, rescheduling under register limits when the registers do not suffice
     * (no spilling). Of the attempts that succeed, the one with the fewest cycles is chosen; ties go
     * to the earlier attempt.
@@ -111,12 +141,7 @@ object RegisterAllocator {
       priorities: Seq[Priority] = Priority.all,
       singleIssue: Boolean = false
   ): Either[String, Allocated] = {
-    val done = attempts(dag, priorities, singleIssue).flatMap { a =>
-      ListScheduler
-        .run(dag, a.priority, a.limit, a.singleIssue)
-        .flatMap(s => allocate(s).toOption)
-        .map(Allocated(a, _))
-    }
+    val done = attempts(dag, priorities, singleIssue).flatMap(run(dag, _).toOption)
     done
       .minByOption(_.schedule.cycles)
       .toRight(
