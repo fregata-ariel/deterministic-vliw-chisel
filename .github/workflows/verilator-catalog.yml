@@ -16,13 +16,21 @@ on:
 permissions:
   contents: read
 
+# One run per branch at a time. A newer push waits instead of cancelling the run in progress, so
+# that pushing a report does not stop a measurement (an obsolete run is cancelled by hand).
 concurrency:
   group: verilator-catalog-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
-  # Exit race: runs per jobs configuration and shard (5 shards).
-  RACE_RUNS_PER_SHARD: "2000"
+  # What a push measures:
+  #   all       sbt test with the seed check, sbt test without ADR-0013's jobs (NOFIX_RUNS times), and
+  #             the exit race with both jobs configurations in 5 shards of 2000 runs each
+  #             -> docs/verilator-versions/<variant>/
+  #   race-cpu  only the exit race with -j 0, in 20 shards of 3000 runs, so that enough of them run
+  #             on each CPU model of the runners: the abort depends on it (it happened on Intel Xeon
+  #             runners and not on AMD EPYC ones) -> docs/verilator-versions/<variant>/race-cpu/
+  STAGE: race-cpu
   NOFIX_RUNS: "2"
 
 jobs:
@@ -33,6 +41,10 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       variants: ${{ steps.plan.outputs.variants }}
       measure: ${{ steps.plan.outputs.measure }}
+      parts: ${{ steps.plan.outputs.parts }}
+      race_runs: ${{ steps.plan.outputs.race_runs }}
+      race_jobs: ${{ steps.plan.outputs.race_jobs }}
+      subdir: ${{ steps.plan.outputs.subdir }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -51,8 +63,17 @@ jobs:
           version="${GITHUB_REF_NAME#claude/verilator-catalog-}"
           [[ "$version" =~ ^[0-9]+\.[0-9]{3}$ ]] || { echo "::error::no version in $GITHUB_REF_NAME"; exit 1; }
           if [[ "$version" == 5.020 ]]; then variants='["5.020-apt", "5.020"]'; else variants="[\"$version\"]"; fi
-          printf 'version=%s\nvariants=%s\nmeasure=%s\n' "$version" "$variants" "$measure" >>"$GITHUB_OUTPUT"
-          printf 'Verilator %s: %s\n' "$version" "$variants" >>"$GITHUB_STEP_SUMMARY"
+          race() { seq "$1" | jq -c -R -s 'split("\n")[:-1] | map("race-" + .)'; }
+          case "$STAGE" in
+            all) parts="$(race 5 | jq -c '["sbt", "nofix"] + .')" race_runs=2000 race_jobs='' subdir='' ;;
+            race-cpu) parts="$(race 20)" race_runs=3000 race_jobs='-j 0' subdir=race-cpu ;;
+            *) echo "::error::unknown STAGE: $STAGE"; exit 1 ;;
+          esac
+          {
+            printf 'version=%s\nvariants=%s\nmeasure=%s\n' "$version" "$variants" "$measure"
+            printf 'parts=%s\nrace_runs=%s\nrace_jobs=%s\nsubdir=%s\n' "$parts" "$race_runs" "$race_jobs" "$subdir"
+          } >>"$GITHUB_OUTPUT"
+          printf 'Verilator %s: %s, stage %s: %s\n' "$version" "$variants" "$STAGE" "$parts" >>"$GITHUB_STEP_SUMMARY"
 
   build:
     needs: plan
@@ -92,7 +113,7 @@ jobs:
       fail-fast: false
       matrix:
         variant: ${{ fromJSON(needs.plan.outputs.variants) }}
-        part: [sbt, nofix, race-1, race-2, race-3, race-4, race-5]
+        part: ${{ fromJSON(needs.plan.outputs.parts) }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       VARIANT: ${{ matrix.variant }}
@@ -146,7 +167,8 @@ jobs:
           scripts/verilator-catalog.sh "$BIN" "$OUT" race
         env:
           CHECK_LOG_DIR: build/catalog/design
-          CATALOG_RACE_RUNS: ${{ env.RACE_RUNS_PER_SHARD }}
+          CATALOG_RACE_RUNS: ${{ needs.plan.outputs.race_runs }}
+          CATALOG_RACE_JOBS: ${{ needs.plan.outputs.race_jobs }}
       - name: Summary
         if: always()
         run: cat "$OUT/summary.txt" >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
@@ -173,6 +195,8 @@ jobs:
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       VARIANTS: ${{ needs.plan.outputs.variants }}
+      SUBDIR: ${{ needs.plan.outputs.subdir }}
+      PARTS: ${{ needs.plan.outputs.parts }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v7
@@ -180,6 +204,8 @@ jobs:
           path: build/artifacts
       - name: Collect
         run: |
+          CATALOG_PARTS="$(jq -r 'map(sub("-[0-9]+$"; "")) | unique | join(" ")' <<<"$PARTS")"
+          export CATALOG_PARTS
           for variant in $(jq -r '.[]' <<<"$VARIANTS"); do
             printf '### %s\n\n~~~\n' "$variant" >>"$GITHUB_STEP_SUMMARY"
             scripts/verilator-catalog-collect.sh build/artifacts "$variant" "build/results/$variant" |
@@ -198,12 +224,13 @@ jobs:
             git fetch -q origin "$GITHUB_REF_NAME"
             git checkout -q -B results FETCH_HEAD
             for variant in $(jq -r '.[]' <<<"$VARIANTS"); do
-              rm -rf "docs/verilator-versions/$variant"
-              mkdir -p docs/verilator-versions
-              cp -R "build/results/$variant" "docs/verilator-versions/$variant"
+              dest="docs/verilator-versions/$variant${SUBDIR:+/$SUBDIR}"
+              rm -rf "$dest"
+              mkdir -p "$(dirname "$dest")"
+              cp -R "build/results/$variant" "$dest"
             done
             git add -A docs/verilator-versions
-            git commit -q -m "test: Verilator $VERSION catalog results of run $GITHUB_RUN_ID (#85)" || exit 0
+            git commit -q -m "test: Verilator $VERSION catalog results${SUBDIR:+ ($SUBDIR)} of run $GITHUB_RUN_ID (#85)" || exit 0
             git push -q origin "HEAD:$GITHUB_REF_NAME" && exit 0
             sleep $((i * 5))
           done
