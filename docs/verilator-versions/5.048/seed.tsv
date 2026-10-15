@@ -1,0 +1,8 @@
+plusargs	run	urandom x4
+none	1	73b2233c a107c0d1 613e3743 aadb0c9a
+none	2	73b2233c a107c0d1 613e3743 aadb0c9a
+none	3	73b2233c a107c0d1 613e3743 aadb0c9a
++verilator+seed+1	1	b722072d fd8d9d77 24800459 5fa24450
++verilator+seed+1	2	b722072d fd8d9d77 24800459 5fa24450
++verilator+seed+2	1	fded6676 d3189547 516497e1 1be5aac4
++verilator+seed+0	1	%Error: COMMAND_LINE:0: Argument '+verilator+seed+' must be an unsigned integer, greater than 0, less than 2147483648
