@@ -1,2 +1,6 @@
 build	result=success,seconds=348,compiler warnings=3
-sbt	missing (the job failed before it uploaded its results)
+env	Verilator 5.042 2025-11-02 rev v5.042
+sbt	0 of 1 runs failed, 302 s per run, 53 builds in the last run, warnings: none
+seed	without a seed: the same values in every run, seed 1: the same values in every run
+nofix	0 of 2 runs failed, 216 s per run, 52 builds in the last run, warnings: none
+race	5 shards: [-j 0]: 0 of 10000 pool aborts, 0 other aborts, 0 other errors, 0.113 s/run, p=0.0034; [--build-jobs 0 --verilate-jobs 1]: 0 of 10000 pool aborts, 0 other aborts, 0 other errors, 0.112 s/run, p=0.0034
