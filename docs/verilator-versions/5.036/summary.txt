@@ -1,6 +1,2 @@
 build	result=success,seconds=200,compiler warnings=3
 env	Verilator 5.036 2025-04-27 rev v5.036
-sbt	0 of 1 runs failed, 282 s per run, 53 builds in the last run, warnings: none
-seed	without a seed: the same values in every run, seed 1: the same values in every run
-nofix	0 of 2 runs failed, 185 s per run, 52 builds in the last run, warnings: none
-race	missing (no shard uploaded its results)
