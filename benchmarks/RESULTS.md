@@ -21,8 +21,8 @@
 
 | 系列 | 試行 | 何を比べられるか |
 |---|---|---|
-| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば先の試行） | 各方式で今のコンパイラが出せる最良の cycles。方式ごとに試行が違うので、比は発行幅だけの効果ではない |
-| 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ試行どうしの比は、発行幅だけを変えた効果 |
+| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば、下の表の行の順で先の試行） | 各方式で今のコンパイラが出せる最良の cycles。選ばれた試行が方式ごとに違うことがあり、そのカーネルの比は発行幅だけの効果ではない |
+| 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ行の比は、発行幅だけを変えた効果 |
 
 ## 方式ごとに cycles 最小の系列
 
@@ -37,28 +37,29 @@
 
 演算数は ADD・SUB・MUL・LD・ST の合計で、HALT を含まない。単一発行の cycles は「演算数 + HALT」以上になる。
 
-選ばれた試行（方式ごとに違うので、上の比は発行幅だけの効果ではない）:
+選ばれた試行（両方式で違うカーネルでは、上の比は試行の違いの効果も含む）:
 
-| カーネル | 方式 | 試行 |
-|---|---|---|
-| `saxpy8` | vliw | critical-path, no register limit |
-| `saxpy8` | single | critical-path, no register limit, single issue |
-| `fir4x8` | vliw | program-order, 16 registers, load reserve 4 |
-| `fir4x8` | single | program-order, no register limit, single issue |
-| `matmul3` | vliw | critical-path, 16 registers, load reserve 1 |
-| `matmul3` | single | program-order, 16 registers, load reserve 0, single issue |
+| カーネル | 方式 | 試行 | 両方式で同じ試行か |
+|---|---|---|---|
+| `saxpy8` | vliw | critical-path, no register limit | 同じ |
+| `saxpy8` | single | critical-path, no register limit, single issue | 同じ |
+| `fir4x8` | vliw | program-order, 16 registers, load reserve 4 | 違う |
+| `fir4x8` | single | program-order, no register limit, single issue | 違う |
+| `matmul3` | vliw | critical-path, 16 registers, load reserve 1 | 違う |
+| `matmul3` | single | program-order, 16 registers, load reserve 0, single issue | 違う |
 
 各記録の全項目は `metrics/<kernel>_<mode>.json`（`vliw-metrics/1`、[docs/METRICS.md](../docs/METRICS.md)）、命令列と入力・期待値は `cases/<kernel>_<mode>.json`（`vliw-testcase/1`）にある。
 
 ## 戦略を固定した系列
 
-各行は1つの試行（優先度、レジスタ上限、load reserve）で、両方の方式に同じ組を与えた cycles を並べる。**太字**は、上の「方式ごとに cycles 最小の系列」で選ばれた試行である。「不成立」は、その試行ではレジスタに収まらないことを示し、別の試行で置き換えない（spill はしない）。理由は2つある。「同時に生きる値 n > r」は、上限なしのスケジュールが同時に n 個の値を生かし、レジスタ r 本に割り当てられないこと。「上限の下で行き詰まる」は、上限付きのスケジューラが、残りのどの操作も上限を超えずに置けない状態になること。どの行の命令列も verifier が合法と判定し、参照モデルで同じ出力と cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、上の系列の記録だけ）。
+各行は1つの試行（優先度、レジスタ上限、load reserve）で、両方の方式に同じ組を与えた cycles を並べる。行の順はコンパイラが試す順（`RegisterAllocator.attempts`）で、cycles が同じならば先の行の試行が選ばれる。**太字**は、上の「方式ごとに cycles 最小の系列」で選ばれた試行である。「不成立」は、その試行ではレジスタに収まらないことを示し、別の試行で置き換えない（spill はしない）。理由は2つある。「同時に生きる値 n > r」は、上限なしのスケジュールが同時に n 個の値を生かし、レジスタ r 本に割り当てられないこと。「上限の下で行き詰まる」は、上限付きのスケジューラが、残りのどの操作も上限を超えずに置けない状態になること。どの行の命令列も verifier が合法と判定し、参照モデルで同じ出力と cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、上の系列の記録だけ）。
 
 ### `saxpy8`
 
 | 優先度 | レジスタ上限 | load reserve | vliw の cycles | single の cycles | single / vliw |
 |---|---|---|---|---|---|
 | critical-path | なし | - | **26** | **42** | 1.62 |
+| program-order | なし | - | 28 | 43 | 1.54 |
 | critical-path | 16 | 0 | 26 | 42 | 1.62 |
 | critical-path | 16 | 1 | 26 | 42 | 1.62 |
 | critical-path | 16 | 2 | 26 | 42 | 1.62 |
@@ -68,7 +69,6 @@
 | critical-path | 16 | 6 | 27 | 42 | 1.56 |
 | critical-path | 16 | 7 | 28 | 43 | 1.54 |
 | critical-path | 16 | 8 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
-| program-order | なし | - | 28 | 43 | 1.54 |
 | program-order | 16 | 0 | 28 | 43 | 1.54 |
 | program-order | 16 | 1 | 28 | 43 | 1.54 |
 | program-order | 16 | 2 | 28 | 43 | 1.54 |
@@ -84,6 +84,7 @@
 | 優先度 | レジスタ上限 | load reserve | vliw の cycles | single の cycles | single / vliw |
 |---|---|---|---|---|---|
 | critical-path | なし | - | 不成立: 同時に生きる値 33 > 16 | 不成立: 同時に生きる値 33 > 16 | - |
+| program-order | なし | - | 不成立: 同時に生きる値 36 > 16 | **81** | - |
 | critical-path | 16 | 0 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 1 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 2 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
@@ -93,7 +94,6 @@
 | critical-path | 16 | 6 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 7 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 8 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
-| program-order | なし | - | 不成立: 同時に生きる値 36 > 16 | **81** | - |
 | program-order | 16 | 0 | 67 | 81 | 1.21 |
 | program-order | 16 | 1 | 66 | 81 | 1.23 |
 | program-order | 16 | 2 | 66 | 81 | 1.23 |
@@ -109,6 +109,7 @@
 | 優先度 | レジスタ上限 | load reserve | vliw の cycles | single の cycles | single / vliw |
 |---|---|---|---|---|---|
 | critical-path | なし | - | 不成立: 同時に生きる値 28 > 16 | 不成立: 同時に生きる値 28 > 16 | - |
+| program-order | なし | - | 不成立: 同時に生きる値 29 > 16 | 不成立: 同時に生きる値 19 > 16 | - |
 | critical-path | 16 | 0 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 1 | **56** | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 2 | 57 | 不成立: 上限の下で行き詰まる | - |
@@ -118,7 +119,6 @@
 | critical-path | 16 | 6 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 7 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 8 | 不成立: 上限の下で行き詰まる | 不成立: 上限の下で行き詰まる | - |
-| program-order | なし | - | 不成立: 同時に生きる値 29 > 16 | 不成立: 同時に生きる値 19 > 16 | - |
 | program-order | 16 | 0 | 57 | **75** | 1.32 |
 | program-order | 16 | 1 | 56 | 76 | 1.36 |
 | program-order | 16 | 2 | 59 | 76 | 1.29 |

@@ -46,16 +46,23 @@ object BenchmarkRecords {
     def attempt(mode: Mode): Attempt = Attempt(priority, limit, mode.singleIssue)
   }
 
-  /** The strategies of `RegisterAllocator.attempts`, grouped by priority: without a register limit,
-    * then with the machine's registers as the limit and each load reserve.
+  /** The strategies of `RegisterAllocator.attempts`, in its order, which also breaks ties: each
+    * priority without a register limit, then each priority with the machine's registers as the
+    * limit and each load reserve.
     */
   def strategies(m: MachineDescription): Seq[Strategy] = {
     val r = m.registerCount
-    for {
-      p <- Priority.all
-      limit <- None +: (0 to r / 2).map(reserve => Some(ListScheduler.Limit(r, reserve)))
-    } yield Strategy(p, limit)
+    Priority.all.map(Strategy(_, None)) ++
+      (for (p <- Priority.all; reserve <- 0 to r / 2)
+        yield Strategy(p, Some(ListScheduler.Limit(r, reserve))))
   }
+
+  /** Whether both modes of `kernel` chose the same strategy in the fewest-cycles series. */
+  def sameStrategy(rs: Seq[Record], kernel: Kernel): Boolean =
+    rs.filter(_.kernel == kernel)
+      .map(r => r.compiled.allocated.attempt.copy(singleIssue = false))
+      .distinct
+      .size == 1
 
   /** One strategy in one mode: the compiled kernel, or why the strategy does not fit the machine.
     */
@@ -188,8 +195,8 @@ ${lines.mkString("\n")}"""
 
 | 系列 | 試行 | 何を比べられるか |
 |---|---|---|
-| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば先の試行） | 各方式で今のコンパイラが出せる最良の cycles。方式ごとに試行が違うので、比は発行幅だけの効果ではない |
-| 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ試行どうしの比は、発行幅だけを変えた効果 |
+| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば、下の表の行の順で先の試行） | 各方式で今のコンパイラが出せる最良の cycles。選ばれた試行が方式ごとに違うことがあり、そのカーネルの比は発行幅だけの効果ではない |
+| 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ行の比は、発行幅だけを変えた効果 |
 
 ## 方式ごとに cycles 最小の系列
 
@@ -199,18 +206,20 @@ ${rows.mkString("\n")}
 
 演算数は ADD・SUB・MUL・LD・ST の合計で、HALT を含まない。単一発行の cycles は「演算数 + HALT」以上になる。
 
-選ばれた試行（方式ごとに違うので、上の比は発行幅だけの効果ではない）:
+選ばれた試行（両方式で違うカーネルでは、上の比は試行の違いの効果も含む）:
 
-| カーネル | 方式 | 試行 |
-|---|---|---|
-${rs.map(r => s"| `${r.kernel.name}` | ${r.mode.name} | ${r.compiled.allocated.attempt} |")
-        .mkString("\n")}
+| カーネル | 方式 | 試行 | 両方式で同じ試行か |
+|---|---|---|---|
+${rs.map { r =>
+        val same = if (sameStrategy(rs, r.kernel)) "同じ" else "違う"
+        s"| `${r.kernel.name}` | ${r.mode.name} | ${r.compiled.allocated.attempt} | $same |"
+      }.mkString("\n")}
 
 各記録の全項目は `metrics/<kernel>_<mode>.json`（`vliw-metrics/1`、[docs/METRICS.md](../docs/METRICS.md)）、命令列と入力・期待値は `cases/<kernel>_<mode>.json`（`vliw-testcase/1`）にある。
 
 ## 戦略を固定した系列
 
-各行は1つの試行（優先度、レジスタ上限、load reserve）で、両方の方式に同じ組を与えた cycles を並べる。**太字**は、上の「方式ごとに cycles 最小の系列」で選ばれた試行である。「不成立」は、その試行ではレジスタに収まらないことを示し、別の試行で置き換えない（spill はしない）。理由は2つある。「同時に生きる値 n > r」は、上限なしのスケジュールが同時に n 個の値を生かし、レジスタ r 本に割り当てられないこと。「上限の下で行き詰まる」は、上限付きのスケジューラが、残りのどの操作も上限を超えずに置けない状態になること。どの行の命令列も verifier が合法と判定し、参照モデルで同じ出力と cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、上の系列の記録だけ）。
+各行は1つの試行（優先度、レジスタ上限、load reserve）で、両方の方式に同じ組を与えた cycles を並べる。行の順はコンパイラが試す順（`RegisterAllocator.attempts`）で、cycles が同じならば先の行の試行が選ばれる。**太字**は、上の「方式ごとに cycles 最小の系列」で選ばれた試行である。「不成立」は、その試行ではレジスタに収まらないことを示し、別の試行で置き換えない（spill はしない）。理由は2つある。「同時に生きる値 n > r」は、上限なしのスケジュールが同時に n 個の値を生かし、レジスタ r 本に割り当てられないこと。「上限の下で行き詰まる」は、上限付きのスケジューラが、残りのどの操作も上限を超えずに置けない状態になること。どの行の命令列も verifier が合法と判定し、参照モデルで同じ出力と cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、上の系列の記録だけ）。
 
 ${fixedTables(rs, fs)}
 """

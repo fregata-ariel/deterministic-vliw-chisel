@@ -68,14 +68,17 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     }
   }
 
-  test("the fixed series gives every strategy of the compiler to both modes") {
-    val strategies = BenchmarkRecords.strategies(machine)
+  test("the fixed series gives every attempt of the compiler, in its order, to both modes") {
     records.foreach { r =>
       val attempts = RegisterAllocator.attempts(r.compiled.dag, Priority.all, r.mode.singleIssue)
-      assert(strategies.map(_.attempt(r.mode)).toSet == attempts.toSet, r.name)
+      val rows = fixed.filter(f => f.kernel == r.kernel && f.mode == r.mode)
+      assert(rows.map(_.strategy.attempt(r.mode)) == attempts, r.name)
+    }
+    // A row holds the result of its own attempt: one that does not fit is never replaced.
+    fixed.foreach { f =>
       assert(
-        fixed.count(f => f.kernel == r.kernel && f.mode == r.mode) == strategies.size,
-        r.name
+        f.result.forall(_.allocated.attempt == f.strategy.attempt(f.mode)),
+        s"${f.kernel.name} ${f.mode.name} ${f.strategy}"
       )
     }
   }
