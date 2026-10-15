@@ -142,7 +142,7 @@ jobs:
       - name: Exit race
         if: startsWith(matrix.part, 'race-')
         run: |
-          scripts/check.sh sbt 'hw/testOnly vliw.hw.RandomKernelSpec' || echo "::warning::RandomKernelSpec failed"
+          scripts/check.sh sbt 'crosscheck/testOnly vliw.crosscheck.RandomKernelSpec' || echo "::warning::RandomKernelSpec failed"
           scripts/verilator-catalog.sh "$BIN" "$OUT" race
         env:
           CHECK_LOG_DIR: build/catalog/design
