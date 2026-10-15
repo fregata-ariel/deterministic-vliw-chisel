@@ -1,0 +1,4 @@
+# Verilator 5.034 2025-02-24 rev v5.034
+jobs	runs	pool aborts	other aborts	other errors	seconds per run	p (lower than 8/9663)
+-j 0	10000	0	0	0	0.103	0.0034
+--build-jobs 0 --verilate-jobs 1	10000	0	0	0	0.102	0.0034
