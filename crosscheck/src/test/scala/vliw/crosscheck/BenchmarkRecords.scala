@@ -225,13 +225,14 @@ ${fixedTables(rs, fs)}
 """
   }
 
-  /** Every file under benchmarks/ that this generates, with its content. */
+  /** Every file under benchmarks/ that this generates, with its content (with ModuloRecords). */
   def files(
       rs: Seq[Record] = records(),
       fs: Seq[Fixed] = fixed(),
-      m: MachineDescription = machine
+      m: MachineDescription = machine,
+      ms: Option[Seq[ModuloRecords.Compared]] = None
   ): Seq[(Path, String)] =
-    rs.flatMap { r =>
+    ModuloRecords.files(ms.getOrElse(ModuloRecords.records(m)), rs, fs, m) ++ rs.flatMap { r =>
       Seq(
         Dir.resolve("cases").resolve(s"${r.name}.json") -> (ujson
           .write(r.testCase, indent = 2) + "\n"),

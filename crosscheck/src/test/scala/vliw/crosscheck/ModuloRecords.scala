@@ -1,0 +1,340 @@
+package vliw.crosscheck
+
+import java.nio.file.{Path, Paths}
+
+import vliw.compiler.KernelCompiler
+import vliw.compiler.loop.{LoopBenchmarks, LoopGraph, LoopKernel, LoopLowering}
+import vliw.compiler.modulo.{
+  Attempt,
+  ModuloCompiled,
+  ModuloCompiler,
+  ModuloScheduler,
+  NoSchedule,
+  Outcome
+}
+import vliw.compiler.regalloc.{NoFit, RegisterAllocator}
+import vliw.isa.{MachineDescription, TestCase}
+import vliw.sim.{Metrics, ReferenceModel}
+
+/** The Modulo Scheduling records in benchmarks/ (#68; benchmarks/README.md): benchmarks/MODULO.md,
+  * and a test case and a vliw-metrics/1 record per compared loop, whose `ii` is the value the trace
+  * check confirms (`ModuloTrace`). Written with the other records by `BenchmarkRecords`.
+  */
+object ModuloRecords {
+  import BenchmarkRecords.{Dir, Fixed, Mode, Record, Seed}
+
+  /** The loops compared with list scheduling: the Phase 2 kernels, on the default machine. */
+  val compared: Seq[LoopKernel] = LoopBenchmarks.all.take(4)
+
+  final case class Compared(
+      kernel: LoopKernel,
+      compiled: ModuloCompiled,
+      testCase: ujson.Obj,
+      metrics: ujson.Obj
+  ) {
+    def name: String = s"${kernel.name}_${kernel.index}_modulo"
+  }
+
+  def records(m: MachineDescription = BenchmarkRecords.machine): Seq[Compared] = compared.map { k =>
+    val c = ModuloCompiler.compile(k, m).fold(sys.error, identity)
+    val name = s"${k.name}_${k.index}_modulo"
+    val tc = KernelCompiler
+      .testCaseOf(
+        k.unroll,
+        c.layout,
+        c.bundles,
+        c.cycles,
+        s"generated from the loop of ${k.name} over ${k.index} by Modulo Scheduling at II ${c.ii}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler",
+        KernelCompiler.sampleInputs(k.unroll, Seed),
+        None,
+        name
+      )
+      .fold(sys.error, identity)
+    val loaded = TestCase.parse(ujson.write(tc)).fold(es => sys.error(es.mkString("\n")), identity)
+    val run =
+      ReferenceModel.run(m, c.words, loaded.inputs).fold(v => sys.error(v.toString), identity)
+    val ii = ModuloTrace.check(c.graph, c.result.map, run.trace.cycles.map(_.toJson), c.ii) match {
+      case Right(Some(ii)) => ii
+      case other           => sys.error(s"$name: the trace does not confirm II ${c.ii}: $other")
+    }
+    Compared(k, c, tc, Metrics.of(m, c.words, run, name, Some(ii)))
+  }
+
+  private def machineFile(name: String) = MachineDescription
+    .load(Paths.get("tests", "machines", name))
+    .fold(es => sys.error(es.mkString("\n")), identity)
+
+  /** The loops of #68's acceptance tests, outside the list-scheduling records (#79). */
+  def acceptance(
+      m: MachineDescription = BenchmarkRecords.machine
+  ): Seq[(LoopKernel, MachineDescription)] = {
+    val (slow, iiUnits, regs3) =
+      (machineFile("slow_units.json"), machineFile("ii_units.json"), machineFile("regs3.json"))
+    Seq(LoopBenchmarks.product(8), LoopBenchmarks.dot(8)).flatMap(k =>
+      Seq(m, slow, iiUnits).map(k -> _)
+    ) ++
+      Seq(
+        LoopBenchmarks.saxpy(8) -> iiUnits,
+        LoopBenchmarks.saxpy(8) -> regs3,
+        LoopBenchmarks.dot(8) -> regs3,
+        LoopBenchmarks.matmulRows(3) -> slow,
+        LoopBenchmarks.matmulAcc(3) -> slow
+      )
+  }
+
+  /** The sizes of `saxpy(n)` recorded (#68), and the largest n whose program fits the instruction
+    * memory, searched up to the largest n the scratchpad holds (3n + 1 words).
+    */
+  val series: Seq[Int] = Seq(8, 16, 32, 64, 128)
+  def largest(m: MachineDescription): Int =
+    (1 to (m.scratchpadWords - 1) / 3)
+      .takeWhile(n => ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m).isRight)
+      .last
+
+  /** Why no II gives a program for `k` on `m`: the attempts of the search. */
+  private def failure(k: LoopKernel, m: MachineDescription): NoSchedule = {
+    val layout = LoopLowering.layout(k, m).fold(sys.error, identity)
+    ModuloScheduler
+      .schedule(LoopGraph.of(LoopLowering.lower(k, layout), m))
+      .swap
+      .getOrElse(sys.error(s"${k.name} compiles on ${m.machineId}"))
+  }
+
+  private def label(k: LoopKernel) = s"`${k.name}`（${k.index}）"
+
+  /** The attempts before the chosen II, grouped by cause: (a) no reservation table, the order of
+    * placement, (b) registers, the instruction memory.
+    */
+  private def reasons(attempts: Seq[Attempt]): String = {
+    def kind(o: Outcome) = o match {
+      case _: Outcome.NoMrt       => 0
+      case _: Outcome.NoTime      => 1
+      case _: Outcome.TooManyLive => 2
+      case _: Outcome.Overflow    => 3
+      case Outcome.Fits           => 4
+    }
+    val groups =
+      attempts.filter(_.outcome != Outcome.Fits).foldLeft(Vector.empty[Vector[Attempt]]) {
+        (gs, a) =>
+          if (
+            gs.nonEmpty && kind(gs.last.last.outcome) == kind(
+              a.outcome
+            ) && gs.last.last.ii + 1 == a.ii
+          )
+            gs.init :+ (gs.last :+ a)
+          else gs :+ Vector(a)
+      }
+    if (groups.isEmpty) "-"
+    else
+      groups
+        .map { g =>
+          val iis = if (g.size == 1) s"II ${g.head.ii}" else s"II ${g.head.ii}〜${g.last.ii}"
+          g.head.outcome match {
+            case Outcome.NoMrt(r)       => s"$iis: (a) 予約表なし（$r）"
+            case _: Outcome.NoTime      => s"$iis: 配置の順で置けない（${g.map(_.outcome).mkString("、")}）"
+            case _: Outcome.TooManyLive =>
+              val live = g.map(_.outcome).collect { case Outcome.TooManyLive(l, _) => l }
+              val r = g.head.outcome.asInstanceOf[Outcome.TooManyLive].registers
+              s"$iis: (b) レジスタ（同時に生きる値 ${live.mkString("、")} > $r）"
+            case Outcome.Overflow(_, cap) =>
+              val b = g.map(_.outcome).collect { case Outcome.Overflow(b, _) => b }
+              s"$iis: 命令領域（${b.mkString("、")} bundle > $cap）"
+            case Outcome.Fits => ""
+          }
+        }
+        .mkString("。")
+  }
+
+  private def loads(c: ModuloCompiled) = {
+    val g = c.graph
+    def ld(p: vliw.compiler.loop.Place) = g.ids(p).count(g.nodes(_).mnemonic == "LD")
+    val (before, each) = (ld(vliw.compiler.loop.Place.Before), ld(vliw.compiler.loop.Place.Each))
+    s"$before + $each × ${g.trips} = ${before + each * g.trips}"
+  }
+
+  private def bound(c: ModuloCompiled) =
+    s"${c.result.mii.resMII}（${c.result.mii.bounding.map(r => s"`$r`").mkString("、")}）"
+
+  /** benchmarks/MODULO.md. `rs` and `fs` are the list-scheduling records of BenchmarkRecords. */
+  def report(cs: Seq[Compared], rs: Seq[Record], fs: Seq[Fixed], m: MachineDescription): String = {
+    val perLoop = cs.map { r =>
+      val c = r.compiled
+      val s = c.result
+      val list = rs.find(x => x.kernel == r.kernel.unroll && x.mode == Mode.Vliw).get.compiled
+      val listLd = list.dag.nodes.count(_.isInstanceOf[vliw.compiler.dag.Node.Load])
+      Seq(
+        label(r.kernel),
+        r.kernel.trips.toString,
+        bound(c),
+        s.mii.recMII.toString,
+        s.ii.toString,
+        reasons(s.attempts),
+        s.start.toString,
+        s.span.toString,
+        c.words.size.toString,
+        c.cycles.toString,
+        RegisterAllocator.maxLive(s.schedule).toString,
+        loads(c),
+        listLd.toString
+      ).mkString("| ", " | ", " |")
+    }
+
+    val comparisons = compared.map(_.unroll).distinct.map { kernel =>
+      val loops = cs.filter(_.kernel.unroll == kernel)
+      val rows = fs.filter(f => f.kernel == kernel && f.mode == Mode.Vliw)
+      val lines = rows.map { f =>
+        val list = f.result.fold(
+          {
+            case NoFit.TooManyLive(live, registers) => s"不成立: 同時に生きる値 $live > $registers"
+            case NoFit.Stuck                        => "不成立: 上限の下で行き詰まる"
+          },
+          _.cycles.toString
+        )
+        val ratios = loops
+          .map(l => f.result.fold(_ => "-", c => f"${l.compiled.cycles.toDouble / c.cycles}%.2f"))
+        (Seq(
+          f.strategy.priority.name,
+          f.strategy.limit.fold("なし")(_.registers.toString),
+          f.strategy.limit.fold("-")(_.loadReserve.toString),
+          list
+        ) ++ ratios).mkString("| ", " | ", " |")
+      }
+      val failed = rows.flatMap(_.result.left.toOption)
+      val counts = Seq(
+        "同時に生きる値が多い" -> failed.count(_.isInstanceOf[NoFit.TooManyLive]),
+        "上限の下で行き詰まる" -> failed.count(_ == NoFit.Stuck)
+      ).filter(_._2 > 0).map { case (w, n) => s"$w $n" }
+      val best = rs.find(x => x.kernel == kernel && x.mode == Mode.Vliw).get.compiled
+      val heads = loops.map(l => s"Modulo（${l.kernel.index}、${l.compiled.cycles} cycles）/ list")
+      s"""### `${kernel.name}`
+
+Modulo Scheduling: ${loops
+          .map(l => s"${label(l.kernel)} ${l.compiled.cycles} cycles（II ${l.compiled.ii}）")
+          .mkString(
+            "、"
+          )}。list scheduling の、方式ごとに cycles 最小の系列（vliw）は ${best.cycles} cycles（${best.allocated.attempt}）。
+
+| 優先度 | レジスタ上限 | load reserve | list scheduling の cycles（vliw） | ${heads.mkString(" | ")} |
+|---|---|---|---|${heads.map(_ => "---|").mkString}
+${lines.mkString("\n")}
+
+不成立の行は ${failed.size}（${if (counts.isEmpty) "-" else counts.mkString("、")}）で、比に含めない。"""
+    }
+
+    val accept = acceptance(m)
+      .map { case (k, mach) =>
+        val r = ModuloCompiler.compile(k, mach)
+        val machine = s"`${mach.machineId}` rev ${mach.revision}（`${mach.hash.take(19)}…`）"
+        r match {
+          case Right(c) =>
+            Seq(
+              label(k),
+              machine,
+              bound(c),
+              c.result.mii.recMII.toString,
+              c.ii.toString,
+              reasons(c.result.attempts),
+              c.cycles.toString
+            )
+          case Left(_) =>
+            val no = failure(k, mach)
+            Seq(
+              label(k),
+              machine,
+              s"${no.mii.resMII}（${no.mii.bounding.map(r => s"`$r`").mkString("、")}）",
+              no.mii.recMII.toString,
+              "-",
+              s"不成立: ${reasons(no.attempts)}（II ${no.mii.mii}〜${no.iiMax} のどれにも収まらない）",
+              "-"
+            )
+        }
+      }
+      .map(_.mkString("| ", " | ", " |"))
+
+    val saxpy = series.map { n =>
+      ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m) match {
+        case Right(c) => s"| $n | ${c.ii} | ${c.words.size} | ${c.cycles} |"
+        case Left(_)  =>
+          val no = failure(LoopBenchmarks.saxpy(n), m)
+          s"| $n | - | - | 不成立: ${reasons(no.attempts)}（II ${no.mii.mii}〜${no.iiMax} のどれにも収まらない） |"
+      }
+    }
+    val nMax = largest(m)
+
+    val recurrent = cs.filter(_.compiled.result.mii.recMII > 0)
+    val recNote =
+      if (recurrent.isEmpty) "無い"
+      else
+        recurrent
+          .map { r =>
+            val mii = r.compiled.result.mii
+            s"${label(r.kernel)}（RecMII ${mii.recMII}、ResMII ${mii.resMII} より小さい）"
+          }
+          .mkString("、") + "だけ"
+
+    s"""# Modulo Scheduling の記録
+
+このファイルは `sbt "crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords"` が生成する。手で編集しない（`crosscheck/BenchmarkSpec` が一致を確かめる）。
+
+**cycle ベースの比較である。** Fmax・面積・電力は未測定で（#57）、時間や電力の主張はしない。cycle の比を実時間の速度比と読まない。
+
+## 条件
+
+| 項目 | 値 |
+|---|---|
+| machine | `${m.machineId}` revision ${m.revision}、`${m.hash}` |
+| ループ | `vliw.compiler.loop.LoopBenchmarks`（[docs/COMPILER.md](../docs/COMPILER.md)「ループ IR」）。展開すると list scheduling のカーネルと同じになる |
+| 配置と入力 | list scheduling と同じ（展開したカーネルの `MemoryLayout.fixedOrder`、`KernelCompiler.sampleInputs(kernel, $Seed)`） |
+| Modulo Scheduling | II = MII から1反復の長さまで順に試し、最初に命令列ができた II を使う（[docs/COMPILER.md](../docs/COMPILER.md)「Modulo Scheduling」）。戦略は1つで、cycles 最小の II とは限らない |
+| 実行 | 参照モデル。II は、トレースで確かめた値（`crosscheck/ModuloTrace`）を `metrics` の `ii` に記録する。RTL でも同じ cycles と出力になることを `BenchmarkSpec` が確かめる |
+
+## ループごとの結果
+
+| ループ | 反復 | ResMII（律速の資源） | RecMII | II | MII を超えた II の理由 | 開始 S | 1反復の長さ | bundle | cycles | 同時に生きる値 | LD（ループの前 + 1反復 × 反復） | LD（list scheduling） |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+${perLoop.mkString("\n")}
+
+(a) は、1反復の演算が II 行の予約表（スロット、演算器の II（L9）、書戻しポート（L5））に収まらないこと、(b) は、命令列の同時に生きる値がレジスタ数を超えること。比べる4つのループのうち、RecMII > 0 は $recNote。RecMII が II を決めるループは、下の受入テストの `product8` で確かめる。
+
+各記録の全項目は `metrics/<kernel>_<loop>_modulo.json`（`vliw-metrics/1`、`ii` を含む）、命令列と入力・期待値は `cases/<kernel>_<loop>_modulo.json` にある。
+
+## list scheduling（戦略を固定した系列）との比較
+
+list scheduling の各行は、[RESULTS.md](RESULTS.md) の「戦略を固定した系列」の vliw の列で、同じ配置と入力である。Modulo Scheduling の側は1つの戦略なので、各行は「その試行の list scheduling」と「Modulo Scheduling」の比になる。
+
+${comparisons.mkString("\n\n")}
+
+## 受入テストのループ（#68）
+
+list scheduling の記録（#79）の対象外。
+
+| ループ | machine | ResMII（律速の資源） | RecMII | II | MII を超えた II の理由 | cycles |
+|---|---|---|---|---|---|---|
+${accept.mkString("\n")}
+
+## 反復回数の系列（`saxpy(n)`、既定の構成）
+
+| n | II | bundle | cycles |
+|---|---|---|---|
+${saxpy.mkString("\n")}
+
+命令領域（${m.instructionMemoryBundles} bundle）に収まる最大の n は $nMax（n は、Scratchpad に収まる ${(m.scratchpadWords - 1) / 3} まで試した）。
+"""
+  }
+
+  /** The files of this record under benchmarks/. */
+  def files(
+      cs: Seq[Compared],
+      rs: Seq[Record],
+      fs: Seq[Fixed],
+      m: MachineDescription
+  ): Seq[(Path, String)] =
+    cs.flatMap { r =>
+      Seq(
+        Dir.resolve("cases").resolve(s"${r.name}.json") -> (ujson
+          .write(r.testCase, indent = 2) + "\n"),
+        Dir.resolve("metrics").resolve(s"${r.name}.json") -> (ujson
+          .write(r.metrics, indent = 2) + "\n")
+      )
+    } :+ (Dir.resolve("MODULO.md") -> report(cs, rs, fs, m))
+}
