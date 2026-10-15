@@ -40,7 +40,7 @@ B・C の abort は「upstream issue 4931 の abort / 回数」で、p は 5.020
   - `measure`（版ごとに7つ）: `sbt`（`sbt test` と seed）、`nofix`（対処なしの `sbt test`）、`race-1`〜`race-5`（終了時の race を5つに分けたもの）
   - `collect`: 結果を `scripts/verilator-catalog-collect.sh` でまとめ、race の5つを合算し、同じブランチの `docs/verilator-versions/<版>/` にコミットする。このジョブだけ `contents: write` を持つ。ログは artifact に 90 日残す
 - 5.020 のブランチは、apt の 5.020（Debian 5.020-1）も `5.020-apt` として測る。runner で abort が再現することを、ほかの版で abort が「0回」だったときの根拠にする（陽性対照）
-- `docs/` と `README.md` だけを変える push では動かない（各版のブランチに書く報告で、測定をやり直さない）
+- `docs/` と `README.md` だけを変える push では測らない（各版のブランチに書く報告で、測定をやり直さない）
 - 手元（cloud のコンテナ、4 CPU、15 GB）で同じスクリプトを使って測った結果は、参考として別に記録する
 
 ### チェック項目

@@ -5,12 +5,13 @@ name: Verilator catalog
 # Debian's package, 5.020-apt, as the positive control of the exit race). The jobs run in parallel
 # on fresh runners: the Verilator build, sbt test (with the seed check), sbt test without ADR-0013's
 # jobs, and the exit race split into shards. The last job commits the results (no logs; those stay
-# in the artifacts) to docs/verilator-versions/<variant>/ on the same branch. Pushes that change only
-# docs/ or README.md do not run it, so the reports written on the branch do not start it again.
+# in the artifacts) to docs/verilator-versions/<variant>/ on the same branch. A push that changes
+# only docs/ or README.md measures nothing (the plan job stops it), so the reports written on the
+# branch do not start the measurements again. (`paths-ignore` would also skip the push that creates
+# a branch at a commit that another branch already has.)
 on:
   push:
     branches: ["claude/verilator-catalog-*"]
-    paths-ignore: ["docs/**", "README.md"]
 
 permissions:
   contents: read
@@ -31,17 +32,31 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       variants: ${{ steps.plan.outputs.variants }}
+      measure: ${{ steps.plan.outputs.measure }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - id: plan
+        env:
+          BEFORE: ${{ github.event.before }}
         run: |
+          # Measure unless the push changed only docs/ and README.md (a new branch always measures).
+          measure=true
+          if git cat-file -e "$BEFORE^{commit}" 2>/dev/null &&
+            ! git diff --name-only "$BEFORE" "$GITHUB_SHA" | grep -qvE '^(docs/|README\.md$)'; then
+            measure=false
+            echo 'Only docs/ and README.md changed: nothing to measure' >>"$GITHUB_STEP_SUMMARY"
+          fi
           version="${GITHUB_REF_NAME#claude/verilator-catalog-}"
           [[ "$version" =~ ^[0-9]+\.[0-9]{3}$ ]] || { echo "::error::no version in $GITHUB_REF_NAME"; exit 1; }
           if [[ "$version" == 5.020 ]]; then variants='["5.020-apt", "5.020"]'; else variants="[\"$version\"]"; fi
-          printf 'version=%s\nvariants=%s\n' "$version" "$variants" >>"$GITHUB_OUTPUT"
+          printf 'version=%s\nvariants=%s\nmeasure=%s\n' "$version" "$variants" "$measure" >>"$GITHUB_OUTPUT"
           printf 'Verilator %s: %s\n' "$version" "$variants" >>"$GITHUB_STEP_SUMMARY"
 
   build:
     needs: plan
+    if: needs.plan.outputs.measure == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -147,7 +162,7 @@ jobs:
 
   collect:
     needs: [plan, build, measure]
-    if: always() && needs.plan.result == 'success'
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.measure == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
