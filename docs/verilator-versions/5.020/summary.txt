@@ -1,0 +1,4 @@
+build	result=success,seconds=253,compiler warnings=3
+env	Verilator 5.020 2024-01-01 rev v5.020
+sbt	0 of 1 runs failed, 153 s per run, 53 builds in the last run, warnings: none
+seed	without a seed: the same values in every run, seed 1: the same values in every run
