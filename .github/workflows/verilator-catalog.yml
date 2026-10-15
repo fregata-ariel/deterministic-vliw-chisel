@@ -1,0 +1,186 @@
+name: Verilator catalog
+
+# Evaluates one Verilator version for docs/VERILATOR_VERSIONS.md (#85). Runs on a push to a branch
+# claude/verilator-catalog-<version>: the version comes from the branch name (5.020 also measures
+# Debian's package, 5.020-apt, as the positive control of the exit race). The jobs run in parallel
+# on fresh runners: the Verilator build, sbt test (with the seed check), sbt test without ADR-0013's
+# jobs, and the exit race split into shards. The last job commits the results (no logs; those stay
+# in the artifacts) to docs/verilator-versions/<variant>/ on the same branch. Pushes that change only
+# docs/ or README.md do not run it, so the reports written on the branch do not start it again.
+on:
+  push:
+    branches: ["claude/verilator-catalog-*"]
+    paths-ignore: ["docs/**", "README.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verilator-catalog-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exit race: runs per jobs configuration and shard (5 shards).
+  RACE_RUNS_PER_SHARD: "2000"
+  NOFIX_RUNS: "2"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      variants: ${{ steps.plan.outputs.variants }}
+    steps:
+      - id: plan
+        run: |
+          version="${GITHUB_REF_NAME#claude/verilator-catalog-}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]{3}$ ]] || { echo "::error::no version in $GITHUB_REF_NAME"; exit 1; }
+          if [[ "$version" == 5.020 ]]; then variants='["5.020-apt", "5.020"]'; else variants="[\"$version\"]"; fi
+          printf 'version=%s\nvariants=%s\n' "$version" "$variants" >>"$GITHUB_OUTPUT"
+          printf 'Verilator %s: %s\n' "$version" "$variants" >>"$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        id: cache
+        with:
+          path: ~/verilator/${{ needs.plan.outputs.version }}
+          key: verilator-${{ needs.plan.outputs.version }}-ubuntu-24.04-${{ hashFiles('scripts/verilator-build.sh') }}
+      - name: Build Verilator from source
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y autoconf flex bison libfl-dev help2man
+          scripts/verilator-build.sh "$VERSION" "$HOME/verilator/$VERSION" "$HOME/verilator/$VERSION/build-info.txt"
+      - run: cat "$HOME/verilator/$VERSION/build-info.txt" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: verilator-${{ needs.plan.outputs.version }}
+          path: |
+            ~/verilator/${{ needs.plan.outputs.version }}/build-info.txt
+            ~/verilator/${{ needs.plan.outputs.version }}/build-info.log
+          if-no-files-found: ignore
+          retention-days: 90
+
+  measure:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(needs.plan.outputs.variants) }}
+        part: [sbt, nofix, race-1, race-2, race-3, race-4, race-5]
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      VARIANT: ${{ matrix.variant }}
+      PART: ${{ matrix.part }}
+      OUT: build/catalog/out
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: sbt
+      - uses: sbt/setup-sbt@v1
+      - name: Install Debian's Verilator
+        if: endsWith(matrix.variant, '-apt')
+        run: sudo apt-get update && sudo apt-get install -y verilator
+      - name: Restore the Verilator build
+        if: ${{ !endsWith(matrix.variant, '-apt') }}
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/verilator/${{ needs.plan.outputs.version }}
+          key: verilator-${{ needs.plan.outputs.version }}-ubuntu-24.04-${{ hashFiles('scripts/verilator-build.sh') }}
+          fail-on-cache-miss: true
+      - name: Runner
+        run: |
+          if [[ "$VARIANT" == *-apt ]]; then bin=/usr/bin; else bin="$HOME/verilator/$VERSION/bin"; fi
+          echo "BIN=$bin" >>"$GITHUB_ENV"
+          mkdir -p "$OUT"
+          {
+            printf 'job: %s %s, run %s attempt %s\n' "$VARIANT" "$PART" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'image: %s %s\n' "${ImageOS:-?}" "${ImageVersion:-?}"
+            printf 'cpu: %s\n' "$(lscpu | sed -n 's/^Model name: *//p')"
+            printf 'cpus: %s, memory: %s\n' "$(nproc)" "$(free -h | awk '/^Mem:/ { print $2 }')"
+          } | tee "$OUT/runner.txt"
+          "$bin/verilator" --version
+      - name: sbt test and the seed
+        if: matrix.part == 'sbt'
+        run: scripts/verilator-catalog.sh "$BIN" "$OUT" env sbt seed
+      - name: sbt test without ADR-0013's jobs
+        if: matrix.part == 'nofix'
+        run: scripts/verilator-catalog.sh "$BIN" "$OUT" nofix
+        env:
+          CATALOG_NOFIX_RUNS: ${{ env.NOFIX_RUNS }}
+      # The design of the race: the first test of RandomKernelSpec, built with this version. The
+      # race reads only its Makefile and sources, so a failing build still leaves what it needs.
+      - name: Exit race
+        if: startsWith(matrix.part, 'race-')
+        run: |
+          scripts/check.sh sbt 'hw/testOnly vliw.hw.RandomKernelSpec' || echo "::warning::RandomKernelSpec failed"
+          scripts/verilator-catalog.sh "$BIN" "$OUT" race
+        env:
+          CHECK_LOG_DIR: build/catalog/design
+          CATALOG_RACE_RUNS: ${{ env.RACE_RUNS_PER_SHARD }}
+      - name: Summary
+        if: always()
+        run: cat "$OUT/summary.txt" >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      # Small files for the collect job; the logs of every sbt run as well, for failures.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: catalog-${{ matrix.variant }}-${{ matrix.part }}
+          path: |
+            build/catalog/out/
+            !build/catalog/out/nofix-checkout/
+          if-no-files-found: ignore
+          retention-days: 90
+
+  collect:
+    needs: [plan, build, measure]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      VARIANTS: ${{ needs.plan.outputs.variants }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          path: build/artifacts
+      - name: Collect
+        run: |
+          for variant in $(jq -r '.[]' <<<"$VARIANTS"); do
+            printf '### %s\n\n~~~\n' "$variant" >>"$GITHUB_STEP_SUMMARY"
+            scripts/verilator-catalog-collect.sh build/artifacts "$variant" "docs/verilator-versions/$variant" |
+              tee -a "$GITHUB_STEP_SUMMARY"
+            printf '~~~\n' >>"$GITHUB_STEP_SUMMARY"
+            printf 'run: %s/%s/actions/runs/%s (attempt %s)\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" \
+              "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >"docs/verilator-versions/$variant/run.txt"
+          done
+      - name: Commit the results to this branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/verilator-versions
+          git commit -q -m "test: Verilator $VERSION catalog results of run $GITHUB_RUN_ID (#85)" || exit 0
+          for i in 1 2 3 4; do
+            git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            sleep $((i * 5))
+            git pull -q --rebase origin "$GITHUB_REF_NAME"
+          done
+          exit 1

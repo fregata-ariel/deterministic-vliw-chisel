@@ -51,7 +51,9 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `scripts/repeat-tests.sh` | テストの繰り返し実行（間欠的な失敗の頻度を測る。#74） |
 | `scripts/verilator-exit-race.py` | Verilator の終了時の abort の頻度を、jobs の設定ごとに測る（[ADR-0013](docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)） |
 | `scripts/verilator-catalog.sh` | Verilator の1つの版を、ChiselSim のテスト・終了時の abort・seed で調べる（[docs/VERILATOR_VERSIONS.md](docs/VERILATOR_VERSIONS.md)、#85） |
+| `scripts/verilator-build.sh`・`scripts/verilator-catalog-collect.sh` | Verilator の版をソースからビルドする・カタログの CI の結果をまとめる（#85） |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
+| `.github/workflows/verilator-catalog.yml` | Verilator の版ごとの評価（ブランチ `claude/verilator-catalog-<版>` への push で動く。#85） |
 
 ## 開発
 

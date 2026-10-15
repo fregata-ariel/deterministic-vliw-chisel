@@ -82,7 +82,10 @@ sbt_runs() {
   builds="$(find "$dir/build/chiselsim" -name compilation-log.txt 2>/dev/null | wc -l)"
   note "$name" "$(awk -F'\t' 'NR > 1 { n++; if ($3 != "pass") f++; s += $4 }
       END { printf "%d of %d runs failed, %.0f s per run", f, n, s / n }' "$out/$name/summary.tsv"),\
- $builds builds in the last run, warnings: $(warnings_of "$dir/build/chiselsim" | sed 's/^$/none/')"
+ $builds builds in the last run, warnings: $(warnings="$(warnings_of "$dir/build/chiselsim")"; echo "${warnings:-none}")"
+  # The errors of failed runs (Verilator, make, failed tests), for the record.
+  grep -HE '%Error|make: \*\*\*|\*\*\* FAILED|\*\*\* ABORTED|Thread Pool' "$out/$name"/run-*/sbt.log 2>/dev/null |
+    sed "s|^$out/$name/||" | head -n 200 >"$out/$name/errors.txt" || true
   # The Verilator command line of one build, to show the jobs options that were used.
   local makefile
   makefile="$(find "$dir/build/chiselsim" -path '*workdir-verilator/Makefile' -print -quit 2>/dev/null)"
