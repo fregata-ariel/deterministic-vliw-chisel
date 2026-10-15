@@ -1,0 +1,4 @@
+build	result=success,seconds=369,compiler warnings=3
+sbt	missing (the job failed before it uploaded its results)
+nofix	missing (the job failed before it uploaded its results)
+race	missing (no shard uploaded its results)
