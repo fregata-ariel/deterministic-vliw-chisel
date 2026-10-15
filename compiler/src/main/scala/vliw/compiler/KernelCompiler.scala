@@ -76,16 +76,25 @@ object KernelCompiler {
       layout: MemoryLayout,
       bundles: Vector[Bundle]
   ): Either[String, Vector[Long]] =
+    verified(machine, layout.kernel.name, declaration(layout), bundles)
+
+  /** [[checked]] with the declaration given: for code whose inputs are not a kernel's layout. */
+  def verified(
+      machine: MachineDescription,
+      name: String,
+      declaration: Verifier.Declaration,
+      bundles: Vector[Bundle]
+  ): Either[String, Vector[Long]] =
     new BundleCodec(machine)
       .encodeAll(bundles)
       .left
-      .map(e => s"compiler error: ${layout.kernel.name} does not encode: $e")
+      .map(e => s"compiler error: $name does not encode: $e")
       .flatMap { words =>
-        val findings = Verifier.verify(machine, words, declaration(layout))
+        val findings = Verifier.verify(machine, words, declaration)
         Either.cond(
           findings.isEmpty,
           words,
-          (s"compiler error: the verifier rejects the code generated for ${layout.kernel.name}" +:
+          (s"compiler error: the verifier rejects the code generated for $name" +:
             findings.map(f => s"  $f")).mkString("\n")
         )
       }
