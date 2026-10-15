@@ -16,9 +16,11 @@ on:
 permissions:
   contents: read
 
+# One run per branch at a time. A newer push waits instead of cancelling the run in progress, so
+# that pushing a report does not stop a measurement (an obsolete run is cancelled by hand).
 concurrency:
   group: verilator-catalog-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # What a push measures:
