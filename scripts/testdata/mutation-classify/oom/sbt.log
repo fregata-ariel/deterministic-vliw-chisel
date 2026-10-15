@@ -1,0 +1,3 @@
+[error] Error during tests:
+[error] 	vliw.hw.CaseSpec
+[error] (hw / Test / test) sbt.TestsFailedException: Tests unsuccessful

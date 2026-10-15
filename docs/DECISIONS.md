@@ -92,6 +92,7 @@
   - 使用するActionは、公式（`actions/*`）とsbt公式（`sbt/setup-sbt`）のメジャータグで固定する。第三者のActionを追加する場合はcommit SHAで固定する。
 - mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。
 - `scala` ジョブ（と `mutation` ジョブ）は Verilator を apt で入れ、`hw` の ChiselSim テストも実行する（#23）。firtool は sbt の依存として取得し、sbt のキャッシュに載る。
+- 間欠的な失敗を追えるよう、`scripts/check.sh` は sbt の出力・環境・プロセスの記録・テストの並行性の実効設定を `build/check-logs/` に残し、`scala` ジョブは失敗したときにそれらと ChiselSim の作業ディレクトリ・JUnit レポートを artifact として残す。テストのステップには job より短い timeout を付け、止まったときも artifact を残せるようにする。`mutation` ジョブは mutant ごとの判定とログを常に残す。繰り返し実行のワークフロー `repeat-tests.yml` は手動実行だけとする（#74）。
 
 ## ADR-0006: MVPでは合法なプログラムを保守的に限定する
 

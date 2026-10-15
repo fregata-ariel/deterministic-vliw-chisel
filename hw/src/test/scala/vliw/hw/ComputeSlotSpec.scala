@@ -1,12 +1,11 @@
 package vliw.hw
 
 import chisel3._
-import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.isa.MachineDescription
 
-class ComputeSlotSpec extends AnyFunSuite with ChiselSim {
+class ComputeSlotSpec extends AnyFunSuite with SeededChiselSim {
   private val params = CoreParams(MachineDescription.load().fold(es => fail(es.mkString), identity))
 
   private def init(dut: ComputeSlot): Unit = {

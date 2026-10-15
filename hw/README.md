@@ -13,7 +13,17 @@ sbt hw/test                 # ChiselSim のテスト（Verilator が必要）
 sbt "hw/run [target-dir] [machine.json]"   # Core の SystemVerilog を出力（既定は generated/ と config/machine.json）
 ```
 
-ChiselSim の作業ファイルは `build/chiselsim/` に作られる（gitignore 済み）。
+ChiselSim の作業ファイルは `build/chiselsim/<Suite>/<test>/` に作られる（gitignore 済み）。
+
+ChiselSim のテストは `ChiselSim` ではなく `SeededChiselSim` を mix in する（`scripts/check.sh static` が検査する）。ChiselSim はレジスタとメモリを Verilator の乱数で初期化してビルドする（`RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT`、reset までの値）。`SeededChiselSim` は、その seed を `+verilator+seed+<n>` として毎回明示し、`[sim-seed]` の行で sbt のログに、`seed.txt` で各シミュレーションのディレクトリに記録する（#74）。seed は環境変数 `VLIW_SIM_SEED` で選ぶ。
+
+```sh
+sbt hw/test                        # 既定の seed（1）
+VLIW_SIM_SEED=123 sbt hw/test      # 1 から 2147483647 の値
+VLIW_SIM_SEED=random sbt hw/test   # テストの JVM ごとに新しい seed（ログに残る）
+```
+
+Verilator 5.020 は、`+verilator+seed+` がないと毎回同じ状態から乱数を始める（`srand48` を呼ばない）。このため seed を渡さなくても実行ごとの値は同じだが、その値は Verilator の版に依存する。`build/chiselsim/<Suite>/<test>/workdir-verilator/` で `make replay` を実行すると、同じ seed でシミュレーションを再実行する。
 
 ## 構成（Phase 1）
 

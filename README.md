@@ -46,6 +46,8 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `benchmarks/` | 整数SAXPY、FIR、固定サイズ行列積の記録（[RESULTS.md](benchmarks/RESULTS.md)） |
 | `docs/` | 方針、仕様、判断理由、開発順序 |
 | `scripts/check.sh` | 手元とCIで共通のチェック入口 |
+| `scripts/mutation-check.sh` | mutation チェック（[tests/cases/README.md](tests/cases/README.md#mutation-チェック)） |
+| `scripts/repeat-tests.sh` | テストの繰り返し実行（間欠的な失敗の頻度を測る。#74） |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
 
 ## 開発
@@ -54,8 +56,9 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 
 ```sh
 scripts/check.sh          # 全チェック（CIと同じ内容）
-scripts/check.sh static   # JSON構文・shellcheck・空白エラー
+scripts/check.sh static   # JSON構文・shellcheck・空白エラー・mutation の判定の検査
 scripts/check.sh scala    # scalafmt・コンパイル（警告はエラー）・テスト
+scripts/check.sh sbt "hw/testOnly vliw.hw.CaseSpec"  # 任意の sbt コマンドを scala と同じログ付きで実行
 sbt test                  # テストだけを実行
 
 sbt "isa/run machine"                                   # machine description の検証とhash
@@ -65,6 +68,8 @@ sbt "compiler/run verify tests/cases/isa_example.json"  # 合法性の静的検�
 sbt "compiler/run compile saxpy8 fir4x8 matmul3"       # DSL のカーネルを命令列にする（generated/kernels/）
 sbt "sim/run tests/cases/isa_example.json --trace out.jsonl --metrics out.json"  # 参照モデルで実行
 ```
+
+`scripts/check.sh` の `scala` と `sbt` は、sbt の出力（`sbt.log`）、環境（JDK・sbt・Verilator の版、CPU・メモリ、同時に動いていたプロセス）、5秒ごとのプロセスとメモリの記録、テストの並行性を決める sbt の実効設定（`show` の出力）を `build/check-logs/<UTC時刻>/`（`CHECK_LOG_DIR` で変更可）に残します。失敗したときは、その時点のプロセス・メモリ・カーネルログと、その実行で書かれた ChiselSim のログ・JUnit レポートを加えます。CI の `scala` ジョブは、失敗したときにこれらを artifact として残します（#74）。ChiselSim の乱数の seed は [hw/README.md](hw/README.md) を参照してください。
 
 `compiler` と `sim` は `isa` にのみ依存し、互いに依存しません。両者の突き合わせは `crosscheck` で行います（[ADR-0002](docs/DECISIONS.md#adr-0002-相互検査は言語ではなく状態表現と判定方法の違いで設計する)）。
 

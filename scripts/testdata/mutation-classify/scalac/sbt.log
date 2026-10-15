@@ -1,0 +1,3 @@
+[error] /repo/compiler/src/main/scala/vliw/compiler/Verifier.scala:138:36: value < is not a member of String
+[error] one error found
+[error] (compiler / Compile / compileIncremental) Compilation failed

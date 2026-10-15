@@ -1,10 +1,9 @@
 package vliw.hw
 
 import chisel3._
-import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
 
-class RegisterFileSpec extends AnyFunSuite with ChiselSim {
+class RegisterFileSpec extends AnyFunSuite with SeededChiselSim {
   private def write(dut: RegisterFile, port: Int, reg: Int, value: BigInt): Unit = {
     dut.io.write(port).valid.poke(true.B)
     dut.io.write(port).bits.reg.poke(reg.U)
@@ -42,7 +41,7 @@ class RegisterFileSpec extends AnyFunSuite with ChiselSim {
   }
 }
 
-class WriteReservationsSpec extends AnyFunSuite with ChiselSim {
+class WriteReservationsSpec extends AnyFunSuite with SeededChiselSim {
   private def claim(dut: WriteReservations, port: Int, reg: Int, latency: Int): Unit = {
     dut.io.claim(port).valid.poke(true.B)
     dut.io.claim(port).bits.reg.poke(reg.U)

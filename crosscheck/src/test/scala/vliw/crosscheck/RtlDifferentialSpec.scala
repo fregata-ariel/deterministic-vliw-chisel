@@ -2,18 +2,17 @@ package vliw.crosscheck
 
 import scala.util.Random
 
-import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.Verifier
-import vliw.hw.{Core, CoreDriver, CoreParams}
+import vliw.hw.{Core, CoreDriver, CoreParams, SeededChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
 /** Random legal programs on the RTL and on the reference model: the traces must be identical cycle
   * by cycle, and so must every location that the program defines.
   */
-class RtlDifferentialSpec extends AnyFunSuite with ChiselSim {
+class RtlDifferentialSpec extends AnyFunSuite with SeededChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
 
   /** Dense hazards over r0..r3 and addresses 0..3, HALT last; most programs are illegal. */
