@@ -6,7 +6,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 設計原則：**コンパイラが時間配置を決め、ハードウェアがそのスケジュールを実行する。**
 
-Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）、Phase 2（DSL からの自動命令生成。SAXPY・FIR・行列積が機能・サイクルとも一致）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md)・[Phase 2](docs/PHASE2.md) の完了報告）。ベンチマークの記録は [benchmarks/RESULTS.md](benchmarks/RESULTS.md)（cycle ベース。Fmax・面積・電力は未測定）。次は Phase 3（Modulo Scheduling、MAC）です（[#66](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/66)）。
+Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）、Phase 2（DSL からの自動命令生成。SAXPY・FIR・行列積が機能・サイクルとも一致）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md)・[Phase 2](docs/PHASE2.md) の完了報告）。ベンチマークの記録は [benchmarks/RESULTS.md](benchmarks/RESULTS.md)、Modulo Scheduling の記録は [benchmarks/MODULO.md](benchmarks/MODULO.md)（cycle ベース。Fmax・面積・電力は未測定）。次は Phase 3（Modulo Scheduling、MAC）です（[#66](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/66)）。
 
 ## 最初に読む文書
 
@@ -39,7 +39,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定 |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1）。`sbt "hw/run"` で `generated/` にSystemVerilogを出力 |
-| `compiler/` | 独立verifier、カーネルDSL、DAG、静的スケジューラ、register allocation、コード生成、ループ IR（[docs/COMPILER.md](docs/COMPILER.md)） |
+| `compiler/` | 独立verifier、カーネルDSL、DAG、静的スケジューラ、register allocation、コード生成、ループ IR、Modulo Scheduling（[docs/COMPILER.md](docs/COMPILER.md)） |
 | `sim/` | ISA参照モデル、サイクル精度モデル |
 | `tests/` | 実装をまたいで共有するテストデータ（[テストケース](tests/cases/README.md)、golden、縮小machine定義） |
 | `crosscheck/` | verifier・参照モデル・RTL・コンパイラの間の差分テストと、ベンチマーク記録の生成（テストコードのみ） |

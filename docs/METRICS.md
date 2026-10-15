@@ -54,7 +54,7 @@ sbt "sim/run tests/cases/isa_example.json --metrics out.json"
 | `writeback.<port>.commits` / `utilization` | 書戻しポートごとのRFへのcommit数と、サイクル数に対する割合 |
 | `scratchpad.reads` / `writes` | LD / ST の回数 |
 | `scratchpad.accesses_per_cycle` | (reads + writes) / cycles。bank別の値は `banks` に入れる |
-| `ii` | 定常状態の開始間隔。展開済みのカーネルでは定義しないので `null`。Modulo Scheduling（Phase 3）で埋める |
+| `ii` | Modulo Scheduling したループの、定常状態の反復の開始間隔（ループの II）。記録を作る側が、トレースで確かめた値を渡す（`Metrics.of` の `ii`、`crosscheck/ModuloTrace`。[COMPILER.md](COMPILER.md)「Modulo Scheduling」）。展開済みのカーネルと `sim/run --metrics` では定義しないので `null`。演算器の II（`operations.<op>.ii`）とは別のもの |
 | `rtl` | RTLの評価結果（Fmax、面積・資源量、ターゲット、ツール）のための予約欄。Phase 1 以降で定義する。それまでは `null` |
 
 - 割合は小数点以下6桁に丸める。分母が0のときは `null` にする。

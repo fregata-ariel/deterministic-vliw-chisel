@@ -10,7 +10,7 @@
 | register allocation | `Dag` → `Allocated`（スケジュールと物理レジスタ、bundle 列） | `vliw.compiler.regalloc` | #50 |
 | コード生成と検証 | → 命令語（verifier の最終検査に通ったもの）、`.hex`、テストケース | `vliw.compiler.KernelCompiler` | #51 |
 
-Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節にある（#76）。
+Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節に（#76）、そのスケジューリングは「[Modulo Scheduling](#modulo-scheduling)」の節にある（#68）。
 
 ## DAG
 
@@ -331,3 +331,99 @@ LD の共有（ADR-0014）。本体が書かない語について、次のよう
   - 使われない値だけが読む定数（次の値と初期値）を、出力の後の語に置くこと
   - 読み書きする語が重なる、手作りの15のループ（3構成）。左へのずらし、メモリを通る漸化式、毎反復同じ語への ST、stride 0 で読んで書く語、本体が書く語を同じ stride で2回読む LD、同じ反復の ST の後の LD、ST をはさんだ同じ語の2つの LD、ループの前の LD・後の格納と本体の LD・ST、反復の開始時の状態を読む次の値と ST。Each どうしの依存（cycles は machine description から）と、Before・After のノードとのメモリの依存が期待どおりであること。展開した辺を守るどの順序（乱数で作る）で実行しても、`LoopLowering.evaluate` の結果と一致すること。`LoopLowering.evaluate` の値を、手で計算した値とも比べる
   - 不正な `Loop` を拒否すること
+
+## Modulo Scheduling
+
+`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。
+
+| 段 | 内容 | 実装 |
+|---|---|---|
+| MII | 1反復の資源（ResMII）と、反復をまたぐ依存の閉路（RecMII） | `Mii` |
+| II の探索 | II = MII から、1反復だけのスケジュールの長さまで順に試す | `ModuloScheduler.schedule` |
+| 予約表への配置 | Each のノードを、II 行の予約表（MRT）に置く | `ModuloScheduler.place`、`RowFit` |
+| 展開 | 全反復と、ループの前後のノードを、絶対サイクルに置く | `ModuloScheduler.expand` |
+| レジスタとコード | 展開した命令列のレジスタ割り当て、エンコード、verifier の最終検査 | `RegisterAllocator.allocate`、`ModuloCompiler.compile` |
+
+### MII
+
+- **ResMII**: 1サイクルに1回だけ使える資源ごとの、1反復の使用数の最大。資源は、Compute スロット（ADD・SUB・MUL）、Memory スロット（LD・ST）、各演算の演算器（1回の発行が演算器の II だけ占める。L9。使用数は「演算の数 × II」）、Compute と Memory の書戻しポート（L5。ST は使わない）。`Mii.bounding` が最大の資源を挙げる
+- **RecMII**: `LoopGraph.edges` のどの閉路も `Σcycles − II × Σiterations ≤ 0` となる最小の II（Bellman-Ford で正の閉路を調べる）。閉路が無ければ 0
+- **MII** = max(ResMII, RecMII, 1)
+
+### 予約表への配置
+
+予約表は II 行で、反復 k の演算 n は `start + t(n) + k × II` に発行する。時刻 t の演算は、スロットを行 t mod II、演算器を行 t〜t + II_op − 1、書戻しポートを行 (t + L) mod II で使う。
+
+- Each のノードを番号の順に置く。ノード n の最早は、置いたノードからの辺 `t(from) + cycles − II × iterations` の最大（0 以上）、最遅は、n から置いたノードへの辺 `t(to) − cycles + II × iterations` の最小である
+- 最早から II サイクルの範囲（最遅まで）で、予約表の行が空いている最初の時刻に置く。後戻りはしない
+- これで置けないときは、もう一度、各時刻に「同じスロットの種類の残りのノードが、まだ予約表に収まる」条件を足して置き直す（先読み。`RowFit`）。先読みなしで置けたときは、先読みしても同じ結果になる
+- 予約表に収まるかは、`RowFit` が正確に判定する。行を順に、どの演算をそこに置くかを決める深さ優先探索で、失敗した状態を覚える（状態は、残りの演算の数と、まだ影響する行の使用だけ）。II が62を超えると判定しない
+
+### II の探索と結果
+
+II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録する。最初に「収まる」になった II を使う。cycles は II について単調ではないので、cycles 最小の II とは限らない。
+
+| 結果 | 意味 | #68 の原因 |
+|---|---|---|
+| 予約表なし（`NoMrt`） | 1反復の演算が II 行の予約表に収まらない（`RowFit` が依存を無視して判定する）。ポートと演算器を外して判定し直し、衝突する資源の組（スロット、スロット + 書戻しポート、スロット + 演算器、…）を挙げる | (a) |
+| 配置できない（`NoTime`） | 予約表はあるが、番号の順・後戻りなしの配置で、あるノードの範囲に置ける時刻が無い | (a) と区別する |
+| レジスタ（`TooManyLive`） | 展開した命令列の、同時に生きる値がレジスタ数を超える | (b) |
+| 命令領域（`Overflow`） | 展開した命令列が `instruction_memory.bundles` を超える | - |
+| 収まる（`Fits`） | | |
+
+探索の上限は、Each のノードだけを番号の順に、反復の中の依存と絶対サイクルの資源で list scheduling した1反復の長さ（`ModuloScheduler.oneIteration`、最後の演算のレイテンシーと演算器の II の大きい方まで）である。この II では反復が重ならないので、配置に失敗しても、この1反復のスケジュールが modulo schedule になる。上限まで収まらなければ、カーネル名、反復回数、ループの段と、II ごとの理由を含むエラーにする（命令列は出力しない）。spill と rematerialization はしない。
+
+### 展開とレジスタ
+
+- Each の各反復を `t(n) + k × II` に置く
+- Before のノードは、番号の逆順に、使う側（置いたノード）の許す最も遅い時刻から前に、スロット・演算器・書戻しポートが空いている時刻に置く。After のノードは、番号の順に、作る側の許す最も早い時刻から後に置く。演算器は両側を調べる（前後どちらの発行とも II_op 以上離す。L9）
+- 全体を、最初の発行が 0 になるようにずらす。そのずれが反復 0 の開始 `start` である。HALT は、全演算の完了 `max(issue + L)` に置く（L6）
+- 依存は `LoopGraph.expanded` の辺（データ依存とメモリ順序）をすべて守る。展開した命令列は直線なので、各反復の値は別の仮想レジスタになる。レジスタは list scheduling と同じ `RegisterAllocator.allocate` で割り当てる
+- 命令列は、`KernelCompiler.checked`（ループのカーネル）または `KernelCompiler.verified`（入力宣言を与える一般の `Loop`）で verifier の最終検査に通す
+
+`ModuloSchedule.map` は、発行する各演算の (bundle, スロット) → (ループのノード, 反復) の表である。mvp-0 では pc = サイクルなので、bundle の番号が発行サイクルになる。
+
+### トレースによる II の確認
+
+`crosscheck/ModuloTrace.check` は、参照モデルまたは RTL の `vliw-trace/1` のトレースを、上の表とループのグラフだけで照合する。スケジュール・レジスタ割り当て・展開した DAG は使わない（ADR-0002）。
+
+1. 表が、全ノードの全反復をちょうど1回ずつ、その演算のスロットに挙げること
+2. 各行の各スロットの `issue` が、表の演算の種類であること（表に無いスロットは NOP、最後の行の Compute は HALT）
+3. LD・ST のアドレスが、そのノードのアドレス `addr.at(k)` であること
+4. 各ソースレジスタについて、発行の行までで最後に commit した書込み（`rf_commit`。その行から見える）の発行元が、期待する演算であること。発行元は、そのポートに、その行で commit する、そのレジスタへの表の演算である。期待する演算は、オペランドの `Ref(node, back, initial)` から、同じ反復（back = 0）、back 反復前、k < back では初期値 `initial(k)`、ループの前のノード、ループの後なら最後の反復、と決める。ソースは位置で対応させる（rs1 が1つ目のオペランド）
+
+照合に合格したら、Each の各ノードの、連続する反復の発行サイクルの差を求める。差がすべて同じで、それが記録した II と一致すれば、その値を返す。そうでなければ失敗である。ベンチマークの記録（[benchmarks/MODULO.md](../benchmarks/MODULO.md)）の `metrics` の `ii` 欄は、この値である。
+
+### 結果（既定の構成）
+
+| ループ | ResMII（律速） | RecMII | II | II を上げた理由 | cycles |
+|---|---|---|---|---|---|
+| `saxpy8`（i） | 3（Memory スロット） | 0 | 3 | - | 29 |
+| `fir4x8`（i） | 7（Compute スロットと書戻しポート） | 0 | 8 | II 7: (a) | 76 |
+| `matmul3`（i） | 15（同上） | 0 | 20 | II 15: (a)、II 16〜19: (b) | 87 |
+| `matmul3`（m） | 18（同上） | 1 | 27 | II 18: (a)、II 19〜26: (b) | 68 |
+| `product8`（i） | 1 | 2 | 2 | - | 19 |
+| `dot8`（i） | 2 | 1 | 3 | II 2: (a)（スロットと書戻しポート） | 28 |
+
+- `dot8` の II 2: Compute スロットが1つなので、MUL(s) と ADD(t) は s と t が別の行（mod 2）になる。MUL は s + 2、ADD は t + 1 に書戻しポートを使い、2つの行はどちらも MUL と ADD のポートの行と重なる
+- `fir4x8` の II 8: 番号の順に置くと、ノード14の時刻が無い。先読みすると置ける。そのとき ADD（ノード11、最早 8）は、10 では次の反復の MUL（ノード7、t = 1）と同じ境界 E_11 に書戻すので、12 に置く
+- `matmul3` の2つのループ: 予約表のある II でも、同時に生きる値が16を超えるので II を上げる（(b)）。`matmul3`（i）は、II 20 で 87 cycles、II 21 なら 70 cycles で、cycles は II について単調でない
+- 全ループと構成の値、list scheduling との比較、`saxpy(n)` の系列は [benchmarks/MODULO.md](../benchmarks/MODULO.md) にある。`slow_units` では `matmul3`（m）はどの II でも17の値が同時に生き、16 レジスタに収まらない（不成立）
+
+### テスト
+
+- `compiler/.../modulo/ModuloSchedulerSpec`
+  - 6つのループ × 3構成（既定、`slow_units`、`ii_units`）の ResMII と律速の資源、RecMII、II、探索の上限、開始、cycles、II ごとの理由
+  - 全スケジュールを、スケジューラと独立に確かめる。展開した辺、サイクルごとのスロット、演算器の II（L9）、書戻しポート（L5）、HALT（L6）、`start + t + k × II`、表
+  - 手で計算した表: `product(4)`（3反復、II 2 = RecMII）と `dot(4)`（3反復、II 3 > MII 2）の、各演算の bundle とスロット
+  - 先読みが要る配置（`fir4x8` の II 8）と、次の反復の書戻しポートによる移動。移動しないと verifier が L5 で拒否すること
+  - 探索の上限で、1反復のスケジュールが modulo schedule であること
+  - レジスタ3本（`tests/machines/regs3.json`）: `saxpy8` は II 3〜5 で4つの値が生き、II 6 で収まる。`dot8` はどの II にも収まらず、理由付きのエラーになる
+  - 命令領域: `saxpy(83)` は 254 bundle で収まり、`saxpy(84)` は 257 bundle で、カーネル名・反復回数・bundle 数・容量を含むエラーになる。`saxpy(n)`（n = 8〜64）は II 3、3n + 5 cycles
+  - メモリを通る依存のある手作りの `Loop`（RecMII、`NoTime`、cycles、verifier）
+- `crosscheck/ModuloKernelSpec`
+  - 参照モデル（3構成とレジスタ3本）: 結果が DSL の参照実装と、cycles が予測と一致し、トレースの照合で II が記録と一致すること。RTL（既定の構成）でも同じ。`slow_units` と `ii_units` は RTL の対応範囲外なので、理由を付けてスキップと表示する
+  - 手で計算したトレース: `product(4)` と `dot(4)` の、各行の発行、書戻しのポート、メモリへの commit、cycles
+  - メモリを通る依存のある手作りの `Loop` を参照モデルで実行し、メモリが `LoopLowering.evaluate` と一致し、トレースの照合に合格すること
+  - トレースの照合が、表の反復の入れ替え、初期値の誤り、LD のアドレスの誤り、ソースの入れ替え、1行ずれた commit、状態の反復距離の誤り、記録と違う II を見つけること
+- `crosscheck/BenchmarkSpec`: [benchmarks/MODULO.md](../benchmarks/MODULO.md) と、Modulo Scheduling のテストケース・メトリクスが生成し直した内容と一致すること。テストケースが参照モデルと RTL で成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること

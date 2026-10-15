@@ -43,6 +43,7 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 - 2つの方式・構成の効果を言うときは、戦略を固定した系列の同じ行どうしで比べる。「方式ごとに cycles 最小」どうしの比は、試行の違いの効果も含む
 - 「不成立」の行は、比に含めない。不成立の数と理由も、比較の結果として書く
 - 今後の比較（MAC のある・なし #77、Modulo Scheduling と list scheduling #68、レジスタ数 #70）も、同じ2つの系列で記録する
+- Modulo Scheduling と list scheduling の比較（[MODULO.md](MODULO.md)）では、list scheduling の側は戦略を固定した系列の各行で、Modulo Scheduling の側は1つの戦略（最初に命令列ができた II）である。比はその組合せの比で、Modulo Scheduling の cycles 最小ではない
 - レジスタ数を変える比較（#70）では、レジスタ上限はそれぞれのレジスタ数になる。戦略を固定した系列は、優先度と `loadReserve` が同じ行（上限なしの行は上限なしの行）どうしを比べる。片方にしかない行（`loadReserve` がもう一方のレジスタ数/2 を超える行）は、片方だけの行として記録し、比に含めない
 
 ## 記録
@@ -51,6 +52,8 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 |---|---|
 | [RESULTS.md](RESULTS.md) | 条件と、2つの系列の結果の表（戦略を固定した系列は、この表だけに記録する）。方式ごとに cycles 最小の系列は cycles、演算数、下限、NOP率、書戻しポート・bank の利用率、レジスタ数、命令列の hash、選ばれた試行。戦略を固定した系列は、試行ごとの両方式の cycles と比、不成立の理由 |
 | `cases/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の命令列、入力宣言（入力値は `sampleInputs(kernel, 1)`）、期待値（出力と cycles）。`vliw-testcase/1`（[docs/TESTCASE.md](../docs/TESTCASE.md)） |
+| [MODULO.md](MODULO.md) | Modulo Scheduling（#68）の記録。比べる4つのループ（`saxpy8`、`fir4x8`、`matmul3` の行のループと累算のループ）の MII・II・II を上げた理由・cycles と、戦略を固定した系列の各行（vliw）との比。#68 の受入テストのループ（ほかの構成を含む）と、`saxpy(n)` の系列 |
+| `cases/<kernel>_<loop>_modulo.json`、`metrics/<kernel>_<loop>_modulo.json` | Modulo Scheduling したループの命令列・入力・期待値と、実行の記録。`metrics` の `ii` は、トレースで確かめた II |
 | `metrics/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の、参照モデルでの実行の記録。`vliw-metrics/1`（[docs/METRICS.md](../docs/METRICS.md)）。machine の revision と hash、命令列の hash を含む |
 
 記録は、すべてソースから生成する。手で編集しない。
@@ -68,3 +71,4 @@ CI の `crosscheck/BenchmarkSpec` は、次を確かめる。
 - 戦略を固定した系列が、コンパイラの全ての試行を、試す順に、両方の方式に与えていること。各行がその行の試行の結果であること（不成立を別の試行で置き換えないこと）。各行の命令列（成立したもの）が、verifier に合法と判定され、参照モデルで期待した出力と、スケジューラの予測どおりの cycles になること
 - 方式ごとに cycles 最小の系列が、固定した系列の中の、その方式で cycles 最小の最初の試行と一致すること
 - 単一発行の命令列は1 bundle に1操作だけで、vliw より速くならないこと
+- Modulo Scheduling のテストケースが、参照モデルでも RTL でも成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること
