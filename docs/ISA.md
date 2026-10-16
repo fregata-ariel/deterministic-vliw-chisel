@@ -2,6 +2,8 @@
 
 状態：Phase 0で検証する仕様案。ISAバージョン`mvp-0`。実行意味論と合法性規則は #5 で確定。規則 L9・L10 は #35 で追加した（凍結した machine description では判定が変わらない。[ADR-0009](DECISIONS.md)）。
 
+ISAバージョン `mvp-1` は、`mvp-0` に MAC を1つ足した版である（#69、[ADR-0018](DECISIONS.md)。実装は #77）。差分は「[mvp-1: MAC](#mvp-1-mac)」の節（エンコードの節の後）にまとめ、この文書の mvp-0 の記述は変えない。規則 L11 は両方の版に共通で、mvp-0 では常に満たされる。
+
 ## サイクルの定義
 
 サイクルsはクロック境界E_sからE_(s+1)まで。境界で完了したRF更新は、その直後のサイクルの組合せRF読出しから見える。サイクルsの命令は、そのサイクルで見えるソース値を読んで実行する。
@@ -71,6 +73,7 @@ LDの値を「サイクル s で見えるScratchpad」と定義できるのは�
 | L8 未定義値の読出し禁止 | サイクル t のレジスタ r の読出しは、r ∈ R_in であるか、`s+L <= t` を満たす r への書込みがあるときだけ合法。LD [a] は、a ∈ M_in であるか、`s+L <= t` を満たす ST [a] があるときだけ合法（mvp-0 の ST は L=1 なので、t より前に発行された ST [a] があればよい）。アドレスは即値なので静的に判定できる。 |
 | L9 発行間隔 | 同じ演算の2つの発行サイクル s < s' は `s' - s >= II` を満たす。異なる演算の間には制約が無い（例: ADD の II が2でも、ADD の直後に SUB を発行できる）。mvp-0 では全演算の II が1なので、常に満たされる。 |
 | L10 書込み中のメモリ語の読出し禁止 | サイクル t の LD [a] は、ST [a] の書込み区間 `[s, s+L)` が `s < t < s+L` となるとき不正。旧値が定義されていても（a ∈ M_in）不正とする。レジスタの L3 と同じ扱いで、STの書込み時刻に依存するプログラムを排除する。同じbankの別の番地は対象外。mvp-0 では ST の L が1なので、常に満たされる。 |
+| L11 読出しポート | bundle s のレジスタの読出しの数は、`register_file.read_ports` 以下でなければならない。数はオペランドの欄で数える（ADD/SUB/MUL は 2、mvp-1 の MAC は 3、ST は 1、LD・NOP・HALT は 0）。同じレジスタを2つの欄で読んでも2と数える。mvp-0 の演算の読出しは bundle 当たり最大3で、`read_ports` は3なので、mvp-0 では常に満たされる（#69、ADR-0018）。 |
 
 次の性質は構造上成り立つため、規則を設けない。
 
@@ -141,6 +144,71 @@ NOPとHALTはopcode以外の全bitを0とする。HALTに対応するMemory word
 | `.hex` | 1行1bundle、64bit値を16桁の小文字16進で書く（Memory wordが上位） | `$readmemh`、Chiselの `loadMemoryFromFile`、差分レビュー |
 
 下の命令例のエンコード結果は、[tests/golden/isa_example.hex](../tests/golden/isa_example.hex) に手作業で求めた値として固定している。
+
+## mvp-1: MAC
+
+`mvp-1` は、`mvp-0` に Compute スロットの演算 MAC を1つ足した版である（#69、[ADR-0018](DECISIONS.md)）。mvp-0 の命令語は、mvp-1 でも同じ意味になる。実装は #77 で行う。
+
+### 意味
+
+| Slot | Opcode | 意味 | Latency | II |
+|---|---|---|---|---|
+| Compute | MAC | rd ← low32(rs1 × rs2 + rs3) | 2（既定） | 1（既定） |
+
+- 32bit の整数で、2^32 を法とする。3つのソース rs1・rs2・rs3 は、すべて発行サイクルに読む（実行意味論の骨格の1）。結果は E_(s+L) で Compute の書戻しポートから commit する
+- rd は rs3 と独立に選べる。`rd = rs3` も合法で、rs3 は旧い値を読む（累算の形）
+- latency と II は machine description の `operations.MAC` から取る。MAC は専用の演算器を持ち、L9 は演算ごとに数える（MUL と MAC は別の演算）。演算器を複数の演算で共有する構成は、mvp-1 でも表現しない。Compute スロットは1サイクルに1つの演算しか発行せず、RTL は値を発行サイクルに計算するので、RTL が乗算器を MUL と MAC で共有しても、II が1の構成では外から区別できない
+
+1サイクルの手順への追加:
+
+1. **読出し**: MAC は rs1・rs2 に加えて rs3 もサイクル s で読む
+2. **計算と予約**: MAC の値は `rs1 × rs2 + rs3` の下位32bit、L は `operations.MAC.latency`
+
+### 合法性規則での扱い
+
+| 規則 | MAC での扱い |
+|---|---|
+| L1 | opcode は machine description から取る（既定 4）。MAC の Compute word の bits 11:0 は0。rs3 はレジスタ数より小さい。ADD/SUB/MUL の bits 15:0 は、今と同じく予約で0 |
+| L3・L8 | 読出しに rs3 を含める（MAC のときだけ） |
+| L4 | rd の書込み区間は `[s, s+L_MAC)`。同じ bundle の LD が同じ rd に書けば不正 |
+| L5 | Compute ポートを E_(s+L_MAC) に使う。L_MAC=2 では、MAC(s) と ADD/SUB(s+1) が衝突し、MAC(s) と MUL(s+1) は衝突しない |
+| L6 | 「全操作」に MAC を含める |
+| L9 | MAC の発行間隔は `operations.MAC.ii` |
+| L11 | MAC は読出しを3つ数える。`read_ports` が3の構成では、MAC と ST を同じ bundle に置けない（読出し4）。4の構成では置ける |
+
+依存命令の配置 `s_consumer >= s_producer + L` は、rs3 の生産者にも当てはまる。
+
+### エンコード
+
+Memory word は mvp-0 と同じ。Compute word は次のとおり。
+
+| Bits | 内容 |
+|---|---|
+| 31:28 | opcode。既定は NOP=0, ADD=1, SUB=2, MUL=3, **MAC=4**, HALT=15。値は machine description から取る |
+| 27:24 | rd |
+| 23:20 | rs1 |
+| 19:16 | rs2 |
+| 15:12 | rs3（MAC だけ。ADD/SUB/MUL では予約で0） |
+| 11:0 | reserved=0 |
+
+例: `mac r5, r1, r2, r3`（Memory は NOP）は `0x0000000045123000` である。
+
+### 例
+
+ソースはすべて入力宣言済みとし、注目する規則以外の違反は無視する。`read_ports` は3とする（最後から2つ目の行を除く）。
+
+| 命令列（cycle: Compute \| Memory） | 判定 | 理由 |
+|---|---|---|
+| 0: `MUL r3, r1, r2` / 1: `MAC r4, r1, r2, r3` | 不正 | L3（rs3 の r3 が書込み中） |
+| 0: `MUL r3, r1, r2` / 1: `NOP` / 2: `MAC r4, r1, r2, r3` | 合法 | r3 は cycle 2 から見える |
+| 0: `MAC r1, r2, r3, r1` / 1: `NOP` / 2: `MAC r1, r2, r3, r1` | 合法 | rd = rs3 の累算 |
+| 0: `MAC r1, r2, r3, r1` / 1: `MAC r1, r4, r5, r1` | 不正 | L3 と L4 |
+| 0: `MAC r4, r1, r2, r3` / 1: `ADD r5, r1, r2` | 不正 | L5（どちらも E_2） |
+| 0: `MAC r4, r1, r2, r3` / 1: `MUL r5, r1, r2` | 合法 | E_2 と E_3 |
+| 0: `MAC r4, r1, r2, r3 \| LD r4, [0]` | 不正 | L4（[0, 2) が重なる） |
+| 0: `MAC r4, r1, r2, r3` / 1: `HALT` | 不正 | L6（2 > 1） |
+| 0: `MAC r4, r1, r2, r3 \| ST [0], r5` | read_ports 3 で不正、4 で合法 | L11（読出し4） |
+| 0: `MUL r4, r1, r2 \| ST [0], r5` | 合法 | 読出し3 |
 
 ## 開始・終了
 

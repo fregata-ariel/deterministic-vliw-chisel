@@ -64,3 +64,5 @@ sbt "sim/run tests/cases/isa_example.json --metrics out.json"
 ## 版の扱い
 
 キーを追加・削除するとき、または意味を変えるときは、`metrics` の版を上げる（`vliw-metrics/2`）。古い記録と比べるときは、版の違いを明示する。
+
+ISA `mvp-1`（MAC）の記録は `vliw-metrics/2` にする。MAC の発行数（`by_operation.MAC`、Compute の演算数に含める）、bundle ごとの読出し数の分布、MAC と ST が同じ bundle にある数を足す。`mvp-0` の記録は `vliw-metrics/1` のままにする（#69、ADR-0018。形式は #77 で定める）。

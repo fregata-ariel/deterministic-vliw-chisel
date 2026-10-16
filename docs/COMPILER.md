@@ -12,6 +12,8 @@
 
 Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節に（#76）、そのスケジューリングは「[Modulo Scheduling](#modulo-scheduling)」の節にある（#68）。
 
+ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約（規則 L11）は #77 で加える。規則は [ADR-0019](DECISIONS.md)（融合）と ADR-0018（L11）に書いた。
+
 ## DAG
 
 `Dag.build(machine, writes)`（または `Dag.of(lowered, machine)`）は、lowering した式から演算の DAG を作る。
