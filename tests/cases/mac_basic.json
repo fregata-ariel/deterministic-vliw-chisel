@@ -1,0 +1,39 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_basic",
+  "description": "MAC は rd ← low32(rs1 × rs2 + rs3)。3つのソースを発行サイクルに読み、結果は s+2 から見える。LD と同じ境界に、別の書戻しポートで commit する",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3              ; 3 * 5 + 7 = 22, visible from 2",
+    "@1: mac r5, r1, r1, r1 | ld r6, [0] ; 3 * 3 + 3 = 12; both commit at E_3",
+    "@2: mac r7, r4, r1, r4              ; 22 * 3 + 22 = 88",
+    "@3: nop                | st [1], r5",
+    "@4: mac r8, r6, r7, r5              ; 10 * 88 + 12 = 892",
+    "@5: nop",
+    "@6: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 3,
+      "r2": 5,
+      "r3": 7
+    },
+    "memory": {
+      "0": 10
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 7,
+    "registers": {
+      "r4": 22,
+      "r5": 12,
+      "r6": 10,
+      "r7": 88,
+      "r8": 892
+    },
+    "memory": {
+      "1": 12
+    }
+  }
+}

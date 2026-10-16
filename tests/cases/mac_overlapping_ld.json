@@ -1,0 +1,28 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_overlapping_ld",
+  "description": "MAC と LD が同じ rd に書き、書込み区間が重なる（L4）",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3 | ld r4, [0]",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4
+    },
+    "memory": {
+      "0": 1
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L4"
+      ]
+    }
+  }
+}

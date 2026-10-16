@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_early_halt",
+  "description": "HALT 時に MAC が完了していない（L6）",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L6"
+      ]
+    }
+  }
+}

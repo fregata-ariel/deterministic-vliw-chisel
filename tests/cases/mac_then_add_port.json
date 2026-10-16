@@ -1,0 +1,26 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_then_add_port",
+  "description": "MAC(s) と ADD(s+1) はどちらも E_(s+2) に Compute ポートを使う（L5）",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3",
+    "@1: add r5, r1, r2",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L5"
+      ]
+    }
+  }
+}

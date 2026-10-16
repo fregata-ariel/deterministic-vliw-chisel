@@ -13,6 +13,12 @@
 | [`imem_full`](imem_full.json) | 合法 | 命令領域（256 bundle）をちょうど使い切る。HALTは255番 | 256 cycles |
 | [`isa_example`](isa_example.json) | 合法 | docs/ISA.md「最初の命令例」: LD → MUL → ADD → ST → HALT | 7 cycles、golden trace |
 | [`issue_cycle_read`](issue_cycle_read.json) | 合法 | 発行サイクル自身での読出しは旧値を読む（ADDのソースとSTのソース） | 2 cycles |
+| [`mac3_spacing`](mac3_spacing.json) | 合法 | MAC のレイテンシーが3の構成。結果は s+3 から見える | 7 cycles、mvp1_mac3.json |
+| [`mac_accumulate`](mac_accumulate.json) | 合法 | rd = rs3 の累算。発行サイクルの rs3 は旧値を読む | 5 cycles、machine-mvp1.json |
+| [`mac_basic`](mac_basic.json) | 合法 | MAC は rd ← low32(rs1 × rs2 + rs3)。3つのソースを発行サイクルに読み、結果は s+2 から見える。LD と同じ境界に、別の書戻しポートで commit する | 7 cycles、machine-mvp1.json |
+| [`mac_store_rp4`](mac_store_rp4.json) | 合法 | 読出しポートが4本の構成では、MAC と ST を同じ bundle に置ける（読出し4） | 3 cycles、mvp1_rp4.json |
+| [`mac_then_mul`](mac_then_mul.json) | 合法 | MAC(s) と MUL(s+1) は、latency 2 では E_(s+2) と E_(s+3) に commit し、衝突しない | 4 cycles、machine-mvp1.json |
+| [`mac_wrap`](mac_wrap.json) | 合法 | MAC は2^32を法とする。(2^32-1)^2 + (2^32-1) ≡ 0 | 5 cycles、machine-mvp1.json |
 | [`register_address_bounds`](register_address_bounds.json) | 合法 | r0 / r15 とアドレス 0 / 511 の境界。r15 の加算は桁あふれする | 4 cycles |
 | [`same_register_other_boundaries`](same_register_other_boundaries.json) | 合法 | 同じレジスタへのComputeとMemoryの書込みは、区間が重ならなければ合法 | 4 cycles |
 | [`slow_store_same_bank`](slow_store_same_bank.json) | 合法 | ST のレイテンシーが2の構成で、書込み中の番地と同じ bank の別の番地は読める。ST(s) の番地は s+2 から読める | 6 cycles、slow_units.json |
@@ -27,6 +33,13 @@
 | [`ii_back_to_back_mul`](ii_back_to_back_mul.json) | 不正: L9 | MUL の II が2の構成で、MUL を連続するサイクルに発行する（L9） | ii_units.json |
 | [`ii_ld_too_close`](ii_ld_too_close.json) | 不正: L9 | LD の II が3の構成で、LD(s) の次の LD を s+2 に発行する（L9） | ii_units.json |
 | [`imem_overflow`](imem_overflow.json) | 不正: L2 | 命令領域を1 bundle超える（257 bundle、L2） |  |
+| [`mac3_mul_port`](mac3_mul_port.json) | 不正: L5 | MAC のレイテンシーが3の構成では、MAC(s) と MUL(s+1) が E_(s+3) で衝突する（L5） | mvp1_mac3.json |
+| [`mac_early_halt`](mac_early_halt.json) | 不正: L6 | HALT 時に MAC が完了していない（L6） | machine-mvp1.json |
+| [`mac_overlapping_ld`](mac_overlapping_ld.json) | 不正: L4 | MAC と LD が同じ rd に書き、書込み区間が重なる（L4） | machine-mvp1.json |
+| [`mac_reserved_bits`](mac_reserved_bits.json) | 不正: L1 | MAC の予約 bit 0 が1（L1）。最後は HALT | machine-mvp1.json、program_hex |
+| [`mac_rs3_in_flight`](mac_rs3_in_flight.json) | 不正: L3 | MAC の rs3 も発行サイクルに読む。MUL の結果を次のサイクルの rs3 で読む（L3） | machine-mvp1.json |
+| [`mac_store_read_ports`](mac_store_read_ports.json) | 不正: L11 | 読出しポートが3本の構成（既定）では、MAC と ST を同じ bundle に置けない（読出し4、L11） | machine-mvp1.json |
+| [`mac_then_add_port`](mac_then_add_port.json) | 不正: L5 | MAC(s) と ADD(s+1) はどちらも E_(s+2) に Compute ポートを使う（L5） | machine-mvp1.json |
 | [`mul_then_add_port`](mul_then_add_port.json) | 不正: L5 | MUL(s)とADD(s+1)はどちらもE_(s+2)にComputeポートを使う（L5） |  |
 | [`no_halt`](no_halt.json) | 不正: L2 | HALTが無い（L2） |  |
 | [`overlapping_mul_ld`](overlapping_mul_ld.json) | 不正: L4 | MULとLDの書込み区間が重なる（L4） |  |
@@ -73,6 +86,9 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 | `tests/machines/ii_units.json` | ADD・SUB・MUL の II が2、LD の II が3 | `ii_*` |
 | `tests/machines/regs3.json` | レジスタ3本（ほかは既定の構成と同じ） | Modulo Scheduling のテスト（`compiler/.../modulo/ModuloSchedulerSpec`、#68） |
 | `tests/machines/regs8.json`、`tests/machines/regs12.json` | レジスタ8本、12本（ほかは既定の構成と同じ） | レジスタ数を変えたベンチマーク（rematerialization、#70）。`crosscheck/CompiledKernelSpec` が参照モデルと RTL で実行する |
+| `config/machine-mvp1.json` | ISA mvp-1 の既定の構成: mvp-0 に MAC（latency 2、II 1）を足し、読出しポートは3本（[ADR-0018](../../docs/DECISIONS.md)） | `mac_*`（`mac_store_rp4` を除く） |
+| `tests/machines/mvp1_rp4.json` | mvp-1 で読出しポートだけ4本（制約なしの比較用。RTL の範囲外） | `mac_store_rp4` |
+| `tests/machines/mvp1_mac3.json` | mvp-1 で MAC のレイテンシーだけ3（感度の確認） | `mac3_*` |
 
 ## mutation チェック
 

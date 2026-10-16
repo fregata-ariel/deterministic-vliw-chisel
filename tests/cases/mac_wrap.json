@@ -1,0 +1,30 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_wrap",
+  "description": "MAC は2^32を法とする。(2^32-1)^2 + (2^32-1) ≡ 0",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r2, r1, r1, r1   ; (2^32-1)^2 + (2^32-1) = 2^32 (2^32-1) -> 0",
+    "@1: mac r3, r4, r4, r1   ; 2^32 + (2^32-1) -> 0xFFFFFFFF",
+    "@2: mac r5, r1, r6, r6   ; (2^32-1) * 2 + 2 = 2^33 -> 0",
+    "@3: nop",
+    "@4: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": "0xFFFFFFFF",
+      "r4": "0x10000",
+      "r6": 2
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 5,
+    "registers": {
+      "r2": 0,
+      "r3": "0xFFFFFFFF",
+      "r5": 0
+    }
+  }
+}
