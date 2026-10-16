@@ -1,0 +1,241 @@
+{
+ "version": "5.024",
+ "research": {
+  "version": "5.024",
+  "range": "v5.020..v5.024",
+  "findings": [
+   {
+    "category": "thread_pool_exit",
+    "claim": "The V3ThreadPool destructor no longer aborts after one failed try_lock. It now retries m_mutex.try_lock() up to VL_LOCK_SPINS (50000) times with VL_CPU_RELAX() before printing 'attempted to destroy locked Thread Pool' and calling std::abort(). This is a bounded busy-spin, not a wait. Upstream needed a second fix after 5.024 (d1b45b8d, #5040, shipped in 5.026), so 5.024 can probably still abort if a worker thread is descheduled while it holds the mutex.",
+    "evidence": "Changes 5.024: \"Fix try-lock spuriously fails (#4931) (#4938). [Kamil Rakoczy]\". Commit 01dadb0a, v5.024:src/V3ThreadPool.h:142-149: `bool m_mutex_locked = m_mutex.try_lock(); // try_lock can sometimes spontaneously fail ... for (int i = 0; i < VL_LOCK_SPINS; ++i) { if (VL_LIKELY(m_mutex_locked)) break; VL_CPU_RELAX(); m_mutex_locked = m_mutex.try_lock(); }`, abort message at :163. v5.024:src/V3Mutex.h:40 `#define VL_LOCK_SPINS 50000`. Follow-up d1b45b8d (after v5.024, 'Fix attempted to destroy locked thread pool error (#5040)') replaces the spin with `std::this_thread::sleep_for(1ms)` for up to 1s and sets `m_shutdown = true` first, with the comment 'we need to wait for workers to start waiting on condition variable'. Immunity of --verilate-jobs 1: v5.024:src/Verilator.cpp:662 `V3MutexConfig::s().configure(v3Global.opt.verilateJobs() > 1 /*enable*/)`, and V3Mutex.h try_lock returns true when the config is disabled.",
+    "impact": "With '-j 0' (svsim default; verilate-jobs = 4 on the 4-CPU box), the exit abort (exit 255) should be rarer than on 5.020 but is not guaranteed gone. With this project's '--build-jobs 0 --verilate-jobs 1', mutexes are disabled and there are no worker threads, so the race cannot happen in any version.",
+    "expected_measurement": "-j 0: aborts at or below 5.020's 6/3000, likely 0 or a few. Any nonzero count matches #5040, which was fixed only in 5.026. '--build-jobs 0 --verilate-jobs 1': 0/3000."
+   },
+   {
+    "category": "jobs_options",
+    "claim": "-j, --build-jobs and --verilate-jobs behave the same as in 5.020. 0 means std::thread::hardware_concurrency(). A bare -j or -j N sets both values only where not set explicitly. Both default to 1. svsim's flags remain valid.",
+    "evidence": "git diff v5.020 v5.024 -- src/V3Options.cpp src/V3Options.h has no changed lines for jobs options. v5.024:src/V3Options.cpp:1127-1137 (-build-jobs, 0 -> hardware_concurrency), :1557-1567 (-verilate-jobs, same), :1700-1710 (`-j`: `if (m_buildJobs == -1) m_buildJobs = val; if (m_verilateJobs == -1) m_verilateJobs = val;`), :1742-1743 (default 1).",
+    "impact": "No change is needed to VliwChiselSim's '--build-jobs 0 --verilate-jobs 1' or to svsim's '-j 0'.",
+    "expected_measurement": "Both flag sets are accepted with no option errors, and the generated make runs with -j<nproc> in both cases."
+   },
+   {
+    "category": "seed_random",
+    "claim": "The $urandom/$random runtime is unchanged from 5.020: VlRNG xoroshiro128+, vl_thread_rng, VL_RANDOM_*, randSeedDefault64, VL_RAND_RESET_*, and parsing of +verilator+seed+ (minimum 1) and +verilator+rand+reset+. Without a seed, the seed comes from lrand48(), which is never seeded, so values repeat identically on every run. Seed 1 sets the state to 0x0000000100000001, and the popcount<10 rule inverts it. That explains the many 1 bits and gives the same sequence as 5.020.",
+    "evidence": "`git diff v5.020 v5.024 -- include/verilated.cpp include/verilated_types.h include/verilated_funcs.h include/verilated_random.cpp include/verilated_random.h | grep -i '^[-+].*\\(rand\\|seed\\|rng\\)'` returns nothing. v5.024:include/verilated.cpp:2784-2786 `commandArgVlUint64(arg, \"+verilator+seed+\", u64, 1, std::numeric_limits<int>::max())`. :2850 randSeedDefault64 uses vl_sys_rand32() (lrand48, no srand48 anywhere) when randSeed()==0. :400-401 `VL_RAND_RESET_I`: `if (randReset() == 0) return 0;`, so the default reset consumes no RNG draws. No commits in range touch $urandom code generation.",
+    "impact": "RANDOMIZE_REG_INIT/MEM_INIT values driven by $urandom should match 5.020 bit for bit at the same seed. Cycle-level results that depend on random initial state should be reproducible across 5.020 and 5.024.",
+    "expected_measurement": "No seed: 48c2e0e4 9efdd502 0b1e5d9c 797673c4, identical every run. +verilator+seed+1: 8084023f f77f7fff ff7fffff fffffffc. +verilator+seed+2: f1080460 eeff3fff feffffff fffffffa. +verilator+seed+0 is still rejected."
+   },
+   {
+    "category": "other",
+    "claim": "verilator_bin now prints a summary report on stdout at the end of every successful run unless --quiet or --quiet-stats is given. The lines are '- V e r i l a t i o n   R e p o r t: ...', '- Verilator: Built from ...' and '- Verilator: Walltime X s (elab=, cvt=, bld=); cpu ...'. The matching runtime '- S i m u l a t i o n   R e p o r t' is printed only by --main generated code, so svsim's own C++ driver never prints it.",
+    "evidence": "Changes 5.024: \"Add printing summary reports, use `--quiet` or `+verilator+quiet` to suppress (#4909).\" v5.024:src/Verilator.cpp:872-875 `if (!v3Global.opt.quietStats() && !v3Global.opt.preprocOnly()) { ... V3Stats::summaryReport(); }`. v5.024:src/V3StatsReport.cpp:248 prints the report. VerilatedContext::statsPrintSummary is emitted only in v5.024:src/V3EmitCMain.cpp:114. +verilator+quiet is parsed at v5.024:include/verilated.cpp:2780.",
+    "impact": "Extra lines appear in the verilator/make log, with no %Warning text. The walltime breakdown (elab/cvt/bld) can be used for the performance column. No effect on the simulation protocol.",
+    "expected_measurement": "Each ChiselSim build log has 3 summary lines. The %Warning count stays 0. The simulation logs contain no Simulation Report."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "No command-line option used by svsim was removed or renamed (--cc --exe --build -o --top-module --Mdir --assert --timescale -CFLAGS +define -F). The runtime API only grew, and the svsim driver's calls still compile: VerilatedContext::debug/traceEverOn/commandArgs/time/timeInc/gotFinish/coveragep()->write(), model eval/eval_step/final/eventsPending/nextTimeSlot. The model's trace() now takes VerilatedTraceBaseC* and forwards to the new VerilatedContext::trace(). verilated.h now has a global `using namespace std::literals;`, and verilatedos.h requires a strict C++14 or later __cplusplus. svsim's -std=c++17 meets both.",
+    "evidence": "V3Options.cpp diff removes only the old '-decoration' OnOff (replaced by CbCall '-decoration'/'-decorations'/'-no-decoration') and changes '-sv' to 1800-2023. v5.024:include/verilated.h:76 `using namespace std::literals;`. :461 commandArgs, :471 coveragep, :553 timeInc, :578 traceEverOn are unchanged. v5.024:include/verilated_cov.h:97 `void write() VL_MT_SAFE { write(defaultFilename()); }` keeps the no-argument write() working (it was `write(const char* = defaultFilename())`). v5.024:src/V3EmitCModel.cpp:456 still emits eventsPending()/nextTimeSlot() without --timing. v5.024:include/verilatedos.h:269 `#if __cplusplus >= 201402L || defined(VL_CPPCHECK) || defined(_MSC_VER)` (commit e3e5f30b dropped __GXX_EXPERIMENTAL_CXX0X__).",
+    "impact": "svsim's simulation-driver.cpp and command line should work unchanged. Coverage builds still write coverage.dat by default; the file can now be overridden with +verilator+coverage+file+.",
+    "expected_measurement": "All 53 ChiselSim builds compile and link with no C++ errors."
+   },
+   {
+    "category": "other",
+    "claim": "The installation layout and the bin/verilator wrapper changed. 'make install' now puts real executables in $prefix/share/verilator/bin and Perl redirect stubs in $prefix/bin. The wrapper sets VERILATOR_ROOT to realpath(\"$RealBin/..\") itself, and exits with code 1 if VERILATOR_ROOT is already set to any other path.",
+    "evidence": "Changes 5.024: \"Improve installation to be relocatable (#4927). [Geza Lore]\" (commit f56f3182). v5.024:bin/verilator:72-78: `my $verilator_root = realpath(\"$RealBin/..\"); if (defined $ENV{VERILATOR_ROOT}) { if ((!-d $ENV{VERILATOR_ROOT}) || $verilator_root ne realpath($ENV{VERILATOR_ROOT})) { warn \"%Error: verilator: VERILATOR_ROOT is set to inconsistent path. Suggest leaving it unset.\\n\"; ... exit 1;`. v5.024:Makefile.in:257 `installredirect`. v5.024:bin/redirect execs \"$RealBin/$relpath/$RealScript\".",
+    "impact": "A measurement harness that exports VERILATOR_ROOT, for example to $prefix or to a different version's tree when switching versions, will fail immediately from 5.024 on. Leave it unset, or set it to $prefix/share/verilator (installed) or to the source tree (run in place).",
+    "expected_measurement": "n/a. If builds fail instantly with 'VERILATOR_ROOT is set to inconsistent path', fix the environment, not Verilator."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "New diagnostics in this range: UNUSEDLOOP is a style/unused warning and off by default. PREPROCZERO fires only inside the new `ifdef (expr) form. ZEROREPL turns the old zero-replication error into a warning that is still treated as an error by default. PROCASSWIRE now also flags a net passed to an output or inout task/function argument, as an error by default. None of these should hit firtool output or the svsim testbench, which passes variables or locals to its DPI/export subroutines, never wires.",
+    "evidence": "Changes 5.024: \"Add `UNUSEDLOOP` when unused loop is removed (#4926).\", \"Add error when pass net to function argument (#4132) (#4966).\" Changes 5.022: \"Change zero replication width error to ZEROREPL warning (#4753) (#4762).\" v5.020..v5.024 src/V3Error.h: UNUSEDLOOP added to styleError/unusedError, ZEROREPL added to pretendError, PREPROCZERO added to lintError. v5.024:src/V3Undriven.cpp:397 `v3warn(PROCASSWIRE, \"Passed wire on output or inout subroutine argument ...\")`. Commit 214173c6: PREPROCZERO applies only in the ps_EXPR_IFDEF/IFNDEF/ELSIF states entered on '`ifdef ('.",
+    "impact": "Low. Chisel/firtool output does not use `ifdef ( expressions, zero-width replications, or wires as output arguments of subroutines.",
+    "expected_measurement": "Still 0 %Warning and 0 %Error across the 53 ChiselSim builds."
+   },
+   {
+    "category": "other",
+    "claim": "IEEE 1800-2023 is now the default language, and `ifdef/`ifndef/`elsif accept parenthesized boolean expressions. The 1800-2023 lexer state adds no reserved keywords beyond 1800-2017, so identifiers in Chisel output cannot newly collide with keywords.",
+    "evidence": "Changes 5.024: \"Change 1800-2023 to be default language version.\", \"Support 1800-2023 keywords, and parsing with UNDEFINED warnings.\", \"Support 1800-2023 preprocessor ifdef expressions.\" Commit 91dd3c5f: src/verilog.l only adds S23 to the existing state lists ('/* No new keywords */'). v5.024 src/V3LangCode.h `mostRecent()` returns L1800_2023. The new V3PreLex.l EXPR state is entered only on '(' after `ifdef.",
+    "impact": "No parsing change expected for firtool SV or for the +define+layer$...$ / RANDOM=$urandom macros.",
+    "expected_measurement": "Builds parse as on 5.020."
+   },
+   {
+    "category": "semantics",
+    "claim": "V3Const bit-op-tree optimization had wrong-code bugs that are fixed in this range. The fixes cover a NOT subtree inside an AND/OR tree, EQ/NEQ polarity under NOT, the -fno-const-bit-op-tree path, and widthMin in replaceShiftOp. 5.020 could produce wrong runtime values for some AND/OR/NOT/EQ/shift expression shapes, which are common in Chisel-generated logic.",
+    "evidence": "Changes 5.022: \"Fix incorrect bit-op-tree NOT optimization (#4832) (#4847).\", \"Fix NOT when checking EQ/NEQ under AND/OR tree (#4857) (#4863).\", \"Fix -fno-const-bit-op-tree wrong runtime result (#4864) (#4867).\", \"Fix width calculation in replaceShiftOp (#4837) (#4841) (#4849).\" Commits 50df902b, e4a0e5aa, 999c9ae2, 6b8531f0. v5.024:src/V3Const.cpp:544 `// subtree under NOT can be optimized only in XOR tree.` and :598 `const bool maskFlip = isAndTree() ^ ref.polarity();`.",
+    "impact": "If any 5.020 result for this project depended on one of these miscompiles, 5.024 output could differ. The tests pass on 5.020, so the most likely outcome is no change. These commits are the first suspects if cycle counts or values diverge from 5.020.",
+    "expected_measurement": "Same pass/fail and cycle counts as 5.020. Any divergence should be bisected against these commits."
+   },
+   {
+    "category": "semantics",
+    "claim": "An out-of-bounds write in _vl_insert_WI is fixed. It wrote one word past the end of a wide (>64-bit) destination when the inserted slice ended exactly at a 32-bit-aligned top word. Before the fix, this undefined behavior could corrupt adjacent model state.",
+    "evidence": "Changes 5.022: \"Fix unsafe write in wide array insertion (#4850) (#4855). [Paul Swirhun]\" (commit 6c0c88cf). v5.024:include/verilated_funcs.h:1306 `if (VL_LIKELY(!(hword == rword && roffset == 0))) { iowp[hword] = ... }`.",
+    "impact": "Relevant to wide VLIW bundle signals over 64 bits. Simulation could only change where 5.020 hit the overflow.",
+    "expected_measurement": "Same results as 5.020 unless 5.020 was silently corrupting state."
+   },
+   {
+    "category": "semantics",
+    "claim": "$time in a module whose timeunit is coarser than the precision now rounds to the nearest unit instead of truncating. $realtime is unaffected.",
+    "evidence": "Changes 5.022: \"Fix $time not rounding up (#4790) (#4792). [Paul Wright]\" (commit 3adb31f5). v5.024:include/verilated_funcs.h:316-317 `#define VL_TIME_ROUND(t, p) (((t) + ((p) / 2)) / (p))`, `#define VL_TIME_UNITED_Q(scale) VL_TIME_ROUND(VL_TIME_Q(), static_cast<QData>(scale))`.",
+    "impact": "With svsim's --timescale 1ns/100ps, any printed $time (for example a printf with simulation time) can be 1 ns higher than on 5.020 at half-ns points. Simulation behavior and cycles do not change.",
+    "expected_measurement": "Only textual $time values in logs can differ. Cycle counts and assertion results are unchanged."
+   },
+   {
+    "category": "semantics",
+    "claim": "Assertion code generation was refactored, with no change to firing semantics under --assert. --stop-fail defaults to on, so a failed assertion still emits $stop. Case assertions are now gated by assertCaseOn() = --assert-case || --assert. unique/priority case messages now separate 'none matched' from 'multiple matches found' and print the case value.",
+    "evidence": "Changes 5.022: \"Add `--[no]-stop-fail` option for continuing after assertions (#4904).\", \"Add `--assert-case` option (#4919).\", \"Improve message for priority case assertion failure (#4905).\", \"Fix assertion for unique case (#4892).\" v5.024:src/V3Assert.cpp:57 `assertTypeOn(...)`, :144 `if (v3Global.opt.stopFail()) bodysp->addNext(new AstStop{...});`. v5.024 V3Options.h m_stopFail defaults to true.",
+    "impact": "No behavior change for svsim, which passes --assert without --no-stop-fail. Only the text of unique/priority case failure messages can differ.",
+    "expected_measurement": "Assertion-failure tests fail at the same cycle with the same exit status as on 5.020."
+   },
+   {
+    "category": "other",
+    "claim": "Generated models now call Verilated::stackCheck(predictedBytes) in the Syms constructor. If the stack rlimit is under 1.5x the predicted stack, it prints '%Warning: System has stack size N kb which may be too small; suggest ulimit -s ...' to stdout at runtime.",
+    "evidence": "Changes 5.022: \"Add predicted stack overflow warning (#4799).\" v5.024:src/V3EmitCSyms.cpp:842 `puts(\"    Verilated::stackCheck(\" + cvtToStr(stackSize) + \");\\n\");`. v5.024:include/verilated.cpp:3118 Verilated::stackCheck uses getrlimit(RLIMIT_STACK).",
+    "impact": "Unlikely for this design size with the default 8 MB stack. svsim redirects stdout to its log file, so the warning would not reach the command/message protocol.",
+    "expected_measurement": "No runtime stack warning in simulation logs."
+   },
+   {
+    "category": "build_requirements",
+    "claim": "No new tool requirements for building Verilator from source in this range. configure drops --enable-m32 (32-bit pointer mode removed) and adds an optional -latomic link check. The C++14 check is stricter but g++ 13 meets it. No bison, flex, python3 or astgen requirement changed; install.rst changes only developer and documentation tooling. Ubuntu 24.04 with g++ 13 is fine.",
+    "evidence": "Changes 5.022: \"Remove deprecated 32-bit pointer mode (`gcc -m32`).\" git diff v5.020 v5.024 -- configure.ac removes the AC_ARG_ENABLE([m32]) block and adds v5.024:configure.ac:478 `_MY_LDLIBS_CHECK_OPT(CFG_LIBS, -latomic)`. git diff of src/astgen, src/bisonpre, src/flexfix and src/Makefile_obj.in shows only new object files (V3DfgRegularize, V3ExecGraph, V3Order*, V3StackCount). docs/guide/install.rst changes only the developer package list (python3-clang, jq, astsee).",
+    "impact": "The standard autoconf / ./configure / make / make install flow works as for 5.020. Perl is needed at install time for the new redirect stubs, and was already required by bin/verilator.",
+    "expected_measurement": "Clean build on Ubuntu 24.04 g++ 13."
+   },
+   {
+    "category": "performance",
+    "claim": "No optimization entries in 5.022 or 5.024. The DFG 'regularize' pass is described upstream as performance neutral. The V3Order and V3Partition refactor mostly affects multithreaded (--threads) models, and svsim builds a single-threaded model.",
+    "evidence": "Changes 5.024: \"Add DFG 'regularize' pass, and improve variable removal (#4937). [Geza Lore]\". Commit 5e1fc6e2 message: 'Overall it is a performance neutral change'. \"Improve internal ordering code (#4957) (#4990) (#4994) et al. [Geza Lore]\". 6ffff856 'Use the same serial ordering within MTasks as we use in serial mode (#4994)'. 9a3aed57 'Simplify/cleanup V3OrderSerial (#4955). No functional change.'",
+    "impact": "Verilation time and simulation speed should be about the same as 5.020.",
+    "expected_measurement": "Verilate/build/test wall time within noise of 5.020."
+   }
+  ],
+  "notes": "I read every Changes section after 5.020 up to 5.024 (5.022 and 5.024) and the source diffs v5.020..v5.024 of src/V3ThreadPool.*, src/V3Mutex.h, src/Verilator.cpp, src/V3Options.*, src/V3Error.*, src/V3Assert.cpp, src/V3Const.cpp (bit-op fixes), src/V3EmitCModel.cpp, include/verilated.{h,cpp}, include/verilated_funcs.h, include/verilated_cov.*, include/verilatedos.h, configure.ac, Makefile.in and bin/verilator. I also checked the svsim testbench template strings in the svsim class files. I only read git objects and built or ran nothing.\n\nKey predictions for 5.024:\n- The exit-abort fix is a bounded spin of 50000 CPU-relax retries. Upstream needed another fix (d1b45b8d, #5040, in 5.026), so '-j 0' may still abort occasionally.\n- '--verilate-jobs 1' is immune by construction, because V3MutexConfig is disabled and try_lock always returns true.\n- Seed and random behavior is byte-identical to 5.020: no seed gives the same values every run, and seed 1 gives 8084023f f77f7fff ff7fffff fffffffc.\n- No svsim option or API breakage and no new default warnings.\n\nTwo items the harness should watch:\n1. verilator now prints a 3-line summary report to stdout. Suppress it with --quiet-stats if logs are compared.\n2. bin/verilator now refuses to run if VERILATOR_ROOT is set to anything except realpath(<script dir>/..). Leave VERILATOR_ROOT unset when switching between installed versions.\n\nI found no changes in this range to the jobs options, to $urandom code generation, or to x-initial and rand-reset defaults."
+ },
+ "verify": {
+  "verdicts": [
+   {
+    "index": 0,
+    "verdict": "confirmed",
+    "evidence": "Verified in git. Changes 5.024 has 'Fix try-lock spuriously fails (#4931) (#4938)'. git diff v5.020 v5.024 -- src/V3ThreadPool.h shows the single try_lock replaced by a loop of up to VL_LOCK_SPINS retries with VL_CPU_RELAX(); the abort message 'attempted to destroy locked Thread Pool' is retained. v5.024:src/V3Mutex.h:40 defines VL_LOCK_SPINS 50000. The rest of the V3ThreadPool.cpp/.h diff is formatting only. d1b45b8d ('Fix attempted to destroy locked thread pool error (#5040)') is not an ancestor of v5.024 but is an ancestor of v5.026, and the 5.026 Changes lists it. Its diff sets m_shutdown = true first and replaces the spin with sleep_for(1ms) for up to 1 s; the comment says 'we need to wait for workers to start waiting on condition variable'. v5.024:src/Verilator.cpp:662 does V3MutexConfig::s().configure(verilateJobs() > 1) and :664 V3ThreadPool::s().resize(verilateJobs()). V3Mutex::try_lock returns true when disabled (V3Mutex.h:107-109). resize() returns early when n == workers+1, so with --verilate-jobs 1 there are no workers and no locking. The mechanism 'descheduled while holding the mutex' is the researcher's inference, but the follow-up fix supports the general point that the 5.024 spin window (sub-ms to a few ms) is too short.",
+    "corrected_claim": "Core claim stands. Two overstatements to drop: (a) 'cannot happen in any version' was only checked for 5.024 (and measured 0/3000 on 5.020); (b) 'at or below 5.020's 6/3000' should not be a pass/fail criterion. With n=3000 and rates this small, counts of 0 to ~10 are statistically indistinguishable, and any nonzero count at -j 0 is consistent with #5040 being unfixed in 5.024."
+   },
+   {
+    "index": 1,
+    "verdict": "confirmed",
+    "evidence": "git diff v5.020 v5.024 -- src/V3Options.cpp src/V3Options.h has no changed jobs-related lines, and docs/guide/exe_verilator.rst has no -j or jobs change. v5.024:src/V3Options.cpp:1127-1137 (--build-jobs, 0 -> hardware_concurrency, negative is fatal), :1557-1567 (--verilate-jobs, same), :1700-1710 (-j: 'if (m_buildJobs == -1) m_buildJobs = val; if (m_verilateJobs == -1) m_verilateJobs = val;'), :1742-1743 (both default to 1). Verilator.cpp:767-780 buildMakeCmd adds ' -j N' when jobs > 0 and MAKEFLAGS has no '-jobserver-auth'. Minor nuance: a bare -j with no number stores 0, not hardware_concurrency, but svsim passes '-j 0', which does map to hardware_concurrency.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 2,
+    "verdict": "confirmed",
+    "evidence": "git diff v5.020 v5.024 -G'rand|seed|Rand|Seed|RNG' over include/ and src/ touches no RNG runtime code. VlRNG, vl_thread_rng, randSeedDefault64, VL_RAND_RESET_*, VL_RANDOM_SEEDED_II and the +verilator+seed+ and +verilator+rand+reset+ parsing are all identical. The only hits are V3Randomize (randc width and a message), V3Os and probdist formatting. v5.024:include/verilated.cpp:2784-2786 parses '+verilator+seed+' with min 1, so 0 is rejected. :2850-2856 randSeedDefault64 uses (seed<<32)^seed, or vl_sys_rand32() = (lrand48()<<16)^lrand48() when seed is 0. There is no srand48/srand call anywhere in include/. :358-373 vl_thread_rng applies the VL_COUNTONES_I(...)<10 inversion. :400-401 VL_RAND_RESET_I returns 0 without drawing when randReset()==0. I also checked that $urandom initial blocks are not reordered. V3Sched.cpp createInitial uses orderSequentially(funcp, logicClasses.m_initial), not V3Order, so the V3Order refactor cannot reorder initial blocks. The only V3Sched change is that empty AstActives are dropped earlier (878204db). The V3EmitCFunc diff has no rand or urandom change. 6ffff856's message says 'Serial mode yields identical output'. A byte-for-byte equality of the 4 sample values on 5.024 is therefore the expected outcome.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 3,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.024 'Add printing summary reports, use `--quiet` or `+verilator+quiet` to suppress (#4909)'. v5.024:src/Verilator.cpp ~872-875 'if (!v3Global.opt.quietStats() && !v3Global.opt.preprocOnly()) { ...V3Stats::summaryReport(); }' runs after execBuildJob(). v5.024:src/V3StatsReport.cpp summaryReport() prints exactly '- V e r i l a t i o n   R e p o r t: ...', '- Verilator: Built from ...' and '- Verilator: Walltime ... (elab=, cvt=, bld=); cpu ... s on N threads' (plus '; alloced X MB' if memory is known). V3Options.cpp:1418-1423 shows -quiet sets both m_quietExit and m_quietStats, and -quiet-stats exists. bin/verilator accepts 'quiet!'. statsPrintSummary ('- S i m u l a t i o n   R e p o r t') is emitted only from v5.024:src/V3EmitCMain.cpp:114 (--main) and is defined in include/verilated.cpp:2870. The svsim driver builds its own main, so the runtime report is not printed.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 4,
+    "verdict": "confirmed",
+    "evidence": "The V3Options.cpp diff (v5.020..v5.024) removes only the old 'DECL_OPTION(\"-decoration\", OnOff, &m_decoration)' (replaced by CbCall '-decoration', '-decorations' and '-no-decoration') and changes '-sv' to L1800_2023. --cc, --exe, --build, -o, --top-module, --Mdir, --assert, --timescale, -CFLAGS, +define, -F and the jobs options are untouched. The svsim driver's Verilator section (simulation-driver.cpp ~996-1075) uses VerilatedContext::debug, traceEverOn, commandArgs, time, timeInc, gotFinish, coveragep()->write(), and model eval, eval_step, final, eventsPending, nextTimeSlot. All still exist. verilated_cov.h now has 'void write() VL_MT_SAFE { write(defaultFilename()); }'. v5.024:src/V3EmitCModel.cpp:456-461 still emits eventsPending() and nextTimeSlot() (false / fatal) when there is no delay scheduler. The model trace() is now 'void trace(VerilatedTraceBaseC*...) { contextp()->trace(...) }'. The driver does not call it. VCD/FST dumping goes through $dumpfile/$dumpvars in the generated testbench SV, and VerilatedVcdC derives from VerilatedTraceBaseC. verilated.h:76 has 'using namespace std::literals;'. verilatedos.h:269 is '#if __cplusplus >= 201402L || defined(VL_CPPCHECK) || defined(_MSC_VER)' (commit e3e5f30ba). -std=c++17 satisfies both. The svdpi.h diff only adds items (VPI_TIME-guarded s_vpi_time/svTimeVal typedefs, svGetTime/svGetTimeUnit/svGetTimePrecision).",
+    "corrected_claim": ""
+   },
+   {
+    "index": 5,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.024 'Improve installation to be relocatable (#4927)'; commit f56f31821 exists. v5.024:bin/verilator:72-82: 'my $verilator_root = realpath(\"$RealBin/..\"); if (defined $ENV{VERILATOR_ROOT}) { if ((!-d ...) || $verilator_root ne realpath($ENV{VERILATOR_ROOT})) { warn \"%Error: verilator: VERILATOR_ROOT is set to inconsistent path. Suggest leaving it unset.\\n\"; ... exit 1; } } else { $ENV{VERILATOR_ROOT} = $verilator_root; }'. This check is absent in v5.020:bin/verilator. v5.024:bin/redirect execs \"$RealBin/$relpath/$RealScript\", and Makefile.in:257-266 'installredirect' copies it into $(bindir) while installbin puts real scripts and binaries in $(pkgdatadir)/bin. configure.ac drops --enable-m32, which does not matter for this. Consequently an installed verilator resolves VERILATOR_ROOT to $prefix/share/verilator, and a source-tree run resolves it to the tree root.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 6,
+    "verdict": "confirmed",
+    "evidence": "V3Error.h diff: new codes PREPROCZERO (in lintError), UNUSEDLOOP (in styleError and unusedError, so defaultsOff() makes it off by default) and ZEROREPL (in pretendError). PROCASSWIRE was already in pretendError. v5.024:src/V3PreProc.cpp:1152 PREPROCZERO sits only in the ps_EXPR_IFDEF/IFNDEF/ELSIF states, entered via `ifdef ( . v5.024:src/V3Width.cpp:787 ZEROREPL fires for a replication count of 0 not under a Concat. v5.024:src/V3Undriven.cpp:394-400 is the new PROCASSWIRE check, 'm_inFTaskRef && varType().isNet()', and m_inFTaskRef is set only in visit(AstNodeFTaskRef). I also read the svsim testbench template (strings in svsim/Workspace.class). It only calls initTestBenchScope(), simulation_body() and simulation_final() with no arguments; run_simulation/simulation_enableTrace take 'output int' but are DPI-C boundaries called from C++, not from SV. So there are no SV-side calls passing a wire to an output argument. The V3Error.h diff adds no other default-on warning codes.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 7,
+    "verdict": "confirmed",
+    "evidence": "v5.024:src/V3LangCode.h:53 mostRecent() returns L1800_2023, and V3Options.cpp:1956 sets m_defaultLanguage = mostRecent(). verilog.l:30 defines STATE_VERILOG_RECENT S23, and :629 says '/* System Verilog 2017 */ /* No new keywords */'. V3PreLex.l has an EXPR state (%x EXPR, :76) entered only by pushStateExpr(). However the statement that 1800-2023 adds nothing to the lexer is incomplete: verilog.l:898-902 adds '<S23,SAX,VLT>' operator tokens \"+/-\" (yP_PLUSSLASHMINUS) and \"+%-\" (yP_PLUSPCTMINUS).",
+    "corrected_claim": "IEEE 1800-2023 is now the default language, and `ifdef/`ifndef/`elsif accept parenthesized boolean expressions. The S23 lexer state adds no new reserved keywords, so identifiers cannot newly collide with keywords. It does add two new operator tokens, '+/-' and '+%-', which are lexed only when those exact characters are adjacent. firtool output prints spaced operators, so a hit is very unlikely but not impossible."
+   },
+   {
+    "index": 8,
+    "verdict": "confirmed",
+    "evidence": "Commits 50df902b (#4847, 'bit-op-tree opt. should not touch a subtree under NOT in AND/OR tree'), e4a0e5aa (#4863, consider NOT when checking EQ/NEQ under AND/OR tree), 6b8531f0 (#4849, adds newp->dtypeChgWidth(width, widthMin) in replaceShiftOp) and 999c9ae2 (#4867) all exist in v5.020..v5.024, each with regression tests (t_const_opt*.v). v5.024:src/V3Const.cpp:544 and :595-598 match the quoted lines. One description is off: 999c9ae2 is titled '-fno-const-bit-op-tree wrong runtime result' in Changes, but its code change is one line in ConstBitOpTreeVisitor, 'CONST_BITOP_RETURN_IF(m_lsb, nodep);  // the result of EQ/NE is 1 bit width' (ignore EQ/NE under SHIFTR). That is the default-on bit-op-tree optimization, not a --fno path. The claim that these shapes are 'common in Chisel-generated logic' is not supported by anything in the commits.",
+    "corrected_claim": "V3Const wrong-code fixes in 5.022: NOT subtree in AND/OR bit-op-tree (50df902b), NOT around EQ/NEQ in AND/OR tree (e4a0e5aa), widthMin in replaceShiftOp (6b8531f0), and EQ/NE under SHIFTR in the bit-op-tree visitor (999c9ae2, the default-on optimization, despite the Changes title mentioning -fno-const-bit-op-tree). Whether 5.020 miscompiled this project's logic is unknown. The tests passing on 5.020 make a divergence unlikely, but these are the first bisect suspects if results differ."
+   },
+   {
+    "index": 9,
+    "verdict": "confirmed",
+    "evidence": "Commit 6c0c88cf (Changes 5.022 'Fix unsafe write in wide array insertion (#4850) (#4855)') adds 'if (VL_LIKELY(!(hword == rword && roffset == 0)))' around the iowp[hword] store. The accompanying test t_math_insert_bound.v (96-bit destination) says the write 'will in fact clobber other state in the generated C++ struct'. The exact trigger is a destination whose width is a multiple of 32 (roffset == 0) with the insert spilling into the word one past the end (hword == rword). The claim's wording 'slice ended exactly at a 32-bit-aligned top word' is a loose paraphrase of that.",
+    "corrected_claim": "_vl_insert_WI (partial insert into a wide variable) wrote one 32-bit word past the end of the destination when the destination width is a multiple of 32 bits and the insert crosses into the nonexistent next word (hword == rword and roffset == 0). That could clobber adjacent members of the generated model struct. It is fixed in 5.022."
+   },
+   {
+    "index": 10,
+    "verdict": "confirmed",
+    "evidence": "Commit 3adb31f53 (Changes 5.022 'Fix $time not rounding up (#4790) (#4792)'). git diff of include/verilated_funcs.h: '-#define VL_TIME_UNITED_Q(scale) (VL_TIME_Q() / static_cast<QData>(scale))' becomes '+#define VL_TIME_ROUND(t, p) (((t) + ((p) / 2)) / (p))' and VL_TIME_UNITED_Q(scale) VL_TIME_ROUND(VL_TIME_Q(), scale). VL_TIME_UNITED_D (realtime) is unchanged (plain division).",
+    "corrected_claim": ""
+   },
+   {
+    "index": 11,
+    "verdict": "confirmed",
+    "evidence": "git diff v5.020 v5.024 -- src/V3Assert.cpp: new assertType_e / assertTypeOn() (INTRINSIC always on, otherwise assertOn(), with CASE also on via assertCaseOn()). The AstStop is now emitted only 'if (v3Global.opt.stopFail())'. v5.024:src/V3Options.h:321 has 'bool m_stopFail = true', :459 has assertCaseOn() = m_assertCase || m_assert, and V3Options.cpp:1110/1454 declare --assert-case and --[no-]stop-fail. The old unique/priority case 'OneHot0-or-OneHot' check is split into onehot -> (zero ? none-matched unless allow_none : multiple-matches) with identical firing conditions and new message text with the case value. SVA, intrinsic and unique-if gating are unchanged. exe_verilator.rst: '--assert ... Implies --assert-case'.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 12,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.022 'Add predicted stack overflow warning (#4799)'. v5.024:src/V3EmitCSyms.cpp:842 emits 'Verilated::stackCheck(<bytes>)' in the Syms constructor. v5.024:include/verilated.cpp:3118-3137: if rlim_cur < 1.5x needSize it does VL_PRINTF_MT('%%Warning: System has stack size N kb which may be too small; suggest ulimit -s ...'). The one wrong inference is that the warning 'would not reach the command/message protocol'. In simulation-driver.cpp, stdout is freopen'd to the log file before simulation_main, and the LOG command (sendLog) reads that file and returns its contents in an 'l' message. Protocol framing is unaffected because messages go over a separate messageStream and are length-prefixed. But the warning text would appear in the returned simulation log.",
+    "corrected_claim": "Generated models call Verilated::stackCheck(predictedBytes) at model construction. If RLIMIT_STACK is below 1.5x the predicted stack (i.e. predicted > ~5.3 MB for the default 8 MB), '%Warning: System has stack size ...' is printed to stdout. In svsim that stdout is the simulation log file, whose contents the host receives via the LOG command, so the line would show up in returned logs without breaking the message protocol. Whether this design triggers it is not verified."
+   },
+   {
+    "index": 13,
+    "verdict": "confirmed",
+    "evidence": "git diff v5.020 v5.024 -- configure.ac: removes the AC_ARG_ENABLE([m32]) block and its -m32 handling, adds '_MY_LDLIBS_CHECK_OPT(CFG_LIBS, -latomic)' (optional) and '-Wno-tautological-compare', and removes '-Wno-overloaded-virtual'. The python3, flex and bison checks (configure.ac:168-185) are unchanged. src/astgen changes are JSON-dump generation only, src/bisonpre and src/flexfix are unchanged, and src/Makefile_obj.in only swaps object files (+V3DfgCache/Regularize, V3ExecGraph, V3Order*, V3StackCount, -V3Partition). docs/guide/install.rst changes only the developer package list. Makefile.in installredirect uses perl with File::Spec (core). One imprecision: the configure.ac C++14 check (:501-542) is unchanged and still prefers -std=gnu++17. The stricter check is the compile-time __cplusplus test in verilatedos.h (e3e5f30ba), which applies both to Verilator and to models. g++ 13 satisfies it.",
+    "corrected_claim": "No new tool requirements for building Verilator in this range. configure drops --enable-m32 and adds an optional -latomic link check. configure's own C++14 check is unchanged (prefers gnu++17). The stricter C++14 gate is the verilatedos.h __cplusplus check, which g++ 13 satisfies. Perl is already required, and File::Spec is used at install time."
+   },
+   {
+    "index": 14,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.022 and 5.024 contain no entry described as an optimization. 5e1fc6e24 message: 'Overall it is a performance neutral change'. 6ffff8565 concerns MTasks only and says 'Serial mode yields identical output'. 9a3aed57b says 'No functional change. Output is identical.' a686e547c, e4847464, 2247e1e3 and 5a69321be are refactors, and 5a69321be, 3af0eb7f and the mtask commits affect --threads models. The svsim command line has no --threads, so the model is single-threaded.",
+    "corrected_claim": ""
+   }
+  ],
+  "missed": [
+   {
+    "category": "semantics",
+    "claim": "$readmem/$readmemh/$readmemb no longer drops the last data word when the file does not end with a newline. In 5.020, VlReadMem::get() returned false at EOF even when a data token was in progress, so the final entry was silently not loaded. 5.024 returns 'indata'.",
+    "evidence": "Changes 5.024 'Fix $readmem with missing newline (#5019). [Josse Van Delm]'. Commit 0114cb67c changes include/verilated.cpp VlReadMem::get from 'return false;  // EOF' to 'addrr = m_addr; return indata;  // EOF', with new test t_sys_readmem_eof. Confirmed in v5.024:include/verilated.cpp (~2113-2118).",
+    "impact": "Medium if the project loads instruction ROMs or data via $readmemh/loadMemoryFromFile(Inline) from files with no trailing newline: 5.020 would have run with the last word at its initial value, and 5.024 loads it, which could change results or cycle counts. No impact if no $readmem is used or the files end in a newline. The researcher missed this entry."
+   },
+   {
+    "category": "other",
+    "claim": "A module named 'TOP' is now a hard error (E_UNSUPPORTED: 'Module cannot be named 'TOP' as conflicts with Verilator top-level internals').",
+    "evidence": "Commit a4813ec67 'Add warning on TOP-named modules (#4935)'. v5.024:src/V3LinkParse.cpp:648-651. It does not appear in the final 5.024 Changes list.",
+    "impact": "Low. It only matters if some Chisel/firtool module in this project (or a test) is literally named TOP."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "Generated format-printing calls changed signature and now pass the format as std::string: VL_WRITEF/VL_FWRITEF/VL_SFORMAT_X/VL_SFORMATF_NX/VL_FSCANF_IX/VL_SSCANF_*X become *_NX(format, argc, ...). Output text is the same, but the format literal is converted to a temporary std::string on each printf/$fwrite call.",
+    "evidence": "Commit 9ccef4180 'Fix $fwrite of null (#4862)' (Changes 5.022 'Fix $fwrite of null'). The verilated_funcs.h diff shows 'extern void VL_WRITEF_NX(const std::string& format, int argc, ...)', 'VL_FWRITEF_NX(IData fpi, const std::string& format, int argc, ...)' and others. v5.024:src/V3EmitCFunc.cpp:190-194 emits VL_FWRITEF_NX/VL_WRITEF_NX with ofp()->putsQuoted(format).",
+    "impact": "Low. Generated code and runtime come from the same version, so there is no compatibility problem. A tiny per-print runtime overhead is possible for printf-heavy Chisel designs. This was not measured."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "The SystemVerilog lexer in the new default 1800-2023 mode recognises two new operators, '+/-' and '+%-'. The DPI header include/vltstd/svdpi.h (included by the generated VsvsimTestbench__Dpi.h that the svsim driver includes) gains svGetTime/svGetTimeUnit/svGetTimePrecision, and typedefs s_vpi_time/svTimeVal under an #ifndef VPI_TIME guard. The svdpi.h change is additive only.",
+    "evidence": "v5.024:src/verilog.l:898-902 ('SystemVerilog 2023 Operators' <S23,SAX,VLT>: \"+/-\" yP_PLUSSLASHMINUS, \"+%-\" yP_PLUSPCTMINUS). The git diff of include/vltstd/svdpi.h shows only additions plus comment wording, and the new functions are defined in include/verilated_dpi.cpp.",
+    "impact": "None expected. firtool output does not produce these character sequences, and the driver's use of svScope/svSetScope/svGetScope is unchanged."
+   },
+   {
+    "category": "semantics",
+    "claim": "Runtime message change: the '-Info: ...Verilog $stop, ignored due to +verilator+error+limit' message is now printed only once, when the error limit is first crossed, instead of on every ignored $stop.",
+    "evidence": "git diff v5.020 v5.024 -- include/verilated.cpp adds 'if (Verilated::threadContextp()->errorCount() == 1)' around the VL_PRINTF of that message (not in Changes).",
+    "impact": "Negligible. It only affects log volume when +verilator+error+limit is used."
+   }
+  ]
+ }
+}
