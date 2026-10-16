@@ -1,0 +1,2 @@
+build	result=success,seconds=278,compiler warnings=3
+race	20 shards: [-j 0]: 0 of 60000 pool aborts, 0 other aborts, 0 other errors, 0.102 s/run, p=1.37e-07
