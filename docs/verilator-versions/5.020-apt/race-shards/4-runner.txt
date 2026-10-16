@@ -1,0 +1,4 @@
+job: 5.020-apt race-4, run 38727715539 attempt 1
+image: ubuntu24 20261012.334.1
+cpu: AMD EPYC 7763 64-Core Processor
+cpus: 4, memory: 15Gi
