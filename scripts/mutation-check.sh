@@ -11,7 +11,9 @@
 # Usage: scripts/mutation-check.sh [mutant-id...]   (default: all mutants)
 # Environment: SBT (sbt command), MUTATION_LOG_DIR (default build/mutation/<UTC time>),
 #   MUTATION_TIMEOUT (seconds per sbt run, default 1200), MUTATION_RETRIES (reruns after an
-#   environment ERROR, default 1), MUTATION_BASELINE (0 skips the unmutated run, default 1).
+#   environment ERROR, default 1), MUTATION_BASELINE (0 skips the unmutated run, default 1),
+#   MUTATION_SHARD (k/n: only the mutants at rows k, k+n, k+2n, ... of mutants.tsv, counting
+#   mutant rows from 1; CI runs n shards in parallel).
 # Target files must have no uncommitted changes.
 set -euo pipefail
 
@@ -32,6 +34,15 @@ if [[ -n "${VLIW_SIM_SEED:-}" && "$VLIW_SIM_SEED" != random ]]; then
   fi
 fi
 
+shard_k=1 shard_n=1
+if [[ -n "${MUTATION_SHARD:-}" ]]; then
+  if ! [[ "$MUTATION_SHARD" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] ||
+    ((BASH_REMATCH[1] > BASH_REMATCH[2])); then
+    die "MUTATION_SHARD must be k/n with 1 <= k <= n: '$MUTATION_SHARD'"
+  fi
+  shard_k="${BASH_REMATCH[1]}" shard_n="${BASH_REMATCH[2]}"
+fi
+
 log_dir="${MUTATION_LOG_DIR:-$repo_root/build/mutation/$(date -u +%Y%m%dT%H%M%SZ)}"
 limit="${MUTATION_TIMEOUT:-1200}"
 retries="${MUTATION_RETRIES:-1}"
@@ -43,6 +54,7 @@ mkdir -p "$log_dir"
   java -version 2>&1
   verilator --version
   printf 'VLIW_SIM_SEED=%s (unset: the default of vliw.hw.SimSeed)\n' "${VLIW_SIM_SEED:-}"
+  printf 'shard: %s/%s\n' "$shard_k" "$shard_n"
 } >"$log_dir/env.txt" 2>&1 || true
 current=''
 restore() { if [[ -n "$current" ]]; then git checkout -- "$current"; current=''; fi; }
@@ -126,8 +138,11 @@ stale=()
 errors=()
 killed=0
 printf 'id\tverdict\tcategory\tdetail\tlog\n' >"$log_dir/results.tsv"
+row=0
 while IFS=$'\t' read -r id file original mutated what; do
   [[ -z "$id" || "$id" == \#* ]] && continue
+  row=$((row + 1))
+  (((row - shard_k) % shard_n == 0)) || continue
   if [[ $# -gt 0 ]] && [[ ! " $* " == *" $id "* ]]; then continue; fi
   git diff --quiet -- "$file" || die "$file has uncommitted changes"
 
