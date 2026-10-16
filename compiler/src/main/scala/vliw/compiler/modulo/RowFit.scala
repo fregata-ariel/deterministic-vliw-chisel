@@ -17,9 +17,15 @@ private[modulo] object RowFit {
   /** Above this II the rows do not fit in a Long, and [[fits]] does not decide. */
   val MaxRows: Int = 62
 
+  /** The states one call of [[fits]] may visit before it gives up (the search is exponential in the
+    * worst case). The recorded loops need far fewer.
+    */
+  val Budget: Int = 100000
+
   /** Whether `kinds` (one slot class) fit rows 0 until `ii`, where `slot`, `port` and `unit(i)` are
     * the rows already taken (bit r for row r). Exact: a depth-first search that decides row by row
-    * which mnemonic issues there, with the failed states remembered. None when `ii` > [[MaxRows]].
+    * which mnemonic issues there, with the failed states remembered. None (not decided) when `ii` >
+    * [[MaxRows]] or the search visits more than `budget` states.
     */
   def fits(
       ii: Int,
@@ -28,7 +34,8 @@ private[modulo] object RowFit {
       port: Long,
       unit: Vector[Long],
       usePorts: Boolean = true,
-      useUnits: Boolean = true
+      useUnits: Boolean = true,
+      budget: Int = Budget
   ): Option[Boolean] =
     if (ii > MaxRows) None
     else if (kinds.forall(_.count == 0)) Some(true)
@@ -45,11 +52,13 @@ private[modulo] object RowFit {
       def relevant(r: Int) = (full & ~((1L << r) - 1)) | ((1L << reach) - 1)
       val left = kinds.map(_.count).toArray
       val failed = mutable.HashSet.empty[(Int, List[Int], Long, List[Long])]
+      var steps = 0
       def go(r: Int, takenPort: Long, takenUnit: Array[Long]): Boolean = {
+        steps += 1
         val total = left.sum
         val freeSlots = java.lang.Long.bitCount(~slot & full & ~((1L << r) - 1))
         if (total == 0) true
-        else if (freeSlots < total) false
+        else if (freeSlots < total || steps > budget) false
         else {
           val m = relevant(r)
           val key = (r, left.toList, takenPort & m, takenUnit.toList.map(_ & m))
@@ -80,6 +89,7 @@ private[modulo] object RowFit {
           }
         }
       }
-      Some(go(0, 0L, Array.fill(kinds.size)(0L)))
+      val found = go(0, 0L, Array.fill(kinds.size)(0L))
+      Option.when(found || steps <= budget)(found)
     }
 }

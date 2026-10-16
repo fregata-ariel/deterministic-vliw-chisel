@@ -64,32 +64,32 @@ object ModuloRecords {
     .load(Paths.get("tests", "machines", name))
     .fold(es => sys.error(es.mkString("\n")), identity)
 
-  /** The loops of #68's acceptance tests, outside the list-scheduling records (#79). */
+  /** The other loops and machines: every loop of `LoopBenchmarks.all` on the default machine (but
+    * the compared ones), slow_units and ii_units, and the loops of #68's register test on regs3.
+    */
   def acceptance(
       m: MachineDescription = BenchmarkRecords.machine
   ): Seq[(LoopKernel, MachineDescription)] = {
     val (slow, iiUnits, regs3) =
       (machineFile("slow_units.json"), machineFile("ii_units.json"), machineFile("regs3.json"))
-    Seq(LoopBenchmarks.product(8), LoopBenchmarks.dot(8)).flatMap(k =>
-      Seq(m, slow, iiUnits).map(k -> _)
-    ) ++
-      Seq(
-        LoopBenchmarks.saxpy(8) -> iiUnits,
-        LoopBenchmarks.saxpy(8) -> regs3,
-        LoopBenchmarks.dot(8) -> regs3,
-        LoopBenchmarks.matmulRows(3) -> slow,
-        LoopBenchmarks.matmulAcc(3) -> slow
-      )
+    Seq(m, slow, iiUnits).flatMap(mach =>
+      LoopBenchmarks.all.filter(k => mach != m || !compared.contains(k)).map(_ -> mach)
+    ) ++ Seq(LoopBenchmarks.saxpy(8) -> regs3, LoopBenchmarks.dot(8) -> regs3)
   }
 
-  /** The sizes of `saxpy(n)` recorded (#68), and the largest n whose program fits the instruction
-    * memory, searched up to the largest n the scratchpad holds (3n + 1 words).
-    */
+  /** The sizes of `saxpy(n)` recorded (#68). */
   val series: Seq[Int] = Seq(8, 16, 32, 64, 128)
+
+  /** The n tried for the largest `saxpy(n)`: every n whose 3n + 1 words fit the scratchpad and
+    * whose 3n + 1 memory operations (LD of a, of x(i) and y(i), ST of out(i)), one per bundle, fit
+    * the instruction memory. No larger n can fit.
+    */
+  def tried(m: MachineDescription): Int =
+    math.min((m.scratchpadWords - 1) / 3, (m.instructionMemoryBundles - 1) / 3)
+
+  /** The largest n up to `tried(m)` whose program fits the instruction memory. */
   def largest(m: MachineDescription): Int =
-    (1 to (m.scratchpadWords - 1) / 3)
-      .takeWhile(n => ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m).isRight)
-      .last
+    (1 to tried(m)).filter(n => ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m).isRight).max
 
   /** Why no II gives a program for `k` on `m`: the attempts of the search. */
   private def failure(k: LoopKernel, m: MachineDescription): NoSchedule = {
@@ -106,12 +106,13 @@ object ModuloRecords {
     * placement, (b) registers, the instruction memory.
     */
   private def reasons(attempts: Seq[Attempt]): String = {
+    // Consecutive IIs share a group when they fail the same way; for (a), on the same resources.
     def kind(o: Outcome) = o match {
-      case _: Outcome.NoMrt       => 0
-      case _: Outcome.NoTime      => 1
-      case _: Outcome.TooManyLive => 2
-      case _: Outcome.Overflow    => 3
-      case Outcome.Fits           => 4
+      case Outcome.NoMrt(r)       => (0, r)
+      case _: Outcome.NoTime      => (1, "")
+      case _: Outcome.TooManyLive => (2, "")
+      case _: Outcome.Overflow    => (3, "")
+      case Outcome.Fits           => (4, "")
     }
     val groups =
       attempts.filter(_.outcome != Outcome.Fits).foldLeft(Vector.empty[Vector[Attempt]]) {
@@ -167,6 +168,7 @@ object ModuloRecords {
         r.kernel.trips.toString,
         bound(c),
         s.mii.recMII.toString,
+        s.iiMax.toString,
         s.ii.toString,
         reasons(s.attempts),
         s.start.toString,
@@ -232,6 +234,7 @@ ${lines.mkString("\n")}
               machine,
               bound(c),
               c.result.mii.recMII.toString,
+              c.result.iiMax.toString,
               c.ii.toString,
               reasons(c.result.attempts),
               c.cycles.toString
@@ -243,6 +246,7 @@ ${lines.mkString("\n")}
               machine,
               s"${no.mii.resMII}（${no.mii.bounding.map(r => s"`$r`").mkString("、")}）",
               no.mii.recMII.toString,
+              no.iiMax.toString,
               "-",
               s"不成立: ${reasons(no.attempts)}（II ${no.mii.mii}〜${no.iiMax} のどれにも収まらない）",
               "-"
@@ -268,7 +272,11 @@ ${lines.mkString("\n")}
         recurrent
           .map { r =>
             val mii = r.compiled.result.mii
-            s"${label(r.kernel)}（RecMII ${mii.recMII}、ResMII ${mii.resMII} より小さい）"
+            val than =
+              if (mii.recMII < mii.resMII) "より小さい"
+              else if (mii.recMII == mii.resMII) "と等しい"
+              else "より大きい"
+            s"${label(r.kernel)}（RecMII ${mii.recMII}、ResMII ${mii.resMII} $than）"
           }
           .mkString("、") + "だけ"
 
@@ -285,16 +293,16 @@ ${lines.mkString("\n")}
 | machine | `${m.machineId}` revision ${m.revision}、`${m.hash}` |
 | ループ | `vliw.compiler.loop.LoopBenchmarks`（[docs/COMPILER.md](../docs/COMPILER.md)「ループ IR」）。展開すると list scheduling のカーネルと同じになる |
 | 配置と入力 | list scheduling と同じ（展開したカーネルの `MemoryLayout.fixedOrder`、`KernelCompiler.sampleInputs(kernel, $Seed)`） |
-| Modulo Scheduling | II = MII から1反復の長さまで順に試し、最初に命令列ができた II を使う（[docs/COMPILER.md](../docs/COMPILER.md)「Modulo Scheduling」）。戦略は1つで、cycles 最小の II とは限らない |
+| Modulo Scheduling | II = MII から探索の上限（1反復を list scheduling した長さ）まで順に試し、最初に命令列ができた II を使う（[docs/COMPILER.md](../docs/COMPILER.md)「Modulo Scheduling」）。戦略は1つで、cycles 最小の II とは限らない |
 | 実行 | 参照モデル。II は、トレースで確かめた値（`crosscheck/ModuloTrace`）を `metrics` の `ii` に記録する。RTL でも同じ cycles と出力になることを `BenchmarkSpec` が確かめる |
 
 ## ループごとの結果
 
-| ループ | 反復 | ResMII（律速の資源） | RecMII | II | MII を超えた II の理由 | 開始 S | 1反復の長さ | bundle | cycles | 同時に生きる値 | LD（ループの前 + 1反復 × 反復） | LD（list scheduling） |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| ループ | 反復 | ResMII（律速の資源） | RecMII | 探索の上限 | II | MII を超えた II の理由 | 開始 S | 配置した1反復の長さ | bundle | cycles | 同時に生きる値 | LD（ループの前 + 1反復 × 反復） | LD（list scheduling） |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 ${perLoop.mkString("\n")}
 
-(a) は、1反復の演算が II 行の予約表（スロット、演算器の II（L9）、書戻しポート（L5））に収まらないこと、(b) は、命令列の同時に生きる値がレジスタ数を超えること。比べる4つのループのうち、RecMII > 0 は $recNote。RecMII が II を決めるループは、下の受入テストの `product8` で確かめる。
+(a) は、1反復の演算が II 行の予約表（スロット、演算器の II（L9）、書戻しポート（L5））に収まらないこと、(b) は、命令列の同時に生きる値がレジスタ数を超えること。比べる4つのループのうち、RecMII > 0 は $recNote。RecMII が II を決めるループは、下の「他のループと構成」の `product8`。
 
 各記録の全項目は `metrics/<kernel>_<loop>_modulo.json`（`vliw-metrics/1`、`ii` を含む）、命令列と入力・期待値は `cases/<kernel>_<loop>_modulo.json` にある。
 
@@ -304,12 +312,12 @@ list scheduling の各行は、[RESULTS.md](RESULTS.md) の「戦略を固定し
 
 ${comparisons.mkString("\n\n")}
 
-## 受入テストのループ（#68）
+## 他のループと構成（#68 の受入テストを含む）
 
-list scheduling の記録（#79）の対象外。
+`LoopBenchmarks.all` の各ループを、既定の構成（上の4つを除く）、`slow_units`、`ii_units` で。`regs3` は、レジスタが足りずに II が上がる例と、どの II でも収まらない例。list scheduling の記録（#79）の対象外。
 
-| ループ | machine | ResMII（律速の資源） | RecMII | II | MII を超えた II の理由 | cycles |
-|---|---|---|---|---|---|---|
+| ループ | machine | ResMII（律速の資源） | RecMII | 探索の上限 | II | MII を超えた II の理由 | cycles |
+|---|---|---|---|---|---|---|---|
 ${accept.mkString("\n")}
 
 ## 反復回数の系列（`saxpy(n)`、既定の構成）
@@ -318,7 +326,9 @@ ${accept.mkString("\n")}
 |---|---|---|---|
 ${saxpy.mkString("\n")}
 
-命令領域（${m.instructionMemoryBundles} bundle）に収まる最大の n は $nMax（n は、Scratchpad に収まる ${(m.scratchpadWords - 1) / 3} まで試した）。
+命令領域（${m.instructionMemoryBundles} bundle）に収まる最大の n は $nMax。n = 1 から ${tried(
+        m
+      )} まですべて試した（Scratchpad に収まるのは n ≦ ${(m.scratchpadWords - 1) / 3}、メモリ操作 3n + 1 個が1 bundle に1個ずつ命令領域に収まるのは n ≦ ${(m.instructionMemoryBundles - 1) / 3}）。
 """
   }
 

@@ -6,7 +6,7 @@ import vliw.compiler.{KernelCompiler, Verifier}
 import vliw.compiler.dag.Node
 import vliw.compiler.dsl.{Benchmarks, Op}
 import vliw.compiler.loop._
-import vliw.compiler.loop.Loop.{Bin, Read, Write}
+import vliw.compiler.loop.Loop.{Bin, Final, Read, StateRef, Update, Write}
 import vliw.compiler.regalloc.RegisterAllocator
 import vliw.compiler.schedule.Schedule
 import vliw.isa.{BundleCodec, MachineDescription, Rule, Slot}
@@ -371,6 +371,45 @@ class ModuloSchedulerSpec extends AnyFunSuite {
         Vector()
       ),
       Seq((machine, 0, 4, Seq(), 19))
+    ),
+    (
+      "[k + 2] = [k] + [10]: a dependence over 2 iterations",
+      Loop(
+        6,
+        Vector(),
+        Vector(Write(Address(2, 1), Bin(Op.Add, Read(Address(0, 1)), Read(Address(10, 0))))),
+        Vector()
+      ),
+      Seq((machine, 2, 2, Seq(), 16), (slow, 3, 3, Seq(), 23))
+    ),
+    (
+      "s = [0]; s = s * ([1 + k] * [40 + k]); [20 + k] = s * [10]: a state read by a later node",
+      Loop(
+        6,
+        Vector(Read(Address(0, 0))),
+        Vector(
+          Update(
+            0,
+            Bin(Op.Mul, StateRef(0), Bin(Op.Mul, Read(Address(1, 1)), Read(Address(40, 1))))
+          ),
+          Write(Address(20, 1), Bin(Op.Mul, StateRef(0), Read(Address(10, 0))))
+        ),
+        Vector(Final(30, 0))
+      ),
+      Seq((machine, 2, 3, Seq(), 26), (slow, 3, 3, Seq(), 32))
+    ),
+    (
+      "s = [0]; s = s * [1 + k]; [20 + k] = s + [10]: a carried edge before the edge it feeds",
+      Loop(
+        6,
+        Vector(Read(Address(0, 0))),
+        Vector(
+          Update(0, Bin(Op.Mul, StateRef(0), Read(Address(1, 1)))),
+          Write(Address(20, 1), Bin(Op.Add, StateRef(0), Read(Address(10, 0))))
+        ),
+        Vector(Final(30, 0))
+      ),
+      Seq((machine, 2, 3, Seq(2 -> slotPort), 23), (slow, 3, 3, Seq(), 25))
     )
   )
 
@@ -385,6 +424,85 @@ class ModuloSchedulerSpec extends AnyFunSuite {
         .verified(m, name, declaration, s.allocation.bundles)
         .fold(e => fail(e), identity)
     }
+  }
+
+  test("the instruction memory: a program of exactly its size fits, and every II is tried") {
+    // dot(84) takes exactly 256 bundles at II 3; dot(85) takes 259.
+    assert(compile(LoopBenchmarks.dot(84), machine).words.size == 256)
+    val e = ModuloCompiler.compile(LoopBenchmarks.dot(85), machine).swap.getOrElse(fail("compiled"))
+    assert(e.contains("II 3: 259 bundles; the instruction memory holds 256"), e)
+    // With 80 bundles, matmul3 over i overflows at II 20 (87) and fits at II 21 (70): cycles are not
+    // monotone in the II, so the search goes on after an overflow.
+    val c = compile(LoopBenchmarks.matmulRows(3), machine.copy(instructionMemoryBundles = 80))
+    assert((c.ii, c.words.size) == ((21, 70)))
+    assert(c.result.attempts.find(_.ii == 20).contains(Attempt(20, Outcome.Overflow(87, 80))))
+  }
+
+  test("SUB counts for the compute slot and the write-back port") {
+    val k = LoopKernel("subs", "i", 4) { b =>
+      val x = b.input("x", 4)
+      val (p, q, r) = (b.scalar("p"), b.scalar("q"), b.scalar("r"))
+      val out = b.output("out", 4)
+      b.body(i => out(i) = ((x(i) - p) - q) - r)
+    }
+    val c = compile(k, machine)
+    assert(c.result.mii.resMII == 3)
+    assert(c.result.mii.bounding == Seq("compute slot", "compute write-back port", "SUB unit"))
+    assert((c.ii, c.cycles) == ((3, 17)))
+  }
+
+  test("at the span of one iteration the search falls back to the one-iteration schedule") {
+    val g = compile(LoopBenchmarks.saxpy(8), machine).graph
+    val never = (_: LoopGraph, _: Int, _: Boolean) => Left(Outcome.NoTime(0, 0, 0))
+    val s = ModuloScheduler.search(g, never).fold(e => fail(e.message), identity)
+    assert((s.ii, s.iiMax, s.times) == ((6, 6, ModuloScheduler.oneIteration(g))))
+    assert(s.attempts.init == (3 to 5).map(Attempt(_, Outcome.NoTime(0, 0, 0))))
+    checkSchedule(s)
+    KernelCompiler
+      .verified(
+        machine,
+        "saxpy8",
+        Verifier.Declaration(Set.empty, (0 until 64).toSet),
+        s.allocation.bundles
+      )
+      .fold(e => fail(e), identity)
+  }
+
+  test("a long chain with mixed latencies ends: undecided tables are not (a)") {
+    // SUB latency 5, MUL latency 8: whether a table of 36 to 42 rows exists is not decided within the
+    // budget, so those IIs are not recorded as (a); the search goes on and finds II 44.
+    val mixed = machine.copy(operations =
+      machine.operations
+        .updated("SUB", machine.operation("SUB").copy(latency = 5))
+        .updated("MUL", machine.operation("MUL").copy(latency = 8))
+    )
+    val chain = LoopKernel("chain12", "i", 2) { b =>
+      val x = b.input("x", 2)
+      val out = b.output("out", 2)
+      b.body { i =>
+        out(i) = (0 until 36).foldLeft(x(i)) { (e, j) =>
+          j % 3 match {
+            case 0 => e + x(i)
+            case 1 => e - x(i)
+            case _ => e * x(i)
+          }
+        }
+      }
+    }
+    val start = System.nanoTime
+    val c = compile(chain, mixed)
+    assert((System.nanoTime - start) / 1000000000L < 60, "took a minute or more")
+    assert((c.ii, c.cycles) == ((44, 255)))
+    assert(
+      c.result.attempts.exists(a =>
+        a.outcome match {
+          case o: Outcome.NoTime => !o.tableExists
+          case _                 => false
+        }
+      )
+    )
+    assert(!c.result.attempts.exists(_.outcome.isInstanceOf[Outcome.NoMrt]))
+    checkSchedule(c.result)
   }
 }
 

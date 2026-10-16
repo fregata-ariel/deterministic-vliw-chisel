@@ -19,11 +19,18 @@ object Outcome {
     override def toString: String = s"no reservation table ($resources)"
   }
 
-  /** A table exists, but placing in node order without backtracking finds no cycle for `node`
-    * between `earliest` and `latest` (from its dependences) where the rest still fit.
+  /** Placing in node order without backtracking finds no cycle for `node` between `earliest` and
+    * `latest` (from its dependences; Int.MaxValue for none) where the rest still fit. With
+    * `tableExists`, a table exists (so this is the order of placement, not (a)); otherwise whether
+    * one exists was not decided (more than `RowFit.MaxRows` rows, or the search ran out of budget).
     */
-  final case class NoTime(node: Int, earliest: Int, latest: Int) extends Outcome {
-    override def toString: String = s"node $node finds no cycle in $earliest..$latest"
+  final case class NoTime(node: Int, earliest: Int, latest: Int, tableExists: Boolean = true)
+      extends Outcome {
+    override def toString: String = {
+      val upto = if (latest == Int.MaxValue) "" else latest.toString
+      val table = if (tableExists) "" else " (whether a reservation table exists is not decided)"
+      s"node $node finds no cycle in $earliest..$upto$table"
+    }
   }
 
   /** (b) The schedule keeps more values live at once than there are registers. */
@@ -165,10 +172,12 @@ object ModuloScheduler {
   /** Places the Each nodes in a reservation table of `ii` rows: in node order, each at the first
     * cycle from its earliest (dependences on the placed nodes) within `ii` cycles and before its
     * latest (dependences of placed nodes on it), whose rows are free; with `lookahead`, also only
-    * where the remaining nodes of its slot class can still get rows. No backtracking.
+    * where the remaining nodes of its slot class can still get rows (once the look-ahead is not
+    * decided, the rest of the placement goes without it). No backtracking.
     */
   def place(g: LoopGraph, ii: Int, lookahead: Boolean): Either[Outcome.NoTime, Map[Int, Int]] = {
     val res = new Resources(g)
+    var ahead = lookahead
     val rows = mutable.HashSet.empty[(Int, Int)]
     def row(u: (Int, Int)) = (u._1, Math.floorMod(u._2, ii))
     val each = g.ids(Place.Each)
@@ -192,7 +201,10 @@ object ModuloScheduler {
             .find { c =>
               val need = res.uses(m, c).map(row)
               need.distinct.size == need.size && need.forall(!rows.contains(_)) &&
-              (!lookahead || res.fit(ii, slot(g, n), rest, rows ++ need).getOrElse(true))
+              (!ahead || res.fit(ii, slot(g, n), rest, rows ++ need).getOrElse {
+                ahead = false
+                true
+              })
             }
             .toRight(Outcome.NoTime(n, earliest, latest))
             .map { c =>
@@ -203,21 +215,30 @@ object ModuloScheduler {
     }
   }
 
-  /** (a) if the Each nodes cannot get rows at all: the resources that conflict, found by leaving
-    * out the ports and the units.
+  /** Whether the Each nodes can get rows at all. Left (a): the resources that conflict, found by
+    * leaving out the ports and the units. Right(true): a table exists; Right(false): not decided.
     */
-  private def noTable(g: LoopGraph, ii: Int): Option[Outcome.NoMrt] = {
+  private def table(g: LoopGraph, ii: Int): Either[Outcome.NoMrt, Boolean] = {
     val res = new Resources(g)
     val all = g.ids(Place.Each).map(g.nodes(_).mnemonic)
-    def fits(ports: Boolean, units: Boolean) =
-      Slot.all.forall(s => res.fit(ii, s, all, Set.empty, ports, units).getOrElse(true))
-    Option.when(!fits(ports = true, units = true)) {
-      val names =
-        if (!fits(ports = false, units = false)) "slot"
-        else if (!fits(ports = true, units = false)) "slot + write-back port (L5)"
-        else if (!fits(ports = false, units = true)) "slot + unit (L9)"
-        else "slot + unit (L9) + write-back port (L5)"
-      Outcome.NoMrt(names)
+    def fits(ports: Boolean, units: Boolean): Option[Boolean] =
+      Slot.all.map(s => res.fit(ii, s, all, Set.empty, ports, units)).foldLeft(Option(true)) {
+        case (Some(false), _) | (_, Some(false)) => Some(false)
+        case (Some(true), Some(true))            => Some(true)
+        case _                                   => None
+      }
+    fits(ports = true, units = true) match {
+      case Some(false) =>
+        def not(ports: Boolean, units: Boolean) = fits(ports, units).contains(false)
+        Left(
+          Outcome.NoMrt(
+            if (not(ports = false, units = false)) "slot"
+            else if (not(ports = true, units = false)) "slot + write-back port (L5)"
+            else if (not(ports = false, units = true)) "slot + unit (L9)"
+            else "slot + unit (L9) + write-back port (L5)"
+          )
+        )
+      case decided => Right(decided.isDefined)
     }
   }
 
@@ -265,7 +286,13 @@ object ModuloScheduler {
   /** Tries II = MII, MII + 1, ... up to the span of one iteration alone; the first II whose
     * placement gives a program that fits the registers and the instruction memory wins.
     */
-  def schedule(g: LoopGraph): Either[NoSchedule, ModuloSchedule] = {
+  def schedule(g: LoopGraph): Either[NoSchedule, ModuloSchedule] = search(g, place)
+
+  /** [[schedule]] with the placement given, so that a test can make it fail. */
+  private[modulo] def search(
+      g: LoopGraph,
+      placer: (LoopGraph, Int, Boolean) => Either[Outcome.NoTime, Map[Int, Int]]
+  ): Either[NoSchedule, ModuloSchedule] = {
     require(g.ids(Place.Each).nonEmpty, "the loop has no operation in its iterations")
     val mii = Mii.of(g)
     val one = oneIteration(g)
@@ -274,13 +301,14 @@ object ModuloScheduler {
     val attempts = Vector.newBuilder[Attempt]
     val capacity = g.machine.instructionMemoryBundles
     def attempt(ii: Int): Either[Outcome, ModuloSchedule] = {
-      val placed: Either[Outcome, Map[Int, Int]] = noTable(g, ii) match {
-        case Some(no) => Left(no)
-        case None     =>
+      val placed: Either[Outcome, Map[Int, Int]] = table(g, ii) match {
+        case Left(no)      => Left(no)
+        case Right(exists) =>
           // The look-ahead only changes a placement that fails without it, so it runs only then.
-          place(g, ii, lookahead = false).left.flatMap(_ => place(g, ii, lookahead = true)) match {
+          placer(g, ii, false).left.flatMap(_ => placer(g, ii, true)) match {
             case Left(_) if ii == iiMax => Right(one)
-            case other                  => other
+            case Left(no)               => Left(no.copy(tableExists = exists))
+            case Right(times)           => Right(times)
           }
       }
       placed.flatMap { times =>

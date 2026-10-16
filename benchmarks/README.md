@@ -52,7 +52,7 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 |---|---|
 | [RESULTS.md](RESULTS.md) | 条件と、2つの系列の結果の表（戦略を固定した系列は、この表だけに記録する）。方式ごとに cycles 最小の系列は cycles、演算数、下限、NOP率、書戻しポート・bank の利用率、レジスタ数、命令列の hash、選ばれた試行。戦略を固定した系列は、試行ごとの両方式の cycles と比、不成立の理由 |
 | `cases/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の命令列、入力宣言（入力値は `sampleInputs(kernel, 1)`）、期待値（出力と cycles）。`vliw-testcase/1`（[docs/TESTCASE.md](../docs/TESTCASE.md)） |
-| [MODULO.md](MODULO.md) | Modulo Scheduling（#68）の記録。比べる4つのループ（`saxpy8`、`fir4x8`、`matmul3` の行のループと累算のループ）の MII・II・II を上げた理由・cycles と、戦略を固定した系列の各行（vliw）との比。#68 の受入テストのループ（ほかの構成を含む）と、`saxpy(n)` の系列 |
+| [MODULO.md](MODULO.md) | Modulo Scheduling（#68）の記録。比べる4つのループ（`saxpy8`、`fir4x8`、`matmul3` の行のループと累算のループ）の MII・II・II を上げた理由・cycles と、戦略を固定した系列の各行（vliw）との比。6つのループ × 3構成と `regs3` の値（#68 の受入テストのループを含む）と、`saxpy(n)` の系列 |
 | `cases/<kernel>_<loop>_modulo.json`、`metrics/<kernel>_<loop>_modulo.json` | Modulo Scheduling したループの命令列・入力・期待値と、実行の記録。`metrics` の `ii` は、トレースで確かめた II |
 | `metrics/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の、参照モデルでの実行の記録。`vliw-metrics/1`（[docs/METRICS.md](../docs/METRICS.md)）。machine の revision と hash、命令列の hash を含む |
 

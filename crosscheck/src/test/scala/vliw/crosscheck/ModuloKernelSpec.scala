@@ -7,8 +7,10 @@ import org.scalatest.funsuite.AnyFunSuite
 import vliw.compiler.{KernelCompiler, Verifier}
 import vliw.compiler.dsl._
 import vliw.compiler.loop._
-import vliw.compiler.loop.Loop.{Bin, Read, Write}
+import vliw.compiler.loop.Loop.{Bin, Final, Read, StateRef, Update, Write}
 import vliw.compiler.modulo.{MapEntry, ModuloCompiled, ModuloCompiler, ModuloScheduler}
+import vliw.compiler.regalloc.RegisterAllocator
+import vliw.compiler.schedule.ListScheduler
 import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
@@ -208,6 +210,33 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
           Write(Address(20, 1), Read(Address(0, 1)))
         ),
         Vector()
+      ),
+      Loop(
+        6,
+        Vector(),
+        Vector(Write(Address(2, 1), Bin(Op.Add, Read(Address(0, 1)), Read(Address(10, 0))))),
+        Vector()
+      ),
+      Loop(
+        6,
+        Vector(Read(Address(0, 0))),
+        Vector(
+          Update(
+            0,
+            Bin(Op.Mul, StateRef(0), Bin(Op.Mul, Read(Address(1, 1)), Read(Address(40, 1))))
+          ),
+          Write(Address(20, 1), Bin(Op.Mul, StateRef(0), Read(Address(10, 0))))
+        ),
+        Vector(Final(30, 0))
+      ),
+      Loop(
+        6,
+        Vector(Read(Address(0, 0))),
+        Vector(
+          Update(0, Bin(Op.Mul, StateRef(0), Read(Address(1, 1)))),
+          Write(Address(20, 1), Bin(Op.Add, StateRef(0), Read(Address(10, 0))))
+        ),
+        Vector(Final(30, 0))
       )
     )
     val rng = new Random(7)
@@ -240,6 +269,7 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
     def edit(trace: Vector[ujson.Value], row: Int)(f: ujson.Value => Unit) = {
       val copy = trace.map(r => ujson.read(ujson.write(r)))
       f(copy(row))
+      assert(copy(row) != trace(row), s"row $row unchanged")
       copy
     }
     val (p, pt) = setup(LoopBenchmarks.product(4))
@@ -315,5 +345,116 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
       )
     )
     assert(ModuloTrace.check(selfRead, d.result.map, dt, 3).isLeft)
+    // Another operation in a mapped slot, and an operation in a slot that the table leaves empty.
+    fails(
+      d,
+      d.result.map,
+      edit(dt, row)(r => r("issue")("compute") = r("issue")("compute").str.replace("mul ", "add ")),
+      3
+    )
+    val idle =
+      dt.indices.find(r => !dt(r)("issue").isNull && dt(r)("issue")("memory").str == "nop").get
+    fails(d, d.result.map, edit(dt, idle)(r => r("issue")("memory") = "st [0], r1"), 3)
+    // A commit on the other port.
+    val commitRow =
+      dt.indices.find(r => dt(r)("rf_commit").arr.exists(_("port").str == "memory")).get
+    fails(
+      d,
+      d.result.map,
+      edit(dt, commitRow) { r =>
+        r("rf_commit") = ujson.Arr.from(r("rf_commit").arr.map { c =>
+          val x = ujson.read(ujson.write(c)); x("port") = "compute"; x
+        })
+      },
+      3
+    )
+    // The second source of the ADD of iteration 1 naming the register of another producer (the a(i)
+    // operand of the MUL of iteration 1), and the source of the ST.
+    val foreign = dt(row)("issue")("compute").str match {
+      case s"mul r$_, r$a, r$_" => a
+      case o                    => fail(o)
+    }
+    val addRow = d.result.map
+      .find(e =>
+        d.graph.nodes(e.instance.node).mnemonic == "ADD" && e.instance.iteration.contains(1)
+      )
+      .get
+      .bundle
+    fails(
+      d,
+      d.result.map,
+      edit(dt, addRow) { r =>
+        r("issue")("compute") = r("issue")("compute").str match {
+          case s"add r$x, r$a, r$_" => s"add r$x, r$a, r$foreign"
+          case o                    => o
+        }
+      },
+      3
+    )
+    val stRow = d.result.map.find(e => d.graph.nodes(e.instance.node).mnemonic == "ST").get.bundle
+    fails(
+      d,
+      d.result.map,
+      edit(dt, stRow) { r =>
+        r("issue")("memory") = r("issue")("memory").str match {
+          case s"st [$a], r$_" => s"st [$a], r$foreign"
+          case o               => o
+        }
+      },
+      3
+    )
+    // One ST address one word off: product(4)'s ST after the loop writes [4].
+    fails(
+      p,
+      p.result.map,
+      edit(pt, 9)(r => r("issue")("memory") = r("issue")("memory").str.replace("[4]", "[5]")),
+      2
+    )
+  }
+
+  /** Runs `bundles` of `c`'s loop on the reference model and returns the trace. */
+  private def traceOfBundles(c: ModuloCompiled, bundles: Vector[Bundle]) = {
+    val words = KernelCompiler.checked(machine, c.layout, bundles).fold(e => fail(e), identity)
+    val in = KernelCompiler.sampleInputs(c.kernel.unroll, 1)
+    ReferenceModel
+      .run(machine, words, c.layout.inputs(in).fold(e => fail(e), identity))
+      .fold(v => fail(v.toString), identity)
+      .trace
+      .cycles
+      .map(_.toJson: ujson.Value)
+  }
+
+  test("the trace check rejects correct code whose iterations do not start II apart") {
+    // dot(4) list-scheduled from its unrolled DAG: correct, and its table matches the trace, but the
+    // MUL and ADD of consecutive iterations are 2, 3 and 3, 1 cycles apart.
+    val d = ModuloCompiler.compile(LoopBenchmarks.dot(4), machine).fold(e => fail(e), identity)
+    val ex = d.graph.expanded
+    val s = ListScheduler.schedule(ex.dag)
+    val a = RegisterAllocator.allocate(s).fold(e => fail(e), identity)
+    val table = ex.origin.indices.map { i =>
+      MapEntry(
+        s.issue(i),
+        machine.operation(d.graph.nodes(ex.origin(i).node).mnemonic).slot,
+        ex.origin(i)
+      )
+    }.toVector
+    val trace = traceOfBundles(d, a.bundles)
+    for (ii <- Seq(2, 3)) {
+      val r = ModuloTrace.check(d.graph, table, trace, ii)
+      assert(r.left.exists(_.exists(_.contains("cycles apart"))), r)
+    }
+    // saxpy8 with its last ST one cycle later (a bundle inserted before the HALT): only that
+    // node's gaps are uneven.
+    val sx = ModuloCompiler.compile(LoopBenchmarks.saxpy(8), machine).fold(e => fail(e), identity)
+    val st =
+      sx.result.map.filter(e => sx.graph.nodes(e.instance.node).mnemonic == "ST").maxBy(_.bundle)
+    val b = st.bundle
+    assert(sx.bundles(b + 1).compute == ComputeOp.Halt)
+    val moved = sx.bundles
+      .updated(b, sx.bundles(b).copy(memory = MemoryOp.Nop))
+      .patch(b + 1, Seq(Bundle(ComputeOp.Nop, sx.bundles(b).memory)), 0)
+    val map2 = sx.result.map.map(e => if (e == st) e.copy(bundle = b + 1) else e)
+    val r = ModuloTrace.check(sx.graph, map2, traceOfBundles(sx, moved), sx.ii)
+    assert(r.left.exists(_.exists(_.contains("cycles apart"))), r)
   }
 }
