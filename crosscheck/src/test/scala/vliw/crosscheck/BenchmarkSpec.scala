@@ -160,7 +160,7 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   }
 
   test("the single-issue baseline issues one operation per bundle and is never faster") {
-    records.groupBy(_.kernel).foreach { case (k, rs) =>
+    registers.flatMap(_.records).groupBy(r => (r.kernel, r.suffix)).foreach { case ((k, _), rs) =>
       val vliw = rs.find(_.mode == BenchmarkRecords.Mode.Vliw).get
       val single = rs.find(_.mode == BenchmarkRecords.Mode.SingleIssue).get
       assert(

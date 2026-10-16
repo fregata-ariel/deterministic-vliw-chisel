@@ -63,11 +63,10 @@ object NoFit {
   }
 
   /** Under the register limit, the scheduler reaches a point where no remaining operation fits, and
-    * no copy of a LD (rematerialization) gets it further.
+    * no copy of a LD (rematerialization, when it is on) gets it further.
     */
   case object Stuck extends NoFit {
-    override def toString: String =
-      "no remaining operation fits under the register limit, even with LDs issued again"
+    override def toString: String = "no remaining operation fits under the register limit"
   }
 }
 
@@ -154,7 +153,7 @@ object RegisterAllocator {
     done
       .minByOption(a => (a.schedule.cycles, a.dag.loads))
       .toRight(
-        s"no schedule fits ${dag.machine.registerCount} registers (tried ${attempts(dag, priorities, singleIssue).size} attempts, issuing LDs again when stuck; spilling is not supported)"
+        s"no schedule fits ${dag.machine.registerCount} registers (tried ${attempts(dag, priorities, singleIssue).size} attempts${Rematerialization.describe(remat)}; spilling is not supported)"
       )
   }
 }

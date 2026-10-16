@@ -83,6 +83,21 @@ class RematerializationSpec extends AnyFunSuite {
     }
   }
 
+  test("a ST that reads a moved LD reads the copy") {
+    // [5] = [0]; [6] = [0] * [1]: the LD of [0] is read by the ST of [5] and by the MUL.
+    val d = Dag.build(machine, Vector(Write(5, Read(0)), Write(6, Bin(Op.Mul, Read(0), Read(1)))))
+    val ld0 = d.nodes.indexOf(Node.Load(0))
+    val st = d.nodes.indexOf(Node.Store(5, ld0))
+    assert(d.readers(ld0).size == 2 && d.readers(ld0).contains(st))
+    val s = d.split(ld0, Set(st))
+    assert(s.nodes(st) == Node.Load(0) && s.nodes(st + 1) == Node.Store(5, st))
+    s.nodes.zipWithIndex.foreach {
+      case (Node.Compute(_, a, b), i) => assert(operandsOf(s, i) == Set(a, b))
+      case (Node.Store(_, v), i)      => assert(operandsOf(s, i) == Set(v))
+      case (_: Node.Load, i)          => assert(operandsOf(s, i).isEmpty)
+    }
+  }
+
   test("a LD of a word that a store writes is never copied") {
     // [0] = [1] + [1]; [3] = [0] * [2]; [4] = [0] + [2]: the LD of [0] after its store is shared.
     val d = Dag.build(
@@ -103,7 +118,42 @@ class RematerializationSpec extends AnyFunSuite {
     assertThrows[IllegalArgumentException](d.split(ld2, d.readers(ld2).toSet))
   }
 
-  test("candidates are placed LDs with readers placed and not placed; the furthest is chosen") {
+  test("of two candidates, the one whose next use is furthest is chosen; ties to the lower id") {
+    def stopped(d: Dag, placed: Set[Int]) =
+      ListScheduler.Stopped(d.nodes.indices.map(i => if (placed(i)) 0 else -1).toVector, 0, true)
+    def mul(a: Int, b: Int) = Bin(Op.Mul, Read(a), Read(b))
+    // [10] = [0]*[1]; [11] = [2]*[3]; [12] = [0]*[4] + [5]; [13] = [2]*[5], with the LDs and the
+    // first MULs of [0] and [2] placed. [0]'s next use, the MUL before an ADD, is higher (critical
+    // path) and earlier (program order) than [2]'s: [2] is the furthest by both.
+    val d = Dag.build(
+      machine,
+      Vector(
+        Write(10, mul(0, 1)),
+        Write(11, mul(2, 3)),
+        Write(12, Bin(Op.Add, mul(0, 4), Read(5))),
+        Write(13, mul(2, 5))
+      )
+    )
+    val (ld0, ld2) = (d.nodes.indexOf(Node.Load(0)), d.nodes.indexOf(Node.Load(2)))
+    val loads = d.nodes.indices.filter(d.nodes(_).isInstanceOf[Node.Load]).toSet
+    val at = stopped(d, loads + d.readers(ld0).head + d.readers(ld2).head)
+    assert(Rematerialization.candidates(d, at) == Vector(ld0, ld2))
+    assert(d.height(d.readers(ld0).last) > d.height(d.readers(ld2).last))
+    Priority.all.foreach(p => assert(Rematerialization.choose(d, p, at) == Some(ld2), p))
+    // Without the ADD the next uses tie on height: the lower id wins under critical-path.
+    val t = Dag.build(
+      machine,
+      Vector(Write(10, mul(0, 1)), Write(11, mul(2, 3)), Write(12, mul(0, 4)), Write(13, mul(2, 5)))
+    )
+    val (t0, t2) = (t.nodes.indexOf(Node.Load(0)), t.nodes.indexOf(Node.Load(2)))
+    val tLoads = t.nodes.indices.filter(t.nodes(_).isInstanceOf[Node.Load]).toSet
+    val tAt = stopped(t, tLoads + t.readers(t0).head + t.readers(t2).head)
+    assert(t.height(t.readers(t0).last) == t.height(t.readers(t2).last))
+    assert(Rematerialization.choose(t, Priority.CriticalPath, tAt) == Some(t0))
+    assert(Rematerialization.choose(t, Priority.ProgramOrder, tAt) == Some(t2))
+  }
+
+  test("candidates are placed LDs with readers placed and not placed") {
     // [5] = [0]*[1] + [0]*[2] + [0]*[3]: the LD of [0] has three readers.
     val d = Dag.build(
       machine,
@@ -173,7 +223,8 @@ class RematerializationSpec extends AnyFunSuite {
       (r, k.name) -> (c.cycles, c.allocated.dag.loads)
     }
     // Recorded so that changes show up (docs/COMPILER.md, benchmarks/REGISTERS.md). matmul3 takes
-    // fewer cycles with 12 registers than with 16: at 16 its attempts fit without copies.
+    // fewer cycles with 12 registers than with 16: program-order, reserve 0 is stuck at 12 and
+    // copies (55, LD 37), but fits at 16 without copies (57), so it makes none there.
     assert(
       got.toMap == Map(
         (8, "saxpy8") -> (28, 17),
@@ -204,6 +255,51 @@ class RematerializationSpec extends AnyFunSuite {
         ("ii_units.json", "fir4x8") -> (100, 15),
         ("ii_units.json", "matmul3") -> (88, 18)
       )
+    )
+  }
+
+  test("cycles and LDs at 8 and 12 registers on slow_units and ii_units") {
+    val got = for {
+      f <- Seq("slow_units.json", "ii_units.json"); r <- Seq(8, 12); k <- Benchmarks.all
+    } yield {
+      val c =
+        KernelCompiler.compile(k, withRegisters(machineFile(f), r)).fold(e => fail(e), identity)
+      (f, r, k.name) -> (c.cycles, c.allocated.dag.loads)
+    }
+    // A slot left empty only by an operation's II (ii_units) is not a block of the register limit.
+    assert(
+      got.toMap == Map(
+        ("slow_units.json", 8, "saxpy8") -> (31, 17),
+        ("slow_units.json", 8, "fir4x8") -> (82, 56),
+        ("slow_units.json", 8, "matmul3") -> (64, 45),
+        ("slow_units.json", 12, "saxpy8") -> (28, 17),
+        ("slow_units.json", 12, "fir4x8") -> (72, 45),
+        ("slow_units.json", 12, "matmul3") -> (58, 37),
+        ("ii_units.json", 8, "saxpy8") -> (60, 17),
+        ("ii_units.json", 8, "fir4x8") -> (100, 29),
+        ("ii_units.json", 8, "matmul3") -> (89, 27),
+        ("ii_units.json", 12, "saxpy8") -> (53, 17),
+        ("ii_units.json", 12, "fir4x8") -> (100, 15),
+        ("ii_units.json", 12, "matmul3") -> (88, 24)
+      )
+    )
+  }
+
+  test("copying at every block from the start (Remat.Always), the values ADR-0016 cites") {
+    val dag = prepared(Benchmarks.matmul(3), machine).dag
+    def cycles(r: Either[_, Allocated]) = r.map(a => (a.schedule.cycles, a.dag.loads))
+    // matmul3 at 16 registers: 54 cycles chosen (56 when only stuck attempts copy), but critical-
+    // path with load reserve 1 goes from 56 to 63, and the single-issue choice from 75 to 77.
+    assert(
+      cycles(RegisterAllocator.scheduleAndAllocate(dag, remat = Remat.Always)) == Right((54, 35))
+    )
+    val cr1 = Attempt(Priority.CriticalPath, Some(ListScheduler.Limit(16, 1)))
+    assert(cycles(RegisterAllocator.run(dag, cr1)) == Right((56, 18)))
+    assert(RegisterAllocator.run(dag, cr1, Remat.Always).map(_.schedule.cycles) == Right(63))
+    assert(
+      RegisterAllocator
+        .scheduleAndAllocate(dag, Priority.all, singleIssue = true, Remat.Always)
+        .map(_.schedule.cycles) == Right(77)
     )
   }
 

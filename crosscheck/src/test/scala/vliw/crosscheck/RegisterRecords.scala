@@ -192,7 +192,7 @@ $conditions
 | 差 | レジスタ数だけ。ほかは既定の構成と同じ（`BenchmarkSpec` が確かめる） |
 | カーネル・配置・入力・方式 | [RESULTS.md](RESULTS.md) と同じ |
 | コンパイラの試行 | 優先度 ×（上限なし、上限 = それぞれのレジスタ数で load reserve 0〜レジスタ数/2）。上限付きの試行が、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数の LD を複製する（rematerialization、[ADR-0016](../docs/DECISIONS.md#adr-0016-rematerialization-は行き詰まる試行でだけ書込みのない語の-ld-をレジスタの詰まりで複製する)、#70） |
-| 実行 | 参照モデル。RTL でも同じ cycles と出力になることを `BenchmarkSpec` が確かめる |
+| 実行 | 参照モデル。RTL でも同じ cycles と出力になることを `BenchmarkSpec` が確かめる（RTL での確認は、方式ごとに cycles 最小の系列の記録だけ） |
 
 ${base.config.registers} 本の値は [RESULTS.md](RESULTS.md) の記録と同じである。
 

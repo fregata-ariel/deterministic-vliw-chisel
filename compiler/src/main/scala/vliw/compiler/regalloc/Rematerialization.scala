@@ -19,12 +19,20 @@ object Remat {
   case object Always extends Remat("always")
 }
 
-/** Rematerialization (#70; docs/COMPILER.md, "register allocation"): wherever the register limit
+/** Rematerialization (#70; docs/COMPILER.md, "register allocation"): where the register limit
   * blocks a slot, a LD of a word that no store writes gets a copy for its readers not placed yet;
   * the original's register is then free after its last placed reader. Each copy changes the DAG,
-  * and the attempt starts again on the new one.
+  * and the attempt starts again on the new one, looking for blocks from the cycle it stopped at
+  * (earlier blocks of the new schedule are passed, even with candidates).
   */
 object Rematerialization {
+
+  /** For messages: how `when` issues LDs again ("" when it does not). */
+  def describe(when: Remat): String = when match {
+    case Remat.Never     => ""
+    case Remat.WhenStuck => ", issuing LDs again when an attempt gets stuck"
+    case Remat.Always    => ", issuing LDs again at every block"
+  }
 
   /** The LDs that a copy can free at `at`: placed, of a word that no store writes, with readers
     * both placed and not placed.
