@@ -12,6 +12,8 @@
 
 `machine_hash` は [MACHINE.md](MACHINE.md) の hash。照合する2つのトレースは、ヘッダが一致しなければならない。
 
+`isa` は machine description の `isa_version`（`mvp-0` または `mvp-1`）。形式はどちらの版でも同じである。mvp-1 の MAC は、`issue.compute` に `mac rd, rs1, rs2, rs3` と書き、結果は `port` が `compute` の `rf_commit` に入る（[ISA.md](ISA.md)「mvp-1: MAC」）。
+
 ## 本体
 
 ```json
