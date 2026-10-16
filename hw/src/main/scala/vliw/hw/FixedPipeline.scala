@@ -37,8 +37,8 @@ final case class FixedParams(
   def registersOf(port: Slot): Int =
     storage.flatten.filter(_.port == port).map(_.register).distinct.size
 
-  /** The compute operations the plan uses. The [[ComputeSlot]] holds all three units; the kind
-    * decode never selects the others.
+  /** The compute operations the plan uses. The [[ComputeSlot]] holds all three units (and MAC on an
+    * mvp-1 machine, which no plan uses); the kind decode never selects the others.
     */
   val units: Seq[String] =
     FixedPlan.ComputeMnemonics.filter(m => plan.ops.exists(_.mnemonic == m))
@@ -165,6 +165,8 @@ class FixedPipeline(p: FixedParams) extends Module {
   )
   compute.io.a := operand(computes.map(c => c.issue -> c.a))
   compute.io.b := operand(computes.map(c => c.issue -> c.b))
+  // MAC's rs3 on an mvp-1 machine: tied off, plans have no MAC (FixedPlan.ComputeMnemonics).
+  compute.io.c.foreach(_ := 0.U)
 
   // Memory slot: one LD or ST per cycle, at a constant address of the layout.
   private val loads = ops.collect { case l: FixedOp.Load => l }

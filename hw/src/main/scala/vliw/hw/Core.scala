@@ -41,7 +41,7 @@ class ObserveIO(val p: CoreParams) extends Bundle {
 }
 
 /** Signals of rule violations in this cycle; #28 turns them into assertions. */
-class ViolationIO extends Bundle {
+class ViolationIO(val p: CoreParams) extends Bundle {
   val encoding = Bool() // L1
   val programShape = Bool() // L2
   val inFlightRead = Bool() // L3
@@ -49,6 +49,9 @@ class ViolationIO extends Bundle {
   val writebackPort = Bool() // L5
   val haltCompletion = Bool() // L6
   val addressRange = Bool() // L7
+
+  /** L11, on mvp-1 only: MAC and ST in one bundle read 4 registers (an mvp-0 bundle reads 3). */
+  val readPorts = Option.when(p.hasMac)(Bool())
 }
 
 class CoreIO(val p: CoreParams) extends Bundle {
@@ -58,21 +61,26 @@ class CoreIO(val p: CoreParams) extends Bundle {
   /** High for exactly one cycle, the cycle after HALT (h+1). */
   val done = Output(Bool())
   val observe = Output(new ObserveIO(p))
-  val violation = Output(new ViolationIO)
+  val violation = Output(new ViolationIO(p))
 }
 
-/** The mvp-0 core: one compute and one memory slot per bundle, fixed latencies, no stalls.
+/** The core of ISA mvp-0 and mvp-1: one compute and one memory slot per bundle, fixed latencies, no
+  * stalls.
   *
   * Start is accepted at E_0 and bundle s executes in cycle s (PC = s; there are no branches). HALT
   * issued in cycle h clears busy and raises done for one cycle at E_(h+1), so the run takes h+1
-  * cycles (docs/ISA.md, "開始・終了").
+  * cycles (docs/ISA.md, "開始・終了"). On mvp-1 the compute slot also issues MAC, which reads rs3
+  * through read port 2, the port of the ST source (ADR-0018).
   */
 class Core(p: CoreParams) extends Module {
   val io = IO(new CoreIO(p))
 
   private val imem = Mem(p.imemBundles, UInt(64.W))
   private val rf = Module(new RegisterFile(p.registerCount))
-  private val reservations = Module(new WriteReservations(p.registerCount, p.maxLatency, 5))
+
+  /** Queried registers: rs1, rs2, ST source, compute rd, LD rd, and MAC's rs3 on mvp-1. */
+  private val reservations =
+    Module(new WriteReservations(p.registerCount, p.maxLatency, if (p.hasMac) 6 else 5))
   private val decoder = Module(new Decoder(p))
   private val compute = Module(new ComputeSlot(p))
   private val memory = Module(new MemorySlot(p))
@@ -89,16 +97,22 @@ class Core(p: CoreParams) extends Module {
   private val d = decoder.io.out
   private val issue = inProgram && !d.illegal
 
-  // Register reads in the issue cycle: rs1, rs2, ST source; the host reads through port 0.
+  // Register reads in the issue cycle: rs1, rs2, and on port 2 the ST source, or MAC's rs3 on
+  // mvp-1 (a bundle with both breaks L11); the host reads through port 0.
+  private val isMac =
+    Option.when(p.hasMac)(d.compute.valid && d.compute.bits.kind === ComputeKind.Mac)
   rf.io.read(0).addr := Mux(busy, d.rs1, io.host.rfReadAddr)
   rf.io.read(1).addr := d.rs2
-  rf.io.read(2).addr := d.memory.bits.reg
+  rf.io.read(2).addr := d.rs3.zip(isMac).fold(d.memory.bits.reg) { case (rs3, mac) =>
+    Mux(mac, rs3, d.memory.bits.reg)
+  }
   io.host.rfReadData := rf.io.read(0).data
 
   compute.io.op.valid := issue && d.compute.valid
   compute.io.op.bits := d.compute.bits
   compute.io.a := rf.io.read(0).data
   compute.io.b := rf.io.read(1).data
+  compute.io.c.foreach(_ := rf.io.read(2).data)
 
   memory.io.op.valid := issue && d.memory.valid
   memory.io.op.bits := d.memory.bits
@@ -126,11 +140,7 @@ class Core(p: CoreParams) extends Module {
   reservations.io.claim(1).bits.reg := d.memory.bits.reg
   reservations.io.claim(1).bits.latency := p.latency("LD").U
   reservations.io.query := VecInit(
-    d.rs1,
-    d.rs2,
-    d.memory.bits.reg,
-    d.compute.bits.rd,
-    d.memory.bits.reg
+    Seq(d.rs1, d.rs2, d.memory.bits.reg, d.compute.bits.rd, d.memory.bits.reg) ++ d.rs3
   )
 
   // Control.
@@ -162,9 +172,13 @@ class Core(p: CoreParams) extends Module {
   private val inFlight = reservations.io.inFlight
   private val readsRs = issue && d.compute.valid
   private val readsSt = issue && d.memory.valid && d.memory.bits.kind === MemoryKind.St
+  private val readsRs3 = isMac.map(issue && _)
   io.violation.encoding := inProgram && d.illegal
   io.violation.programShape := busy && !inProgram || (halt && pc =/= length - 1.U)
-  io.violation.inFlightRead := (readsRs && (inFlight(0) || inFlight(1))) || (readsSt && inFlight(2))
+  io.violation.inFlightRead := (
+    Seq(readsRs && (inFlight(0) || inFlight(1)), readsSt && inFlight(2)) ++
+      readsRs3.map(_ && inFlight(5))
+  ).reduce(_ || _)
   io.violation.overlappingWrites := (compute.io.op.valid && inFlight(3)) || (isLoad && inFlight(
     4
   )) ||
@@ -172,10 +186,12 @@ class Core(p: CoreParams) extends Module {
   io.violation.writebackPort := compute.io.conflict || memory.io.conflict
   io.violation.haltCompletion := halt && (reservations.io.anyInFlight || compute.io.pending || memory.io.pending)
   io.violation.addressRange := issue && memory.io.outOfRange
+  // MAC reads 3 registers and ST 1, with 3 read ports (read_ports 4 is outside CoreParams).
+  io.violation.readPorts.zip(readsRs3).foreach { case (l11, mac) => l11 := mac && readsSt }
 
   // Assertions (simulation): a legal program never fires them; nothing stalls to hide a violation.
   private val v = io.violation
-  Seq(
+  private val rules = Seq(
     v.encoding -> "L1 (encoding)",
     v.programShape -> "L2 (program shape)",
     v.inFlightRead -> "L3 (read of a register being written)",
@@ -183,7 +199,8 @@ class Core(p: CoreParams) extends Module {
     v.writebackPort -> "L5 (write-back port conflict)",
     v.haltCompletion -> "L6 (operation pending at HALT)",
     v.addressRange -> "L7 (scratchpad address out of range)"
-  ).foreach { case (violated, rule) =>
+  ) ++ v.readPorts.map(_ -> "L11 (more register reads than read ports)")
+  rules.foreach { case (violated, rule) =>
     assert(!violated, cf"$rule at pc $pc")
   }
   assert(

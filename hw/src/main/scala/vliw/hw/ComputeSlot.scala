@@ -61,8 +61,9 @@ class WritebackSchedule(regBits: Int, maxLatency: Int) extends Module {
   }
 }
 
+/** The compute operations. Mac exists only on ISA mvp-1 machines; on mvp-0 nothing decodes it. */
 object ComputeKind extends ChiselEnum {
-  val Add, Sub, Mul = Value
+  val Add, Sub, Mul, Mac = Value
 }
 
 /** Decoded compute operation (NOP and HALT are not operations of the slot). */
@@ -78,6 +79,9 @@ class ComputeSlotIO(val p: CoreParams) extends Bundle {
   val a = Input(UInt(32.W))
   val b = Input(UInt(32.W))
 
+  /** MAC's rs3, read in the issue cycle (ISA mvp-1 only). */
+  val c = Option.when(p.hasMac)(Input(UInt(32.W)))
+
   /** Latency of the issued operation, for the write reservations. */
   val latency = Output(UInt(log2Ceil(p.maxLatency + 1).W))
 
@@ -86,11 +90,15 @@ class ComputeSlotIO(val p: CoreParams) extends Bundle {
   val pending = Output(Bool())
 }
 
-/** Compute slot: ADD/SUB/MUL modulo 2^32 with the latencies of the machine description, II = 1.
+/** Compute slot: ADD/SUB/MUL, and MAC on ISA mvp-1, modulo 2^32 with the latencies of the machine
+  * description, II = 1.
   *
   * The result is computed in the issue cycle and carried by the write-back schedule until E_(s+L).
   * Functionally this equals an L-stage pipeline; synthesis may retime the multiplier into the
-  * schedule registers.
+  * schedule registers. MAC computes low32(a * b + c) from the values read in the issue cycle and
+  * commits through the same schedule, so it meets ADD/SUB/MUL on the write-back port as rule L5
+  * says. Its product is the same expression as MUL's; the slot issues one operation per cycle, so
+  * sharing the multiplier is invisible at II 1 (docs/ISA.md, "mvp-1: MAC").
   */
 class ComputeSlot(p: CoreParams) extends Module {
   val io = IO(new ComputeSlotIO(p))
@@ -103,14 +111,14 @@ class ComputeSlot(p: CoreParams) extends Module {
       ComputeKind.Add -> (io.a + io.b),
       ComputeKind.Sub -> (io.a - io.b),
       ComputeKind.Mul -> (io.a * io.b)(31, 0)
-    )
+    ) ++ io.c.map(c => ComputeKind.Mac -> ((io.a * io.b)(31, 0) + c))
   )
   io.latency := MuxLookup(kind, 1.U)(
     Seq(
       ComputeKind.Add -> p.latency("ADD").U,
       ComputeKind.Sub -> p.latency("SUB").U,
       ComputeKind.Mul -> p.latency("MUL").U
-    )
+    ) ++ p.macLatency.map(l => ComputeKind.Mac -> l.U)
   )
 
   schedule.io.issue.valid := io.op.valid

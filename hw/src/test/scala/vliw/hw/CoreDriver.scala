@@ -41,6 +41,7 @@ object CoreDriver {
           d.compute.bits.kind.peek().litValue match {
             case k if k == ComputeKind.Add.litValue => ComputeOp.Add(rd, a, b)
             case k if k == ComputeKind.Sub.litValue => ComputeOp.Sub(rd, a, b)
+            case k if k == ComputeKind.Mac.litValue => ComputeOp.Mac(rd, a, b, field(d.rs3.get))
             case _                                  => ComputeOp.Mul(rd, a, b)
           }
         }
@@ -54,14 +55,10 @@ object CoreDriver {
       vliw.isa.Bundle(compute, memory)
     }
 
-  def run(
-      dut: Core,
-      machine: MachineDescription,
-      words: Vector[Long],
-      inputs: Inputs,
-      readBack: Set[Int],
-      maxCycles: Int = 2000
-  ): CoreRun = {
+  /** Resets the core, loads the program and inputs through the host port, and has start accepted at
+    * E_0: the core is in cycle 0 of the run when this returns.
+    */
+  def start(dut: Core, machine: MachineDescription, words: Vector[Long], inputs: Inputs): Unit = {
     if (words.size > machine.instructionMemoryBundles)
       throw new LoadRejected(
         s"L2: ${words.size} bundles exceed the instruction memory (${machine.instructionMemoryBundles})"
@@ -102,7 +99,18 @@ object CoreDriver {
     host.start.poke(true.B)
     dut.clock.step()
     host.start.poke(false.B)
+  }
 
+  def run(
+      dut: Core,
+      machine: MachineDescription,
+      words: Vector[Long],
+      inputs: Inputs,
+      readBack: Set[Int],
+      maxCycles: Int = 2000
+  ): CoreRun = {
+    start(dut, machine, words, inputs)
+    val host = dut.io.host
     val lines = Vector.newBuilder[ujson.Obj]
     var violations = Set.empty[Rule]
     var visibleNow = (Vector.empty[ujson.Obj], Vector.empty[ujson.Obj]) // commits made at E_c
@@ -177,7 +185,7 @@ object CoreDriver {
 
   private def signalled(dut: Core): Set[Rule] = {
     val v = dut.io.violation
-    Seq(
+    (Seq(
       v.encoding -> Rule.Encoding,
       v.programShape -> Rule.ProgramShape,
       v.inFlightRead -> Rule.InFlightRead,
@@ -185,6 +193,8 @@ object CoreDriver {
       v.writebackPort -> Rule.WritebackPort,
       v.haltCompletion -> Rule.HaltCompletion,
       v.addressRange -> Rule.AddressRange
-    ).collect { case (signal, rule) if signal.peek().litToBoolean => rule }.toSet
+    ) ++ v.readPorts.map(_ -> Rule.ReadPorts)).collect {
+      case (signal, rule) if signal.peek().litToBoolean => rule
+    }.toSet
   }
 }

@@ -139,6 +139,18 @@ class FixedPipelineSpec extends AnyFunSuite with VliwChiselSim {
     assert(sv.contains("module FixedPipeline("))
     assert(!sv.contains("module Decoder("))
     assert(!sv.contains("module RegisterFile("))
+    // On an mvp-1 machine the ComputeSlot has MAC's third operand, tied off: plans have no MAC.
+    val mvp1 =
+      MachineDescription.load(MachineDescription.Mvp1Path).fold(es => fail(es.mkString), identity)
+    ChiselStage.emitSystemVerilog(
+      new FixedPipeline(FixedParams(mvp1, example(2, 2))),
+      firtoolOpts = Emit.FirtoolOptions
+    )
+    assert(
+      FixedPlan
+        .violations(mvp1, FixedPlan("mac", Vector(Load(0, 0), Compute(2, "MAC", 0, 0))))
+        .exists(_.contains("MAC is not a compute operation"))
+    )
   }
 
   private val expected = Seq(
