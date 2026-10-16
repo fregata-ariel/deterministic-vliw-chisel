@@ -90,7 +90,7 @@ halt
 {
   "metrics": "vliw-metrics/2",
   "isa": "mvp-1",
-  "machine": {"id": "vliw2-i32-sp2-mac", "revision": 1, "hash": "sha256:..."},
+  "machine": {"id": "vliw2-i32-sp2-mac", "revision": 1, "hash": "sha256:90f6a966..."},
   "cycles": 5,
   "issue": {
     "compute": {"operations": 2, "nop": 2, "nop_rate": 0.4},

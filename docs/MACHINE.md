@@ -1,6 +1,6 @@
 # Machine description（config/machine.json）
 
-状態：`schema_version` 1（ISA `mvp-0`）。ISA `mvp-1`（MAC）のための `schema_version` 2 は、下の「[mvp-1（schema_version 2）](#mvp-1schema_version-2)」で定める（#69、ADR-0018。ローダの実装は #77）。ローダは `vliw.isa.MachineDescription`（sbtプロジェクト `isa`）。
+状態：`schema_version` 1（ISA `mvp-0`）。ISA `mvp-1`（MAC）のための `schema_version` 2 は、下の「[mvp-1（schema_version 2）](#mvp-1schema_version-2)」で定める（#69、ADR-0018。ローダは #77 で実装した）。ローダは `vliw.isa.MachineDescription`（sbtプロジェクト `isa`）。
 
 RTL・命令列・verifier・参照モデルは、このファイルをローダ経由でのみ参照する。値の意味は [ISA.md](ISA.md) が定める。
 
@@ -100,7 +100,7 @@ machine description の契約は3段に分かれる。ローダが受け付け�
 | 段 | 判定する場所 | 範囲 |
 |---|---|---|
 | 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
-| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77 で実装する） |
+| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77） |
 | RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体。mvp-1 では、加えて `read_ports` が3（読出し4本の RTL は #57 で足す。ADR-0018） |
 | 固定パイプライン（#75） | `FixedParams`（`hw`） | RTL と同じ。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017） |
 

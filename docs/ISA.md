@@ -2,7 +2,7 @@
 
 状態：Phase 0で検証する仕様案。ISAバージョン`mvp-0`。実行意味論と合法性規則は #5 で確定。規則 L9・L10 は #35 で追加した（凍結した machine description では判定が変わらない。[ADR-0009](DECISIONS.md)）。
 
-ISAバージョン `mvp-1` は、`mvp-0` に MAC を1つ足した版である（#69、[ADR-0018](DECISIONS.md)。実装は #77）。差分は「[mvp-1: MAC](#mvp-1-mac)」の節（エンコードの節の後）にまとめ、この文書の mvp-0 の記述は変えない。規則 L11 は両方の版に共通で、mvp-0 では常に満たされる。
+ISAバージョン `mvp-1` は、`mvp-0` に MAC を1つ足した版である（#69、[ADR-0018](DECISIONS.md)。#77 で実装した）。差分は「[mvp-1: MAC](#mvp-1-mac)」の節（エンコードの節の後）にまとめ、この文書の mvp-0 の記述は変えない。規則 L11 は両方の版に共通で、mvp-0 では常に満たされる。
 
 ## サイクルの定義
 
@@ -147,7 +147,7 @@ NOPとHALTはopcode以外の全bitを0とする。HALTに対応するMemory word
 
 ## mvp-1: MAC
 
-`mvp-1` は、`mvp-0` に Compute スロットの演算 MAC を1つ足した版である（#69、[ADR-0018](DECISIONS.md)）。mvp-0 の命令語は、mvp-1 でも同じ意味になる。実装は #77 で行う。
+`mvp-1` は、`mvp-0` に Compute スロットの演算 MAC を1つ足した版である（#69、[ADR-0018](DECISIONS.md)）。mvp-0 の命令語は、mvp-1 でも同じ意味になる。#77 で実装した。
 
 ### 意味
 

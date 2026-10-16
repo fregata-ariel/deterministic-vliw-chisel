@@ -27,7 +27,7 @@
 |---|---|---|
 | Compute | `nop` | 操作なし |
 | Compute | `add rd, rs1, rs2` / `sub ...` / `mul ...` | [ISA.md](ISA.md) の演算 |
-| Compute | `mac rd, rs1, rs2, rs3` | mvp-1 だけ（[ISA.md](ISA.md)「mvp-1: MAC」。#77 で実装する） |
+| Compute | `mac rd, rs1, rs2, rs3` | mvp-1 だけ（[ISA.md](ISA.md)「mvp-1: MAC」。#77） |
 | Compute | `halt` | 終了。同じ行のMemoryスロットは `nop` でなければならない |
 | Memory | `nop` | 操作なし |
 | Memory | `ld rd, [addr]` | rd ← scratchpad[addr] |
