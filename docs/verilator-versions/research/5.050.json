@@ -1,0 +1,221 @@
+{
+ "version": "5.050",
+ "research": {
+  "version": "5.050",
+  "range": "v5.048..v5.050",
+  "findings": [
+   {
+    "category": "seed_random",
+    "claim": "The default runtime seed is now 1 instead of 0 ('use a system random value'), and +verilator+seed+0 is now accepted: it picks a seed from the clocks on each run, so it is not reproducible. Without +verilator+seed+, $urandom stays identical across runs and now gives exactly the same sequence as +verilator+seed+1. In 5.048 and earlier the no-seed run was also fixed, but it came from an unseeded lrand48() and differed from seed 1.",
+    "evidence": "Changes 5.050: \"* Change `+verilator+seed` to default to 1, and 0 to randomly select (#7325) (#7516). [Miguel]\" Commit 0e423a4b. In include/verilated.h:416 `int m_randSeed = 0;  // Random seed: 0=random` became `int m_randSeed = 1;`. In include/verilated.cpp:3595 the seed lower bound changed from 1 (v5.048:3263) to 0: `commandArgVlUint64(arg, \"+verilator+seed+\", u64, 0, ...)`, then `if (u64 == 0) u64 = pickRandomSeed();` (verilated.cpp:3602), where pickRandomSeed (verilated.cpp:3539) mixes steady_clock and system_clock through splitmix64. randSeedDefault64 (verilated.cpp:3677-3682) returns `(randSeed()<<32)^randSeed()` when randSeed()!=0, else lrand48(), so the default is now identical to an explicit seed of 1. The new test t_runflag_seed_zero.py requires seed 0 to give different seeds across runs. The goldens t_x_rand_stability*.out changed too, because VL_SCOPED_RAND_RESET_* (--x-initial unique with +verilator+rand+reset+2) seeds from randSeed()^scopeHash^salt.",
+    "impact": "The project always passes +verilator+seed+<n> with n>=1, so normal ChiselSim runs are unaffected by the new default. Only the 'no seed' catalog probe changes: it now equals seed 1. Any check that expects +verilator+seed+0 to be rejected ('must be an unsigned integer, greater than 0') will now see it accepted, with a random seed each run. x-initial values are unaffected because the default +verilator+rand+reset is 0 (all zeros).",
+    "expected_measurement": "Without a seed, the $urandom values are identical across runs and equal to the +verilator+seed+1 values. +verilator+seed+0 runs without error and its values differ between runs."
+   },
+   {
+    "category": "seed_random",
+    "claim": "There is no change in this range to the $urandom path (codegen VL_RANDOM_I, vl_rand64, VlRNG xoroshiro128** with splitmix64 seeding, vl_thread_rng). So seed-N output in 5.050 equals 5.048. It still differs from 5.020, because the generator changed before 5.048. Emulating the 5.050 code predicts, in the same print order as the 5.020 measurement: seed 1 -> b722072d fd8d9d77 24800459 5fa24450, seed 2 -> fded6676 d3189547 516497e1 1be5aac4, no seed -> same as seed 1. The 5.020 output had many 1 bits; the new values have no such bias.",
+    "evidence": "`git diff v5.048 v5.050 -- include/verilated.cpp` shows no hunks in vl_splitmix64, vl_rng_state_from_seed, vl_rng_result or vl_rng_compute_new_state (verilated.cpp:416-470), nor in vl_thread_rng (verilated.cpp:526-536). The diffs of verilated_types.h and verilated_funcs.h have no VlRNG or VL_RANDOM changes. src/V3AstNodeExpr.h:2176 still emits `VL_RANDOM_%nq()` for unseeded $urandom. The scratchpad emulator rng546.py reproduces the 5.020 measurement (old seed1 'fffffffc ff7fffff f77f7fff 8084023f' is the measured '8084023f f77f7fff ff7fffff fffffffc' reversed). Its 'new' model, which matches the 5.050 code, gives seed1 '5fa24450 24800459 fd8d9d77 b722072d' and seed2 '1be5aac4 516497e1 d3189547 fded6676' in generation order.",
+    "impact": "Register and memory random-init values (RANDOMIZE_REG_INIT/MEM_INIT through `RANDOM=$urandom`) for a given seed differ from 5.020. Results that depend on uninitialized state can change, but the same seed is still deterministic. Cycle counts of a correctly reset design should not change.",
+    "expected_measurement": "seed1: b722072d fd8d9d77 24800459 5fa24450. seed2: fded6676 d3189547 516497e1 1be5aac4. No seed: identical to seed1. All identical to v5.048 for explicit seeds."
+   },
+   {
+    "category": "thread_pool_exit",
+    "claim": "Nothing that could affect the exit race (issue 4931) changed in this range. src/V3ThreadPool.cpp/.h and src/V3Mutex.h are unchanged. The src/Verilator.cpp diff touches only process() pass ordering and the self-tests, not the exit or thread-pool shutdown path. No src change adds or removes ThreadPool, V3Mutex, std::thread or exit-related calls.",
+    "evidence": "`git diff --stat v5.048 v5.050 -- src/V3ThreadPool.cpp src/V3ThreadPool.h src/V3Mutex.h src/V3ThreadSafety.h` is empty. Grepping the src diff for ThreadPool|V3Mutex|std::thread|exit(|_exit finds nothing. The Verilator.cpp hunks are new V3Covergroup, V3AssertCommon::collectDefaultDisable, V3Force::forceAndAssignAll, removal of V3SplitAs/V3TSP, and V3InlineCFuncs moved out of the opt block.",
+    "impact": "The abort rate under '-j 0' and the zero-abort result with '--build-jobs 0 --verilate-jobs 1' should match v5.048.",
+    "expected_measurement": "Same thread-pool abort rate as v5.048. 0 aborts with --build-jobs 0 --verilate-jobs 1."
+   },
+   {
+    "category": "jobs_options",
+    "claim": "The semantics and defaults of -j, --build-jobs and --verilate-jobs are unchanged. All V3Options changes in this range are additions, so every svsim flag (--cc --exe --build -o --top-module --Mdir --assert --timescale -CFLAGS +define -F --build-jobs --verilate-jobs) stays valid.",
+    "evidence": "The src/V3Options.cpp/.h diff only adds -assert-unroll-limit (default 1024), -coverage-per-instance, -fbit-scan-loops, -fcase-decoder/-table/-tree (-fcase becomes an alias), -fico-change-detect, -finline-cfuncs, plus a --fourstate+hierarchical error. `int m_buildJobs = -1;  // main switch: --build-jobs, -j` appears only as unchanged context. The Changes 5.050 section has no option removals or renames.",
+    "impact": "No change is needed to the VliwChiselSim settings or svsim's default '-j 0'.",
+    "expected_measurement": "The svsim command line verilates without option errors."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "The public typedefs WData, WDataInP and WDataOutP were removed from verilated.h. WDataInP and WDataOutP are now opaque handle classes in verilated_types.h. svsim's simulation-driver.cpp uses none of them. The other runtime API it calls is unchanged (VerilatedContext::debug/traceEverOn/commandArgs/gotFinish/time/timeInc/coveragep, and the model's eval/eval_step/final/eventsPending/nextTimeSlot), so the harness should still compile with -std=c++17.",
+    "evidence": "Commit c99aa8ed \"Fix erroneous implicit conversions of VlWide (#7642)\": \"As part of this removed WData, which used to be an alias for EData.\" The verilated.h diff deletes `using WData = EData;`, `using WDataInP = const WData*;` and `using WDataOutP = WData*;`, and verilated_types.h:149 adds `class WDataOutP final`. Grepping /tmp/claude-0/-home-user-deterministic-vliw-chisel/72342c7d-9f6b-5534-9c62-327a6a17dee8/scratchpad/svsim/simulation-driver.cpp for WData finds nothing. The DPI changes (verilated_dpi.cpp/.h) only wrap pointers with WDataOutP::external. The new fstcpp headers only gate optional features on C++20/23.",
+    "impact": "No break expected for svsim. Only third-party C++ that uses WData* directly would fail to compile.",
+    "expected_measurement": "The C++ harness and generated model compile and link with -std=c++17."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "There is a new hard (non-suppressible) error, E_CONTASSINIT. It fires when a variable that has a declaration initializer, or that is written in an explicit initial block, is also the target of a continuous assignment.",
+    "evidence": "Changes 5.050: \"* Add error on mixed-initialization (#7352) (#7357).\" Commit cf9334f2. In src/V3Undriven.cpp:231-233: `const AstNode* const initp = nodep->hasUserInit() ? initStaticp() : initialp(); if (initp && contAssignp() && ...) initp->v3warn(E_CONTASSINIT, \"Continuous assignment to variable with initial value: \"`. E_CONTASSINIT sits before EC_FIRST_WARN in src/V3Error.h, so hardError() is true.",
+    "impact": "No hit is expected. svsim's testbench declares `reg [$bits(..)-1:0] port = '0;`, but writes these regs only from the DPI setBitsImpl_ functions (procedural) and reads them as DUT inputs. firtool emits `wire x = expr;` net assignments and RANDOMIZE initial blocks only for regs and memories driven from always blocks. A hit could not be silenced with -Wno.",
+    "expected_measurement": "No %Error-CONTASSINIT in any of the 53 ChiselSim builds."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "There is a new NOTREDOP diagnostic, an error by default but suppressible. It fires when a logical-not token is immediately followed by a reduction-operator token (e.g. `!|a`, `!&a`, `!^a`, `!~|a`).",
+    "evidence": "Changes 5.050: \"* Add NOTREDOP error on reduction and negation operators (#7417) (#7623) (#7624).\" Commit 94605012. In src/V3ParseImp.cpp:914-917: `if (m_tokenLastBison.token == '!' && (yylval.token == '&' || yylval.token == '|' || yylval.token == '^' || yylval.token == yP_NAND || yylval.token == yP_NOR || yylval.token == yP_XNOR)) ... v3warn(NOTREDOP, \"Logical not directly before reduction operator is illegal\"`. NOTREDOP is in pretendError() in src/V3Error.h:275.",
+    "impact": "No hit is expected. firtool uses `~` and `!(...)` forms, and the svsim defines expand to `!svsimTestbench.reset`, where `!` is followed by an identifier.",
+    "expected_measurement": "No %Error-NOTREDOP."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "MULTIDRIVEN now also warns, and is fatal by default, when a variable written in an `always_ff` block is also written by another process, including an `initial` block.",
+    "evidence": "Changes 5.050: \"* Fix false MULTIDRIVEN warning on always_ff variables (#7351) (#7621) (#7672).\" and \"* Fix MULTIDRIVEN in generates (#7709).\" Commits 8ae0e481, 55d78b22 and 7bd41bfb. src/V3Undriven.cpp:573 adds \"Variable written to in always_ff also written by other process (IEEE 1800-2023 9.2.2.4)\" plus \"Variable also written to in always_ff\". The check is gated on `nodep->keyword() == VAlwaysKwd::ALWAYS_FF`. The new test t_lint_always_ff_multidriven_bad.v flags `initial a = 1'b0; always_ff ... a <= 1'b1;`.",
+    "impact": "RANDOMIZE_REG_INIT initial blocks would trigger this if registers were in always_ff, but firtool emits `always @(posedge clock)` and svsim's testbench uses `always @(simulationState)`. No hit is expected.",
+    "expected_measurement": "No %Warning-MULTIDRIVEN. Builds stay warning-free as in 5.020."
+   },
+   {
+    "category": "semantics",
+    "claim": "Non-blocking assignments in initial blocks are now real NBAs, scheduled through a new initial-NBA trigger. Before, they ran as blocking assignments with an INITIALDLY warning. A new FINALDLY error covers `<=` inside final blocks.",
+    "evidence": "Changes 5.050: \"* Support NBAs in initial blocks (#7754). [Igor Zaworski, Antmicro Ltd.]\", \"* Support NBAs in initial blocks with delay/event controls (#7566) (#7600).\" and \"* Add FINALDLY error (#7754).\" Commit e269b914 removes `nodep->v3warn(INITIALDLY, \"Non-blocking assignment '<=' in initial/final block ... This will be executed as a blocking assignment '='!\")` and adds src/V3Active.cpp:364 `nodep->v3warn(FINALDLY, \"Non-blocking assignment '<=' in final block\")`, plus VEdgeType::ET_INITIAL_NBA in V3Delayed.",
+    "impact": "None expected. INITIALDLY was on by default, and the 5.020 builds produced no %Warning, so the generated SV (firtool RANDOMIZE initial blocks, svsim's `initial simulationState = RUN;`) has no NBAs in initial blocks. svsim's final block only calls simulation_final() through DPI.",
+    "expected_measurement": "No FINALDLY or INITIALDLY diagnostics. Cycle counts unchanged."
+   },
+   {
+    "category": "semantics",
+    "claim": "For multi-cycle concurrent assertions, a `disable iff (cond)` whose condition is held continuously true now suppresses attempts and failures. Before, the edge-counter-based disable could miss a level held high, so a multi-cycle property could fail or cover while disabled.",
+    "evidence": "Changes 5.050: \"* Fix disable iff ignored when its condition is held continuously true (#7841). [Yilou Wang]\" Commit 38533013. In src/V3AssertNfa.cpp:1986-1997: \"The edge counter misses a continuously-true disable, so gate on the current level value too.\" It ANDs terminalActivep and rejectBasep with !disable. Related fix in the same file: \"* Fix not failing assertion when RHS of a range window rejects once (#7773).\"",
+    "impact": "This only matters if the design uses chisel3.ltl AssertProperty/CoverProperty (the Temporal layer, emitted as `assert property (@(posedge clock) disable iff (reset) ...)`) with multi-cycle sequences. Immediate chisel3.assert (if/else $fatal using ASSERT_VERBOSE_COND/STOP_COND) is unaffected. The likely effect is fewer spurious failures while reset is held.",
+    "expected_measurement": "No change unless the design has multi-cycle SVA. If it does, there are no assertion failures during held reset."
+   },
+   {
+    "category": "performance",
+    "claim": "Runtime assertOn() checks are combined and hoisted out of enclosing ifs, which can speed up assertion-heavy designs built with --assert.",
+    "evidence": "Changes 5.050: \"* Optimize runtime assertOn() checks (#7707). [Geza Lore, Testorrent USA, Inc.]\" Commit 41811d43: \"Combine consecutive assertOn() checks into one, and hoist past enclosing 'if' statements if possible ... can be worth 10% performance on some assertion heavy designs\". A follow-up fixed a verilation hang: b973b1df \"Fix hang in assertion optimization (#7707 repair)\" at src/V3Assert.cpp:702.",
+    "impact": "The project builds with --assert and Chisel asserts, so simulation runtime may improve slightly. The hang fix is already included in 5.050.",
+    "expected_measurement": "Simulation runtime equal to or slightly faster than 5.048. No verilation hangs."
+   },
+   {
+    "category": "performance",
+    "claim": "The module inlining heuristic was rewritten, and generated-C++ function inlining now prunes dead callees. Upstream reports less generated C++ and 10-20% faster simulation, so verilation output size and C++ compile time can change.",
+    "evidence": "Changes 5.050: \"* Optimize module inlining heuristic (#7837).\" Commit b73a897d says it \"yields less generated C++ than the previous version ... can improve performance 10-20%\". Also \"* Optimize generated function inlining (#7811).\" (commit bcaa110f, -fno-inline-cfuncs added), plus many DFG/V3Gate/case-table optimizations (#7739, #7772, #7795, #7804, #7824).",
+    "impact": "Build (verilate plus C++ compile) times and simulation speed of the ChiselSim builds may shift. Results should not change.",
+    "expected_measurement": "Per-test build and run times may differ from 5.048, probably lower or similar. Test results identical."
+   },
+   {
+    "category": "build_requirements",
+    "claim": "The bundled gtkwave FST writer (fstapi.c, lz4.c, fastlz) was replaced by a C++ fstcpp writer that includes the system <lz4.h> and <zlib.h>. Models built with FST tracing now link -llz4 -lz, so building them needs liblz4-dev on Ubuntu 24.04. Building verilator_bin itself has no new requirement: configure.ac still requires only C++14 and only gains optional -rdynamic/-ldl probes and malloc-library logic.",
+    "evidence": "Changes 5.050: \"* Support new FST writer API (#6871) (#6992). [Yu-Sheng Lin] Use of FST may requiring installing liblz4 and/or liblz4-dev packages, see docs/install.rst.\" include/verilated.mk.in:212-214: `ifneq ($(VM_TRACE_FST),0) ... LDLIBS += -llz4 -lz`. include/fstcpp/fstcpp_writer.cpp:18 `#include <lz4.h>`. docs/guide/install.rst now lists `zlib1g zlib1g-dev liblz4 liblz4-dev`. configure.ac:696 \"# Need C++14 at least\" is unchanged.",
+    "impact": "The default VliwChiselSim command has no trace flags, so it is unaffected. Enabling FST tracing in svsim (--trace-fst / SVSIM_ENABLE_FST_TRACING_SUPPORT) on a host without liblz4-dev would fail to compile or link the model. VCD tracing is unaffected.",
+    "expected_measurement": "The from-source build of 5.050 on Ubuntu 24.04 succeeds with the same packages as 5.048. Non-trace ChiselSim builds pass."
+   }
+  ],
+  "notes": "Range examined: v5.048..v5.050 (351 commits; there is no intermediate release between the tags). The Changes 5.050 section and the source diffs were read for: include/verilated.cpp/.h, verilated_types.h, verilated_funcs.h, verilated_random.*, verilated_threads.cpp, verilated_dpi.*, verilated.mk.in, src/V3Options.*, src/V3Error.h, src/Verilator.cpp, src/V3ThreadPool.*/V3Mutex.h (empty diff), configure.ac, docs/guide/exe_sim.rst, exe_verilator.rst, install.rst and warnings.rst.\n\nThe headline change for this project is the default +verilator+seed. Without a seed, output is still deterministic but now equals seed 1, and +verilator+seed+0 is now accepted and random per run. The predicted $urandom values come from the scratchpad emulator /tmp/claude-0/-home-user-deterministic-vliw-chisel/72342c7d-9f6b-5534-9c62-327a6a17dee8/scratchpad/rng546.py. Its 'new' model matches the 5.050 VlRNG code line for line, and its 'old' model reproduces the 5.020 seed-1/seed-2 measurements, which are printed in reverse generation order. The predicted values assume $urandom runs on the thread RNG, which holds without --timing process contexts.\n\nOther changes checked and judged not relevant:\n- New IEEEMAYDEPRECATE warning: only fires for procedural assign/deassign.\n- CASEINCOMPLETE/CASEOVERLAP changes: lint-only.\n- #7785 out-of-bounds read value for 2-state types: firtool uses 4-state reg/logic.\n- #7503 V3Gate static-initializer fix: only for non-constant initializers; svsim uses '0.\n- #7784 ico change detection (on by default): svsimTestbench drives the DUT from internal regs through DPI, not from top-level inputs, so the optimization's soundness condition is not at risk.\n- +verilator+log+file and +verilator+vpi+ (new runtime plusargs): no effect on this project.\n- verilated_threads.cpp: changes are CPU-pinning only (--threads > 1).\n- Removal of the WData typedefs: does not affect simulation-driver.cpp.\n\nNothing was built or run except reading git objects and a small python RNG emulation."
+ },
+ "verify": {
+  "verdicts": [
+   {
+    "index": 0,
+    "verdict": "confirmed",
+    "evidence": "Changes v5.050 has '* Change `+verilator+seed` to default to 1, and 0 to randomly select (#7325) (#7516). [Miguel]' (commit 0e423a4b3). `git diff v5.048 v5.050 -- include/verilated.h` shows `int m_randSeed = 0; // Random seed: 0=random` became `= 1`. include/verilated.cpp now has pickRandomSeed() (steady_clock ^ system_clock through vl_splitmix64, masked to [1,0x7fffffff]) and the seed option lower bound changed from 1 to 0 with `if (u64 == 0) u64 = pickRandomSeed();`. randSeedDefault64() is unchanged: it returns (seed<<32)^seed when randSeed()!=0, otherwise lrand48(). So no-seed now equals seed 1. In 5.048 the default 0 went to the unseeded lrand48(), which fits the identical-every-run 5.020 behaviour. s_randSeedEpoch starts at 1 and the thread-local epoch at 0, so the first use re-seeds from randSeedDefault64 and the new default really is seed 1. docs/guide/exe_sim.rst says 'If not specified, the seed defaults to 1. If specified as 0, a non-zero seed is generated at startup'. Tests t_runflag_seed_zero.py (requires seed 0 to vary across runs) and the t_x_rand_stability*.out goldens exist at v5.050. m_randReset still defaults to 0.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 1,
+    "verdict": "confirmed",
+    "evidence": "`git diff v5.048 v5.050 -- include/verilated.cpp` has no hunk in vl_splitmix64, vl_rng_state_from_seed, vl_rng_result, vl_rng_compute_new_state, VlRNG or vl_thread_rng. The only VL_RANDOM hit in verilated_funcs.h is a context line. The src diff has no VL_RANDOM, urandom or RandReset changes, and VlProcess is unchanged. I re-implemented the 5.050 code from scratch (seed64=(s<<32)^s; splitmix64 twice; xoroshiro128** result=rotl(s0*5,7)*9; update s1^=s0, s0=rotl(s0,24)^s1^(s1<<16), s1=rotl(s1,37); low 32 bits). It gives the same sequences as the researcher: seed1 in generation order 5fa24450 24800459 fd8d9d77 b722072d, seed2 1be5aac4 516497e1 d3189547 fded6676. The researcher's old-generator model reproduces the measured 5.020 seed1/seed2 output when reversed. The new model has not been checked against any real 5.048+ run. The print order is the weak point. VL_RANDOM_I() is called as an argument of a variadic VL_WRITEF_NX, and C++ argument evaluation order is unspecified. The researcher assumes the reversed order seen on 5.020. AstRand::isPure() returns !seedp(), so unseeded $urandom is not lifted into ordered temporaries by V3LiftExpr, and V3Premit's visit(AstRand) is unchanged. The order is therefore probably, but not provably, the same as 5.020.",
+    "corrected_claim": "No change to the $urandom/VlRNG path in 5.048..5.050, so explicit seeds give the same output as 5.048 and a different sequence from 5.020. The generated sequences are verified: seed1 5fa24450 24800459 fd8d9d77 b722072d, seed2 1be5aac4 516497e1 d3189547 fded6676, no seed = seed1. The printed order (b722072d fd8d9d77 24800459 5fa24450 etc.) is an extrapolation from the 5.020 run. It assumes g++ keeps evaluating VL_RANDOM_I() arguments right-to-left. Compare as a multiset, or confirm the order against the 5.048 measurement, before reading a mismatch as a behaviour change."
+   },
+   {
+    "index": 2,
+    "verdict": "confirmed",
+    "evidence": "`git diff --stat v5.048 v5.050 -- src/V3ThreadPool.cpp src/V3ThreadPool.h src/V3Mutex.h src/V3ThreadSafety.h src/V3Os.cpp src/V3Error.cpp` is empty. A grep of the whole `git diff v5.048 v5.050 -- src` for ThreadPool|V3Mutex|std::thread|exit(|_exit|atexit finds nothing. The Verilator.cpp diff only adds V3Covergroup, collectDefaultDisable, V3Force::forceAndAssignAll, V3AstPatterns dumps and finalizeDeferredParams, and removes V3SplitAs/V3TSP and the V3TSP self-test. It also moves the inline-cfuncs block and passes a stats flag. The only src files touched near this area are V3Global.cpp/.h (new flags, covergroup file list), V3Stats.cpp and V3Error.h (new codes). The 5.050 Changes section has no entry about thread pool, exit, hang or -j. Commit subjects mentioning threads are only FSM-detect nondeterminism (#7644), $fflush with --threads (#7782) and CPU pinning (#7599). The last two are model-runtime only.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 3,
+    "verdict": "confirmed",
+    "evidence": "The `git diff v5.048 v5.050 -- src/V3Options.cpp src/V3Options.h` hunks are: --assert-unroll-limit (default 1024), --coverage-per-instance, -fbit-scan-loops, -fcase turned into a callback alias for -fcase-decoder/-table/-tree, -fico-change-detect, -finline-cfuncs, dumpAstPatterns, a --fourstate+hierarchical E_UNSUPPORTED, and the --vpi default for ico change detect. `int m_buildJobs = -1; // main switch: --build-jobs, -j` appears only as context. No `-j`, `--build-jobs` or `--verilate-jobs` handling changed in V3Options.cpp, V3EmitMk.cpp or bin/verilator (the bin/verilator diff is gdb/lldb and help text only). The exe_verilator.rst diff has no job-option text. All svsim flags are still declared: --cc, --exe, --build, -o, --top-module, --Mdir, --assert, --timescale, -CFLAGS, +define, -F. One small caveat: --inline-cfuncs 0 no longer documents 'disable', since -fno-inline-cfuncs was added. svsim does not use it.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 4,
+    "verdict": "confirmed",
+    "evidence": "`git diff v5.048 v5.050 -- include/verilated.h` removes `using WData = EData;`, `using WDataInP = const WData*;` and `using WDataOutP = WData*;`. verilated_types.h at v5.050 defines `class WDataOutP final` and `class WDataInP final` as opaque handles (static external(), implicit ctor from VlWide). Commits c99aa8ede (#7642) and f93b4bbd0 exist. verilated_dpi.cpp/.h only wrap raw pointers with WDataOutP::external. `grep WData` over scratchpad/svsim finds nothing. The driver's Verilator-facing calls are VerilatedContext::debug/traceEverOn/commandArgs/gotFinish/time/timeInc/coveragep, VsvsimTestbench eval/eval_step/final and eventsPending/nextTimeSlot, plus the generated __Dpi.h. verilated.h shows no change to those context methods. V3EmitCModel.cpp at v5.050 still emits eventsPending()/nextTimeSlot(). The C++ baseline in include/AGENTS.md is C++14, and only the fstcpp headers use C++17/20/23 feature gates. The #7742 DPI-export fix and #7704 DPI-import by-reference change are internal.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 5,
+    "verdict": "confirmed",
+    "evidence": "V3Error.h at v5.050 lists E_CONTASSINIT before EC_FIRST_WARN, so hardError() is true. V3Undriven.cpp reportViolations has `initp = hasUserInit() ? initStaticp() : initialp(); if (initp && contAssignp() && !isClassMember() && !isFuncLocal()) initp->v3warn(E_CONTASSINIT, ...)`. Changes has 'Add error on mixed-initialization (#7352) (#7357)' and docs/guide/warnings.rst documents CONTASSINIT. Not suppressible: FileLine::warnOffParse rejects hardError codes ('Unknown warning specified' for -Wno-CONTASSINIT) and V3Control.cpp:672 returns false for hardError. The svsim template strings (Workspace.class) show `reg [$bits(..)-1:0] port = '0;` for inputs and `wire [$bits(..)-1:0] port;` for outputs. The reg has an initializer but is only written procedurally. The wire has no initializer. The prediction of no hit is plausible but unmeasured. Follow-up commit 2ccaae77a fixed a false positive on a wire inside two instantiations.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 6,
+    "verdict": "confirmed",
+    "evidence": "V3ParseImp.cpp tokenToBison() at v5.050 has `if (m_tokenLastBison.token == '!' && (yylval.token == '&' || '|' || '^' || yP_NAND || yP_NOR || yP_XNOR)) m_tokenLastBison.fl->v3warn(NOTREDOP, \"Logical not directly before reduction operator is illegal ...\")`. NOTREDOP is in V3Error.h pretendError() and in the name list without a leading space, so it is suppressible (warnings.rst: 'Suppressing this error will suppress the error message check'). Changes has 'Add NOTREDOP error on reduction and negation operators (#7417) (#7623) (#7624)' and commit 946050122 exists. The svsim defines expand to `!svsimTestbench.reset`, where '!' is followed by an identifier, so no hit is expected.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 7,
+    "verdict": "confirmed",
+    "evidence": "The always_ff checks are new in v5.050: `git grep 9.2.2.4 v5.048 -- src` finds nothing, while v5.050 V3Undriven.cpp has m_alwaysFFp, FLAG_DRIVEN_ALWFF and two new MULTIDRIVEN messages ('Variable written to in always_ff also written by other process' and 'Variable also written to in always_ff', IEEE 9.2.2.4). The Changes headline 'Fix false MULTIDRIVEN warning on always_ff variables (#7351)' is misleading, because the diff adds detection. The exemption is only when the other write is the declaration initializer (otherWriteIsStaticInit). Test t_lint_always_ff_multidriven_bad.v/.out at v5.050 confirm that `initial a=0;` plus `always_ff ... a<=1` warns, and that two always_ff blocks writing different bits of one array also warn. MULTIDRIVEN is an ordinary warning, so it is fatal unless -Wno-fatal. It is silenceable with lint_off, and the check respects warnIsOff(MULTIDRIVEN). Commits 8ae0e4810, 55d78b225 and 7bd41bfb exist. The check keys on VAlwaysKwd::ALWAYS_FF only, so firtool's plain `always @(posedge clock)` is not affected.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 8,
+    "verdict": "confirmed",
+    "evidence": "Changes has 'Support NBAs in initial blocks (#7754)', 'Support NBAs in initial blocks with delay/event controls (#7566) (#7600)' and 'Add FINALDLY error (#7754)'. In e269b914b, V3Active.cpp ActiveDlyVisitor drops CT_SEQ/CT_INITIAL/CT_SUSPENDABLE and the INITIALDLY warning, and adds `v3warn(FINALDLY, \"Non-blocking assignment '<=' in final block\")` for CT_FINAL. v5.048 had the INITIALDLY warn at V3Active.cpp:367. V3Delayed.cpp adds `m_inSuspendableOrFork = ... || VN_IS(nodep, Initial)` and an InitialNBA SenItem (VEdgeType::ET_INITIAL_NBA) trigger. FINALDLY is in pretendError(). INITIALDLY remains a valid, now unused, name. The svsim template strings show blocking `simulationState = RUN;` in its initial block, and firtool initial blocks use blocking '='.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 9,
+    "verdict": "confirmed",
+    "evidence": "Commit 385330136 'Fix disable iff ignored when its condition is held continuously true (#7841)' is in the range. src/V3AssertNfa.cpp at v5.050 has the comment 'Disable iff gating (IEEE 1800-2023 16.12). The edge counter misses a continuously-true disable, so gate on the current level value too.' It ANDs !disable into terminalActivep, rejectBasep, throughoutRejectp and requiredStepRejectp. Commit 7061c1f04 (#7773) also exists. The scope claim is hedged correctly: multi-cycle (NFA) concurrent assertions only.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 10,
+    "verdict": "uncertain",
+    "evidence": "The cited facts are real: Changes has 'Optimize runtime assertOn() checks (#7707)'. Commit 41811d436 says 'Combine consecutive assertOn() checks into one, and hoist past enclosing if ... can be worth 10% performance on some assertion heavy designs depending on how the assertions are written'. Hang fix b973b1df5 is in the range. But the predicted result 'equal to or slightly faster' is not supported by the source. In the same range the per-check runtime function got heavier. v5.048 assertOnGet() was O(1) (VL_CLOG2_I plus a shift). In v5.050 assertOnGet() goes through the non-inline assertCtlGet(), which has a switch, and assertOnMask() loops over all 8 VerilatedAssertType_t bits on every call. V3Assert.cpp at v5.050 also emits separate assertCtlGet(ASSERT_CTL_ON / ASSERT_CTL_FAIL_ON / ASSERT_CTL_PASS_ON_*) checks. The net effect depends on how many checks get combined or hoisted. It also depends on whether the design's assertions are Verilator-visible immediate assert statements at all. Chisel's if/$fatal style does not use assertOn.",
+    "corrected_claim": "Runtime assertOn() checks are combined and hoisted out of enclosing ifs (#7707), which upstream says can be worth ~10% on some assertion-heavy designs. In the same range, assertOnGet() was reimplemented on top of assertCtlGet() (switch plus 8-iteration mask loop, separate fail-on/pass-on queries), so each remaining check costs more. The net runtime change versus 5.048 for this project cannot be predicted from the source and must be measured. Do not assume 'equal or faster'. Only assert statements that Verilator sees as asserts are affected."
+   },
+   {
+    "index": 11,
+    "verdict": "confirmed",
+    "evidence": "Changes has 'Optimize module inlining heuristic (#7837)' and 'Optimize generated function inlining (#7811)'. b73a897db message: 'Rewrite module inlining decision to be based on a bipartite Module/Cell graph ... Preserved all old heuristics, but added 2 new ones' (flatten a sub-hierarchy under 10% of the flattened design; inline all instances if their total is under 20%), 'yields less generated C++ than the previous version ... can improve performance 10-20%'. bcaa110f6 message: 'Previously V3InlineCFuncs inlined call sites but never deleted the now dead callees ... Also add a clean -fno-inline-cfuncs disable ... It will also prune unused functions'. The DFG/case-table items #7739 #7772 #7795 #7804 #7824 are all in Changes. The 10-20% figure is upstream's claim on its own designs, which is the framing the claim uses.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 12,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.050 'Important': 'Support new FST writer API (#6871) (#6992) ... Use of FST may requiring installing liblz4 and/or liblz4-dev packages'. include/gtkwave/* is deleted and include/fstcpp/* is added. fstcpp_writer.cpp includes <lz4.h> and <zlib.h>. verilated_fst_c.cpp #includes the fstcpp .cpp files directly, so they build only with FST tracing. verilated.mk.in has `ifneq ($(VM_TRACE_FST),0) ... LDLIBS += -llz4 -lz`. A grep for lz4|zlib in v5.050 src/ and configure.ac finds nothing, and configure.ac's 'Need C++14 at least' is unchanged, so verilator_bin has no new library dependency. The docs install.rst does add liblz4/liblz4-dev to the general 'build or run' apt list, so installing it is harmless but not required for verilator_bin. install.rst also adds python3-pip, for `make venv` only. Models built without --trace-fst are unaffected.",
+    "corrected_claim": ""
+   }
+  ],
+  "missed": [
+   {
+    "category": "performance",
+    "claim": "The input-combinational (ico) region now has change detection by default (-fico-change-detect, #7784). It evaluates ico logic only when a top-level primary input has changed, instead of on the first iteration of every eval. It is off by default only with --vpi, and per-input it is skipped when the design may write that input (icoMaybeWritten), when the input is forced, an unpacked array or a SystemC type.",
+    "evidence": "Changes 5.050: 'Optimize input combinational logic by change detection (#7784)'. Commit 5ab2bf1ec message: 'The added change detection is cheap ... on by default ... The optimization is only sound if the model itself does not write to the top level inputs ... --vpi will disable this optimisation'. V3Sched.cpp createInputCombLoop: change-detect triggers are created only for `varp()->isPrimaryInish()` vars. DPI-written variables keep dpiExportTriggered, and `sampled()` vars use the first-iteration trigger. V3Options adds -fico-change-detect / -fno-ico-change-detect.",
+    "impact": "Low for svsim. The top module svsimTestbench has no ports, and DUT inputs are internal regs written via DPI, which stay on the DPI-export trigger. Still a new default-on scheduling optimization on the eval() path that the driver relies on. If an unexplained cycle or value mismatch appears, -fno-ico-change-detect is the switch to try."
+   },
+   {
+    "category": "performance",
+    "claim": "The runtime assertion-control implementation was rewritten. VerilatedContext::assertOnGet() now forwards to the new assertCtlGet(VerilatedAssertCtlQuery, type, directive). The generated code emits separate assertCtlGet(ASSERT_CTL_ON / ASSERT_CTL_FAIL_ON / ASSERT_CTL_PASS_ON_*) checks, and there is new lock/kill/pass/fail control state (assertCtl, $assertcontrol types 1-11). Default state is everything enabled, so default semantics are unchanged.",
+    "evidence": "git diff v5.048 v5.050 -- include/verilated.cpp/.h: assertOnMask() loops over the 8 assertion-type bits, assertCtlGet() has a switch, and new atomics m_assertLock/m_assertPassOnVacuous/m_assertPassOnNonvacuous/m_assertFailOn/m_assertKill (defaults max, i.e. enabled). src/V3Assert.cpp:236-300 and V3AssertNfa.cpp:201-250 emit assertCtlGet calls. Changes: 'Support $assertcontrol control_type from lock to kill (#7788)', 'Support global $assertcontrol (#7807)'.",
+    "impact": "Semantics are unchanged by default. Each executed assert check is a heavier out-of-line call than in 5.048. This counters part of the benefit of #7707, so --assert simulation speed versus 5.048 can go either way. Measure it rather than assume a speedup."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "There is a new default-on warning, IEEEMAYDEPRECATE ('Feature may be deprecated in future IEEE standard'). It is issued for procedural continuous `assign` / `deassign` statements. Like any warning, it is fatal unless -Wno-fatal or -Wno-IEEEMAYDEPRECATE.",
+    "evidence": "src/V3Error.h at v5.050 adds IEEEMAYDEPRECATE to the enum and name list, not in defaultsOff(). src/verilog.y:3600 and :3603 call `$1->v3warn(IEEEMAYDEPRECATE, ...)` on yASSIGN and yDEASSIGN statements. docs/guide/warnings.rst:1021 documents it. Related: 'Support procedural continuous assign/deassign (#7493)'.",
+    "impact": "Low. firtool and svsim do not emit procedural assign/deassign. Only the design's own Verilog or an unusual firtool lowering with force/passign could hit it. The 53-build 'no %Warning' check covers it."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "V3Case was restructured (#7769, #7768, plus the new case-to-lookup-table #7795 and wide-decoder #7804 lowerings, redundant case-assertion removal #7771, and fixes #7647, #7815, #7766, e0c4c995b). The CASEINCOMPLETE and CASEOVERLAP checks were rewritten and their messages changed (enum messages now list all uncovered items; unique0 never warns). So the set of designs that warn can shift in either direction. -fcase is now an alias for -fcase-decoder/-fcase-table/-fcase-tree.",
+    "evidence": "git diff v5.048 v5.050 -- src/V3Case.cpp shows old isCaseTreeFast/m_valueItem code replaced by checkExhaustivePacked/checkExhaustiveEnum over m_caseDetails records, with new CASEINCOMPLETE ('Enum item(s) not covered by case: ...') and CASEOVERLAP sites. Changes lists the Optimize/Fix items. V3Options.cpp adds -fcase-decoder/-table/-tree.",
+    "impact": "Low to medium. firtool rarely emits case statements, but both new lint behaviour and new default-on case lowering are possible. -fno-case-table / -fno-case-decoder are the bisect switches if a ChiselSim result differs from 5.048."
+   },
+   {
+    "category": "thread_pool_exit",
+    "claim": "Measurement confound for the exit-race comparison. Since 5.048 (reworked in 5.050 by #7736), ./configure auto-links jemalloc, or else tcmalloc, into verilator_bin when the dev library is installed (default 'check'). The Debian 5.020 package has no such allocator. The abort rate of a from-source 5.048/5.050 build may therefore differ because of the allocator, not because of V3ThreadPool, which is unchanged.",
+    "evidence": "Changes 5.048 'Important': 'Support jemalloc as the default allocator on Linux (#7250) ... apt install libjemalloc-dev'. Changes 5.050: 'Fix configure fall back on dynamic malloc libraries (#7736)'. configure.ac at v5.050 lines 97-115 (--enable-jemalloc default=check) and ~649-690: tries -ljemalloc (static first with --enable-partial-static, then dynamic), otherwise tcmalloc_minimal, and adds -fno-builtin-malloc/calloc/realloc/free to CFG_CXXFLAGS_SRC.",
+    "impact": "Record `ldd $(which verilator_bin)` (or the configure summary) for each source-built version, and keep the allocator setting identical across versions when comparing abort rates. This is the only exit-time-relevant difference found in 5.048..5.050."
+   },
+   {
+    "category": "semantics",
+    "claim": "Out-of-bounds unpacked-array reads of 2-state element types now yield 0 explicitly instead of an X that is then converted by --x-assign. With the default --x-assign fast, both produce 0, so default builds are unchanged. It would differ only with --x-assign 1 or unique on 2-state arrays. 4-state (logic/reg) arrays still get X.",
+    "evidence": "Changes: 'Fix out-of-bounds read value for 2-state types (#7785)'. Commit 38fd99b37 changes V3Unknown.cpp ArraySel handling to `if (nodeDtp->isFourstate()) xnum.setAllBitsX(); else xnum.setAllBits0();`. V3Unknown visit(AstConst) with the default xAssign 'fast' maps X bits to 0.",
+    "impact": "None expected for svsim and ChiselSim, which use default --x-assign and Chisel memories declared as reg arrays. Listed for completeness since it can change values read from out-of-range memory addresses."
+   }
+  ]
+ }
+}
