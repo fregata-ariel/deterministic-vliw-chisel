@@ -1,6 +1,6 @@
 # Machine description（config/machine.json）
 
-状態：`schema_version` 1。ローダは `vliw.isa.MachineDescription`（sbtプロジェクト `isa`）。
+状態：`schema_version` 1（ISA `mvp-0`）。ISA `mvp-1`（MAC）のための `schema_version` 2 は、下の「[mvp-1（schema_version 2）](#mvp-1schema_version-2)」で定める（#69、ADR-0018。ローダの実装は #77）。ローダは `vliw.isa.MachineDescription`（sbtプロジェクト `isa`）。
 
 RTL・命令列・verifier・参照モデルは、このファイルをローダ経由でのみ参照する。値の意味は [ISA.md](ISA.md) が定める。
 
@@ -73,6 +73,26 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 
 規則を変えるときは、`schema_version` を上げ、この表、ローダ、`MachineDescriptionSpec` を同時に変える。
 
+### mvp-1（schema_version 2）
+
+`schema_version` 2 は ISA `mvp-1` 専用で、`schema_version` 1 は `mvp-0` 専用のままにする（#69、[ADR-0018](DECISIONS.md)）。ローダは両方を受け付け、`config/machine.json`（mvp-0 revision 2、frozen）は変えない。上の表との違いは次のとおり。
+
+| キー | 規則 |
+|---|---|
+| `schema_version` | 2 |
+| `isa_version` | 固定: `mvp-1` |
+| `register_file.read_ports` | 3 または 4。規則 L11（[ISA.md](ISA.md)）の上限で、ローダは値を保持する |
+| `operations` | ちょうど ADD、SUB、MUL、MAC、LD、ST、HALT の7つ |
+| `operations.MAC.slot` / `.writeback` | 固定: `compute` / `compute` |
+| `operations.MAC.opcode` / `.latency` / `.ii` | ほかの演算と同じ規則（opcode は同じスロット内で一意、latency と ii は1〜8） |
+
+ほかのキーの規則は `schema_version` 1 と同じである。
+
+| ファイル | 内容 |
+|---|---|
+| `config/machine-mvp1.json` | `vliw2-i32-sp2-mac`、revision 1、`proposed`。`read_ports` 3、MAC は opcode 4・latency 2・ii 1、ほかは `config/machine.json` と同じ。#77 Phase A の後で `frozen` にする（#57 で方式を変えるときは revision を上げる） |
+| `tests/machines/` の mvp-1 の変種 | `read_ports` だけ4にしたもの（制約なしの比較用。verifier と参照モデルだけで動かす）と、MAC の latency だけ3にしたもの（感度の確認）（#77） |
+
 ## 実装ごとの対応範囲
 
 machine description の契約は3段に分かれる。ローダが受け付ける構成は、すべて verifier と参照モデルで扱える。RTL はその一部だけを実装し、範囲外の構成は組み立て時に理由付きで拒否する（[ADR-0009](DECISIONS.md)）。
@@ -80,8 +100,8 @@ machine description の契約は3段に分かれる。ローダが受け付け�
 | 段 | 判定する場所 | 範囲 |
 |---|---|---|
 | 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
-| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10 |
-| RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体 |
+| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77 で実装する） |
+| RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体。mvp-1 では、加えて `read_ports` が3（読出し4本の RTL は #57 で足す。ADR-0018） |
 | 固定パイプライン（#75） | `FixedParams`（`hw`） | RTL と同じ。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017） |
 
 RTL が対応しない理由は次のとおり。
