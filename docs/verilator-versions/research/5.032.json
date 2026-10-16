@@ -1,0 +1,207 @@
+{
+ "version": "5.032",
+ "research": {
+  "version": "5.032",
+  "range": "v5.030..v5.032",
+  "findings": [
+   {
+    "category": "thread_pool_exit",
+    "claim": "From v5.030 to v5.032 the Verilator thread pool, mutex and exit code are unchanged, so the exit-race behaviour (issue 4931) should be the same as in 5.030. There is one new user of the pool: the V3FuncOpt pass sends one job per CFunc to it. With --verilate-jobs 1 no worker threads are created, so that job runs inline.",
+    "evidence": "git diff v5.030 v5.032 -- src/V3ThreadPool.cpp src/V3ThreadPool.h src/V3Mutex.h changes only the copyright line ('2005-2024' -> '2005-2025'). In src/Verilator.cpp the only change is the new '#include \"V3FuncOpt.h\"' and, at line 502, 'if (v3Global.opt.fFunc()) V3FuncOpt::funcOptAll(v3Global.rootp());'. src/V3FuncOpt.cpp:325-331 uses 'V3ThreadScope threadScope; ... threadScope.enqueue([cfuncp]() { FuncOptVisitor::apply(cfuncp); });'. src/V3ThreadPool.cpp:25 'if (numThreads == 1) return;' (no workers), and V3ThreadPool::enqueue runs f() inline when m_workers is empty. src/Verilator.cpp:664 'V3MutexConfig::s().configure(v3Global.opt.verilateJobs() > 1 /*enable*/);'. The Changes file has no thread-pool entry for 5.032.",
+    "impact": "The project's '--build-jobs 0 --verilate-jobs 1' settings still create no Verilator worker threads, so the exit race cannot occur. With svsim's default '-j 0' (4 workers on the 4-CPU box) the race is still possible. That run now also has one more parallel phase, but the code that tears the pool down at exit is identical to 5.030.",
+    "expected_measurement": "0 aborts in 3000 verilations with '--build-jobs 0 --verilate-jobs 1'. With '-j 0', an abort rate of the same order as the v5.030 measurement ('attempted to destroy locked Thread Pool', exit 255)."
+   },
+   {
+    "category": "jobs_options",
+    "claim": "-j, --build-jobs and --verilate-jobs mean the same as in 5.030: 0 means hardware_concurrency, bare -j sets both, and each defaults to 1. The svsim and VliwChiselSim job flags remain valid.",
+    "evidence": "In git diff v5.030 v5.032 -- src/V3Options.cpp no hunk touches m_buildJobs, m_verilateJobs or the '-j' loop. v5.032 src/V3Options.cpp:1185-1195 ('--build-jobs' ... 'else if (val == 0) { val = std::thread::hardware_concurrency(); }'), 1652-1662 (same logic for --verilate-jobs), 1796-1806 ('-j': 'if (m_buildJobs == -1) m_buildJobs = val; if (m_verilateJobs == -1) m_verilateJobs = val;'), 1840-1841 (both default to 1). The only related change is stripOptionsForChildRun, which also strips \"F\". That applies only to hierarchical child runs (Changes: 'Fix --hierarchical on projects with dot-f dependency lists (#5199) (#5669).').",
+    "impact": "None. svsim does not use --hierarchical, and its '-F <file list>' handling is unchanged.",
+    "expected_measurement": "Verilation with '--build-jobs 0 --verilate-jobs 1' or with '-j 0' is accepted, as in 5.030."
+   },
+   {
+    "category": "seed_random",
+    "claim": "The runtime RNG and seed handling did not change. The no-seed $urandom sequence should stay identical in every run and equal to the 5.020 values, and seeds 1 and 2 should give the same output as 5.020. The only change in this area is a fix to swapped doc comments on VerilatedContext::randSeed.",
+    "evidence": "Changes only lists the internal commit c98744b9 'Internals: Fix `VerilatedContext::randSeed` comments (#5609)'. In include/verilated.h the '/// Return default random seed' and '/// Set default random seed, 0 = seed it automatically' comments were swapped to sit on the correct overloads. The include/verilated.cpp diff has 2 hunks: the threads() fatal text and VerilatedScope::configure. md5 hashes of VlRNG::vl_thread_rng, VerilatedContextImp::randSeedDefault64, class VlRNG (verilated_types.h), VL_URANDOM_SEEDED_II and vl_sys_rand32 are identical in v5.020, v5.030 and v5.032. v5.032 include/verilated.cpp:2856 still has commandArgVlUint64(arg, \"+verilator+seed+\", u64, 1, std::numeric_limits<int>::max()). Why seed 1 output has many 1 bits: randSeedDefault64() gives (1<<32)^1, which has fewer than 10 one bits, so vl_thread_rng inverts it ('if (VL_COUNTONES_I(t_rng.m_state[0]) < 10) t_rng.m_state[0] = ~t_rng.m_state[0];'). In the no-seed case lrand48() is used without srand48, which is deterministic.",
+    "impact": "Runs with and without +verilator+seed+ stay reproducible, and their values do not change compared with 5.020.",
+    "expected_measurement": "No seed: 48c2e0e4 9efdd502 0b1e5d9c 797673c4 in every run. +verilator+seed+1: 8084023f f77f7fff ff7fffff fffffffc. +verilator+seed+2: f1080460 eeff3fff feffffff fffffffa. +verilator+seed+0 still rejected ('must be an unsigned integer, greater than 0')."
+   },
+   {
+    "category": "performance",
+    "claim": "A new optimization pass, V3FuncOpt, is on by default. It splits assignments to targets wider than 64 bits whose right-hand side is a concatenation crossing a word boundary, and it rebalances concatenation trees with more than 3 terms. It can be turned off with -fno-func-opt, -fno-func-opt-split-cat or -fno-func-opt-balance-cat. Both transforms skip only terms that are not isPure(). AstRand does not override isPure() (the AstNode default is true), so $urandom terms are not excluded. However, V3Const::matchConcatRand already merges CONCAT(RAND,RAND) into one wide RAND earlier in the pipeline, so firtool's {`RANDOM,`RANDOM} init pattern should not reach this pass.",
+    "evidence": "Changes 5.032: 'Improve concatenation performance (#5598) (#5599) (#5602). [Geza Lore]'. Commit f073b278 message: 'This is over 2x run-time speedup on the high_perf configuration of VeeR EH2'. Commit 77ef2cd4: 'Another 23% speedup on VeeR EH2 high_perf. Also brings the predicted stack size from 8M to 40k.' Commit 03bd1bfc: 'Move Concat balancing from DFG to FuncOpt ... applies more widely, e.g. inside sequential logic.' src/V3Options.h: m_fFuncBalanceCat = true, m_fFuncSplitCat = true. src/V3FuncOpt.cpp:120 'if (!exprp->isPure()) return nullptr;', :230 '(!lhsp->isPure() || !rhsp->isPure()) return false', :243 'if (lhsp->width() <= VL_QUADSIZE) return false;'. src/V3Const.cpp:2414 '//    CONCAT(RAND, RAND) - created by Chisel code' (already present in v5.020 at :2370).",
+    "impact": "Simulations with wide (>64-bit) datapaths built from concatenations may run faster, which could apply to VLIW instruction bundles. Designs with only narrow signals are mostly unaffected. Verilation time changes little. With --verilate-jobs 1 the pass runs serially.",
+    "expected_measurement": "Simulation runtime for sbt test similar to or lower than v5.030, with a larger gain only if the design has wide concatenations. Simulation outputs and cycle counts identical to v5.030."
+   },
+   {
+    "category": "performance",
+    "claim": "V3Gate no longer inlines a wide variable (wider than the --expand-limit word count) that is driven by a non-trivial expression and read more than once under the same active block. The expression is computed once instead of being duplicated at each use.",
+    "evidence": "Changes 5.032: 'Improve optimization of duplicate wide expressions (#5637). [Bartłomiej Chmiel, Antmicro Ltd.]'. Commit 58ddf997 'Prevent inlining of expensive wide expressions in V3Gate (#5637)'. src/V3Gate.cpp:695 'static bool excludedWide(...)' (':716 if (reads > 1) return true;'), applied at :816 with 'vVtxp->clearReducible(\"Excluded wide\")'. New statistic: 'Optimizations, Gate excluded wide expressions'.",
+    "impact": "Only affects the generated C++ for wide signals. Semantics do not change.",
+    "expected_measurement": "Simulation results unchanged. Runtime the same or slightly lower for designs with wide multi-use nets."
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "5.032 adds no new warning codes, and no warning changes its default on/off or error status. All new errors and the one new warning are for constructs firtool does not emit: enum base types, wait on events, assignment to parameters, --prefix values, --savable with --timing, and constraints. A few UNDRIVEN and BLKANDNBLK false positives on ref/XREF ports are removed.",
+    "evidence": "git diff v5.030 v5.032 -- src/V3Error.h adds no ErrorCode. The only change in styleError() is reordering 'm_e == DECLFILENAME || m_e == DEFPARAM', plus comments. Changes 5.032: 'Add error on illegal enum base type (#3010).', 'Add error on `wait` with missing `.triggered` (#4457).', 'Add error when improperly storing to parameter (#5147).', 'Add error on illegal `--prefix` etc. values (#5507).', 'Add error on `--savable --timing` (#5690).', 'Add warning on global constraints (#5625).', 'Fix BLKANDNBLK for for VARXREFs (#5569).'. Commit a72009fb 'Fix UNDRIVEN on refs' (V3Undriven.cpp: isInout() -> isInoutOrRef()). Commit d1656712 only rewords 'Parameter without initial value...' to '...default value...'.",
+    "impact": "No new lint output is expected for the Chisel/firtool SystemVerilog plus the svsim testbench.",
+    "expected_measurement": "No %Warning in any of the 53 ChiselSim builds of sbt test, as with 5.020."
+   },
+   {
+    "category": "other",
+    "claim": "Verilator now always reads a built-in lint waiver file, $VERILATOR_ROOT/include/verilated_std_waiver.vlt, unless --no-std-waiver or --no-std is given. If the file is missing, verilation fails. Its rules apply only to UVM files.",
+    "evidence": "Changes 5.032: 'Add `--no-std-waiver` and default reading of standard lint waivers file (#5607).' and 'Add `--no-std-package` as subset-alias of `--no-std` (#5607).' v5.032 src/V3Global.cpp:62-66: 'if (v3Global.opt.stdWaiver()) { parser.parseFile(... V3Options::getStdWaiverPath() ..., \"Cannot find verilated_std_waiver.vlt containing built-in lint waivers: \"); }'. Commit e223228e 'Fix installation of waiver file (#5607)' adds 'include/*.vlt' to Makefile.in VL_INST_INC_SRCDIR_FILES and to the CMake install patterns. The rules in the file are scoped by '`define VLT_UVM_FILES -file \"*/uvm_*.svh\" -contents \"*UVM_VERSION_STRING*\"'.",
+    "impact": "A normal 'make install' or in-tree build from the v5.032 tag works. A 5.032 verilator_bin paired with an older include/ directory (a mixed VERILATOR_ROOT) would fail at parse time. There is no lint effect on project sources.",
+    "expected_measurement": "An installed 5.032 contains share/verilator/include/verilated_std_waiver.vlt and verilation succeeds. If verilation fails with 'Cannot find verilated_std_waiver.vlt', the install is broken."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "No command-line option or define that svsim uses was removed or renamed. The public C++ runtime API that simulation-driver.cpp uses is unchanged. The minimum C++ standard is still C++14, so svsim's -std=c++17 is fine.",
+    "evidence": "The include/verilated.h diff changes only: 'template <class, class>' -> 'template <typename, typename>' for VerilatedTrace, the swapped randSeed doc comments, and VerilatedScope::configure(..., const char* identifier, const char* defnamep, int8_t timeunit, ...) plus a new defname() accessor (Changes: 'Support vpiDefName (#3906) (#5572).'). configure() is called only from generated __Syms code. The VerilatedContext methods the driver uses (debug, traceEverOn, commandArgs, gotFinish, time, timeInc) and svScope/svSetScope/svGetScope are unchanged; include/verilated_dpi.* and vltstd change only the copyright line. New identifier validation (V3Options.cpp 'validateIdentifier ... must be a legal C++ identifier') covers only --prefix, --mod-prefix, --lib-create and --protect-lib, none of which svsim passes. include/verilatedos.h:281-283 still has '#error \"Verilator requires a C++14 or newer compiler\"'. VL_UNREACHABLE uses std::unreachable() only '#ifdef __cpp_lib_unreachable' (C++23) and otherwise falls back to __builtin_unreachable() as before.",
+    "impact": "svsim's verilator command line and simulation-driver.cpp should build unmodified.",
+    "expected_measurement": "All 53 ChiselSim builds compile and link with -std=c++17, with no new compiler errors."
+   },
+   {
+    "category": "build_requirements",
+    "claim": "Building Verilator from source needs the same tools as 5.030. configure.ac only adds a CFG_CXX_VERSION variable that records the compiler's version string. The C++ standard checks and the bison/flex/python3 requirements are unchanged.",
+    "evidence": "The git diff v5.030 v5.032 -- configure.ac contains only the version and copyright, plus 'CFG_CXX_VERSION=`$CXX --version | head -1`' and 'AC_SUBST(CFG_CXX_VERSION)' (commit 8a121803 'Add configure CFG_CXX_VERSION'). configure.ac:404-413 still selects -std=gnu++17/c++17/gnu++14/c++14. src/Makefile_obj.in adds 'V3FuncOpt.o' and an optional '$(BISON_DEBUG)' (commented out). Changes 5.032: 'Add default CMAKE_BUILD_TYPE (#5691) (#5692).' applies only to CMake builds.",
+    "impact": "Ubuntu 24.04 with g++ 13, python3, bison and flex should build v5.032 exactly as it builds v5.030.",
+    "expected_measurement": "'autoconf && ./configure && make' succeeds on Ubuntu 24.04 with g++ 13."
+   },
+   {
+    "category": "semantics",
+    "claim": "Before 5.032, 'default disable iff' was rejected as UNSUPPORTED. 5.032 supports it, and it now applies to concurrent assertions in the module that have no explicit disable iff. $inferred_disable is also supported.",
+    "evidence": "Changes 5.032: 'Support `default disable iff` and `$inferred_disable` (#4016). [Srinivasan Venkataramanan]'. v5.030 src/verilog.y:2783: 'BBUNSUP($1, \"Unsupported: default disable iff\")'. v5.032 src/V3AssertPre.cpp:549-551: 'if (!nodep->disablep() && m_defaultDisablep) { nodep->disablep(m_defaultDisablep->condp()->cloneTreePure(true)); }'. The new error is 'Only one 'default disable iff' allowed per module'.",
+    "impact": "None for current sources. Chisel 7.15 / firtool output does not contain 'default disable iff': 5.020 would have stopped with an UNSUPPORTED error, and the 5.020 builds are clean. Assertion semantics of the existing designs are unchanged.",
+    "expected_measurement": "Assertion pass/fail results and cycle counts identical to v5.030."
+   },
+   {
+    "category": "semantics",
+    "claim": "In V3Unknown, for array writes guarded by a bounds check (index possibly out of range), 5.030 added an extra read of the old element into the temporary before each such write (commit 8c3cc3af, 'Fix struct array assignment (#5455) (#5537)'). 5.032 removes that read and instead extends the scan for the top of the lvalue to include StructSel. For basic-type element arrays this restores the code shape used in 5.028 and earlier.",
+    "evidence": "Changes 5.032: 'Fix array of struct member overwrites on member update (#5605) (#5618) (#5628). [sumpster]'. Commit 24b5c641 deletes the block in src/V3Unknown.cpp that started 'Before assigning the value to the temporary variable, first assign the current array element to it' ('new AstAssign{fl, new AstVarRef{fl, varp, VAccess::WRITE}, selExprp}'), and changes the scan loop to 'while (VN_IS(prep->backp(), NodeSel) || VN_IS(prep->backp(), Sel) || VN_IS(prep->backp(), StructSel))'. 8c3cc3af is an ancestor of v5.030 but not of v5.028.",
+    "impact": "Chisel memories and registers are arrays of plain vectors, so the written values and the bounds guard are the same as in 5.030. Only the generated C++ differs: one fewer copy per guarded write, for example for memories whose depth is not a power of two.",
+    "expected_measurement": "Simulation results identical to v5.030. No measurable runtime change."
+   }
+  ],
+  "notes": "I read git objects only. There is no intermediate release between v5.030 and v5.032 (5.031 was devel), and the Changes file has a single 5.032 section. The range has 171 commits. Files diffed: src/V3ThreadPool.*, src/V3Mutex.h, src/Verilator.cpp, src/V3Options.*, src/V3Error.*, include/verilated.cpp/.h, include/verilated_random.*, include/verilated_types.h, include/verilated_funcs.h, include/verilatedos.h, configure.ac, src/V3Assert*.cpp, src/V3Unknown.cpp, src/V3Delayed.cpp, src/V3Gate.cpp and the new src/V3FuncOpt.cpp. Most include/*.h changes are copyright updates or template-parameter renames ('No functional change' commits 990ccd67 and 0c820c30). The verilated_random.* changes are for constrained randomization of multi-dimensional, dynamic and associative arrays (class randomize() only), which Chisel output does not use.\n\nI checked these and judged them irrelevant: 'Fix NBAs to unpacked arrays of unpacked structs (#5603)' only affects arrays whose elements have no basic type. The --output-groups fix does nothing because the default is 0. The V3OrderParallel changes apply only with --threads > 1, which svsim does not set. The new -fno-inline-funcs and -fno-slice options keep the old default behaviour. Removing the duplicated '%Error:' prefix from some runtime fatal messages (e.g. 'Simulation threads must be >= 1', 'No delays in the design') is cosmetic.\n\nI did not measure anything. All expected_measurement values are predictions from the source."
+ },
+ "verify": {
+  "verdicts": [
+   {
+    "index": 0,
+    "verdict": "confirmed",
+    "evidence": "Verified by git diff v5.030 v5.032: V3ThreadPool.cpp, V3ThreadPool.h and V3Mutex.h change only the copyright year. The Verilator.cpp diff is exactly the V3FuncOpt include plus line 502 'if (v3Global.opt.fFunc()) V3FuncOpt::funcOptAll(...)'. Line 664 (V3MutexConfig configure(verilateJobs()>1)) and line 667 (new V3ThreadPool{verilateJobs()}) are unchanged. V3FuncOpt.cpp:325 uses V3ThreadScope with one enqueue per CFunc. V3ThreadPool.cpp:25 'if (numThreads == 1) return;' creates no workers, and enqueue() runs f() inline when m_workers is empty. The only ThreadScope users are V3EmitCImp, V3VariableOrder and the new V3FuncOpt. PROBLEM with the -j 0 prediction: the string 'attempted to destroy locked Thread Pool' is in v5.020 src/V3ThreadPool.h:155 (singleton destructor). `git grep` finds no such string in v5.030 or v5.032. Commit 01dadb0a8 'Fix try-lock spuriously fails (#4931) (#4938)' is in v5.024 and later. Commit ffe76717c 'Thread pool rewrite (#5161)' is in v5.030 and v5.032. In 5.030+ the pool is a heap object created at Verilator.cpp:667 and deleted at V3Global.cpp:43, and its destructor sets m_shutdown and joins the workers.",
+    "corrected_claim": "V3ThreadPool.{h,cpp} and V3Mutex.h are unchanged from 5.030 to 5.032 except for the copyright year. The only new pool user is V3FuncOpt (Verilator.cpp:502, V3FuncOpt.cpp:325, one job per CFunc). With --verilate-jobs 1 no workers exist (V3ThreadPool.cpp:25), the job runs inline, and mutexes are disabled (Verilator.cpp:664), so '--build-jobs 0 --verilate-jobs 1' should give 0 aborts. Correction to the '-j 0' expectation: the 'attempted to destroy locked Thread Pool' abort belongs to the pre-5.030 singleton design (present in v5.020, with the #4931 spurious try-lock mitigation 01dadb0a8 from v5.024). The 5.030 thread pool rewrite (#5161) removed that code and string, so 5.030 and 5.032 cannot produce that message. Expect 0 aborts of that kind with '-j 0' on 5.030/5.032, not a rate 'of the same order as 5.020'. Other -j 0 failure modes are not excluded by reading the code and need measuring."
+   },
+   {
+    "index": 1,
+    "verdict": "confirmed",
+    "evidence": "git diff v5.030 v5.032 -- src/V3Options.cpp has no hunk touching -j, --build-jobs or --verilate-jobs. The only related hunk adds \"F\" to stripOptionsForChildRun (hierarchical child runs only). v5.032 V3Options.cpp:1185-1194 (--build-jobs; 0 gives hardware_concurrency, negative is fatal), 1652-1662 (--verilate-jobs, same logic), 1796-1806 (-j loop) and 1840-1841 (defaults of 1) match the claim. One nuance: a bare '-j' with no number leaves val at 0 without calling hardware_concurrency, so both jobs become 0 (the thread pool treats that as 1). An explicit '-j 0' as in svsim's default becomes hardware_concurrency (4 here) for both. docs/guide/exe_verilator.rst has no -j changes. V3Options.cpp has no other change to -F, --cc, --exe, --build, -o, --top-module, --Mdir, --assert, --timescale, -CFLAGS or +define handling.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 2,
+    "verdict": "confirmed",
+    "evidence": "The include/verilated.cpp diff has three hunks: the copyright year, the threads() fatal text and VerilatedScope::configure. include/verilated.h swaps the randSeed doc comments, renames template parameters and adds defname(). I extracted these function bodies from v5.020, v5.030 and v5.032 and their md5 sums are identical in all three: vl_sys_rand32 plus vl_thread_rng (f90d31aa...), randSeedDefault64 (7c9371be...), VerilatedContext::randSeed(int) (d98cc7c0...), VL_RANDOM_SEEDED_II/VL_URANDOM_SEEDED_II (6f450e56...), and the VlRNG class in verilated_types.h (1294a8a9... in v5.020 and v5.032). verilated.cpp:2856 still has '+verilator+seed+' with a minimum of 1. Without a seed, randSeedDefault64() uses lrand48() with no srand48 call, so it is deterministic. The seed-1 state is (1<<32)^1, which has fewer than 10 one bits, so vl_thread_rng inverts it. That explains the many 1 bits you measured. A grep of the 5.030..5.032 src diff for AstRand, urandom, VL_RANDOM, randReset, xInitial or xAssign finds nothing. Caveat: the identical runtime only guarantees identical values if the generated code calls $urandom in the same order as 5.020. This diff gives no reason to doubt that, except for the isPure()/V3FuncOpt note under the next finding.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 3,
+    "verdict": "confirmed",
+    "evidence": "V3FuncOpt.cpp exists at v5.032 and matches the claim. splitConcat requires the RHS to be a Concat and the LHS width > VL_QUADSIZE, and it requires lsbWord != msbWord. It returns early on '!lhsp->isPure() || !rhsp->isPure()' and when readsLhs() is true. balance() returns nullptr when there are 3 or fewer terms or when any term is !isPure(). V3Options.h sets m_fFuncBalanceCat and m_fFuncSplitCat to true, and the options -ffunc-opt, -ffunc-opt-balance-cat, -ffunc-opt-split-cat and their -fno- forms are declared and documented. AstRand (V3AstNodeExpr.h:1784) does not override isPure(), and the AstNode default is true (V3Ast.h:2492), so RAND terms are not excluded. V3Const matchConcatRand ('created by Chisel code') exists in both v5.020 (:2370) and v5.032 (:2414), merges Concat(Rand,Rand), and is applied bottom-up so 3 or more RANDOMs collapse. Commit messages f073b278 ('over 2x run-time speedup on the high_perf configuration of VeeR EH2'), 77ef2cd4 ('Another 23% speedup ... predicted stack size from 8M to 40k') and 03bd1bfc ('Move Concat balancing from DFG to FuncOpt') match. The V3DfgPeephole diff is rename-only, so DFG balancing did not ship. The pass is placed at Verilator.cpp:502, before V3Const::constifyAll in the generation stage.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 4,
+    "verdict": "confirmed",
+    "evidence": "V3Gate.cpp excludedWide() exists at v5.032 with the stat 'Optimizations, Gate excluded wide expressions' (line 921). The conditions are: the var is wide and widthWords() > expandLimit(), it has a driver, and the RHS is not 'cheap'. isCheapWide accepts Const, VarRef, ArraySel of a ref, or a Sel at a 32-bit-aligned lsb. It returns true when the var is read more than once under the same AstActive. It is applied at the inline decision, which calls clearReducible(\"Excluded wide\"). Important scale: V3Options.h:309 has m_expandLimit = 64, and docs define it as a size in 32-bit words, so the exclusion only applies to nets wider than 64 words = 2048 bits.",
+    "corrected_claim": "V3Gate no longer inlines a variable that is wider than --expand-limit words (default 64 words = 2048 bits, not 64 bits), is driven by a non-trivial expression (not a Const, VarRef, ArraySel or word-aligned Sel of one), and is read more than once under the same active block. The expression is computed once. For a VLIW core with bundle and register widths well below 2048 bits this is expected to have no effect on generated code or speed."
+   },
+   {
+    "index": 5,
+    "verdict": "confirmed",
+    "evidence": "git diff v5.030 v5.032 -- src/V3Error.h adds no ErrorCode and only reorders DECLFILENAME/DEFPARAM in styleError(). I grepped every added v3warn/v3error/BBUNSUP line in the src diff. The only warning codes used are existing ones: CONSTRAINTIGN for global constraints, IMPLICITSTATIC (V3LinkParse, only re-indented, same text and conditions), and STATICVAR (untouched). The new errors are: enum base type (V3Width), wait on a raw event, storing to a parameter (V3LinkLValue), --prefix/--mod-prefix/--lib-create/--protect-lib identifiers, --savable with --timing, a second 'default disable iff', randc misuse, pure constraint in a non-abstract class, and 'Parameter type without default value'. The BLKANDNBLK fix (0f2a8c6c2) casts VarRef to NodeVarRef in V3Unknown so the XREF select copy is marked READ, which removes a false positive. The UNDRIVEN fix (a72009fb) changes isInout() to isInoutOrRef(). Small inaccuracy in the evidence: d1656712 is not only a reword. It also adds new errors for class and parameter types without defaults, which firtool output does not trigger.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 6,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.032 has both entries. V3Options.cpp: m_stdWaiver defaults to true, '--std' sets stdPackage and stdWaiver together, and --std-package and --std-waiver exist. V3Global.cpp readFiles() runs 'if (opt.stdWaiver()) parser.parseFile(getStdWaiverPath(), ..., \"Cannot find verilated_std_waiver.vlt containing built-in lint waivers: \")' before the .vlt and std package. getStdWaiverPath() is VERILATOR_ROOT/include/verilated_std_waiver.vlt. V3PreShell::preproc returns false when the file cannot be opened, so verilation errors out. The file exists at include/verilated_std_waiver.vlt (64 lines). Every rule uses `VLT_UVM_FILES = -file \"*/uvm_*.svh\" -contents \"*UVM_VERSION_STRING*\"`. Makefile.in VL_INST_INC_SRCDIR_FILES and CMakeLists.txt (lines 181-182) install include/*.vlt, and e223228e is in v5.032 only.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 7,
+    "verdict": "confirmed",
+    "evidence": "The include/verilated.h diff has only: template <class,class> to <typename,typename>, the swapped randSeed comments, and the VerilatedScope::configure() signature plus defname(). The generated __Syms code calls configure(); user code does not. The driver includes verilated-sources/VsvsimTestbench__Dpi.h and uses VerilatedContext (debug, traceEverOn, commandArgs, time, timeInc, gotFinish, coveragep) and the model's eval, eval_step, final, eventsPending and nextTimeSlot. V3EmitCModel.cpp still emits eval/eval_step/final/eventsPending/nextTimeSlot, and its only diff is the 'No delays in the design' text and a hierChild profExec guard. include/verilated_dpi.* change only the copyright. include/vltstd has no diff at all. The new identifier validation applies to --prefix, --mod-prefix, --lib-create and --protect-lib only. verilatedos.h:281-284 still has '#error Verilator requires a C++14 or newer compiler'. VL_UNREACHABLE is std::unreachable() only under __cpp_lib_unreachable (not defined for -std=c++17). Otherwise it is __builtin_unreachable(), as before.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 8,
+    "verdict": "confirmed",
+    "evidence": "The configure.ac diff is only the version string, replacing a local cxx_version with CFG_CXX_VERSION plus AC_SUBST, and include/verilated.mk.in records it (unused). The check lists at configure.ac:404-413 are unchanged (gnu++17, c++17, gnu++14, c++14). The python3, flex and bison checks (lines 200-219) are unchanged. Makefile_obj.in adds V3FuncOpt.o and a commented-out BISON_DEBUG. src/CMakeLists.txt adds V3FuncOpt. astgen, bisonpre and flexfix change only the copyright. docs/guide/install.rst changes only the copyright. The default CMAKE_BUILD_TYPE applies to CMake only. I did not build, so 'succeeds on Ubuntu 24.04 with g++ 13' is inferred from there being no toolchain change, not tested.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 9,
+    "verdict": "confirmed",
+    "evidence": "v5.030 src/verilog.y:2783 has BBUNSUP($1, \"Unsupported: default disable iff\"). v5.032 verilog.y has the $inferred_disable token and AstInferredDisable, and no longer has the module-level BBUNSUP. V3AssertPre.cpp has m_defaultDisablep (per module), the visitors for AstDefaultDisable and AstInferredDisable, and in the property visitor 'if (!nodep->disablep() && m_defaultDisablep) nodep->disablep(clone of default condp)'. The module visitor raises 'Only one default disable iff allowed per module'. V3Width adds the visitors for both nodes. A -w diff of V3Assert.cpp and V3AssertPre.cpp shows nothing else. $stop, $finish and STOP_COND handling in the runtime and V3Assert are unchanged.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 10,
+    "verdict": "confirmed",
+    "evidence": "8c3cc3af (adds the 'assign current array element to temp' block in V3Unknown) is an ancestor of v5.030 and v5.032 but not of v5.028. 24b5c641 removes exactly that block and adds StructSel to the scan loop. A -w diff of V3Unknown.cpp between v5.028 and v5.032 shows, in the bounds-guard code, only the StructSel addition. The rest is the xrand names unique_ptr refactor and the ==? change. So the shape for basic-element arrays equals 5.028. I also checked V3Delayed.cpp chooseScheme(): unpacked arrays with basic elements still get FlagShared (unchanged), and only non-basic element arrays now fall to ShadowVar. Chisel memories are unaffected.",
+    "corrected_claim": ""
+   }
+  ],
+  "missed": [
+   {
+    "category": "thread_pool_exit",
+    "claim": "The 'attempted to destroy locked Thread Pool' abort (upstream #4931) cannot exist in 5.030 or 5.032. It was mitigated in v5.024 (01dadb0a8 'Fix try-lock spuriously fails (#4931)') and the code was removed by the 5.030 'Thread pool rewrite (#5161)' (ffe76717c). The pool is now a plain heap object that V3Global deletes, and its destructor sets m_shutdown and joins the workers.",
+    "evidence": "`git grep -i 'destroy locked'` finds src/V3ThreadPool.h:155 at v5.020 only. v5.030 and v5.032 have no match. `git merge-base --is-ancestor` shows 01dadb0a8 is in v5.024..v5.032 and ffe76717c is in v5.030 and v5.032 only. v5.032 Verilator.cpp:667 is 'new V3ThreadPool{verilateJobs()}', V3Global.cpp:43 is 'delete m_threadPoolp', and V3ThreadPool.cpp has ~V3ThreadPool, wait and workerJobLoop with no abort path.",
+    "impact": "The expected '-j 0' result for 5.030 and 5.032 should be 0 aborts of this type. A 3000-run '-j 0' measurement is still the way to confirm there is no other failure mode. The 5.020 rate of 6 in 3000 should not be extrapolated to these versions."
+   },
+   {
+    "category": "semantics",
+    "claim": "Commit 192236a83 'Fix `module automatic`' changes variable lifetime assignment in V3LinkParse. Non-port variables with no explicit lifetime now take the enclosing function/task/procedure/class lifetime only where m_lifetimeAllowed is set. Module-scope variables are always STATIC, per IEEE 1800-2023 6.21. Ports and others with no lifetime get STATIC.",
+    "evidence": "`git diff -w v5.030 v5.032 -- src/V3LinkParse.cpp` adds m_lifetimeAllowed, which is set true in AstNodeFTask, AstNodeProcedure and AstAlways and for Class modules. The var visitor now tests !direction().isAny() and chooses m_lifetime or STATIC. The IMPLICITSTATIC and STATICVAR warnings and their conditions are unchanged.",
+    "impact": "None expected for Chisel/firtool SystemVerilog or the svsim testbench. They use explicit 'automatic' inside initial blocks and no 'module automatic'. Variables in procedures keep the module default of static."
+   },
+   {
+    "category": "performance",
+    "claim": "V3PreProc now stores every input source line a second time in a global deque (V3Config::contentsPushText, WildcardContents) for the new `lint_off --contents` feature. This happens for every file that is not the std package and does not contain the string '`verilator_config'.",
+    "evidence": "v5.032 V3PreProc.cpp:827-839 ('Save contents for V3Config --contents'). V3Config.cpp adds class WildcardContents with std::deque<string> m_lines. A per-line find of \"`verilator_config\" runs on every line.",
+    "impact": "Small extra verilation memory and CPU, linear in the size of the generated SystemVerilog. No effect on the simulation binary."
+   },
+   {
+    "category": "performance",
+    "claim": "Fix slow unsized number parsing (#5577, f458951b1): V3Number no longer allocates and frees a full --max-num-width buffer for every unsized number literal.",
+    "evidence": "Commit f458951b1 changes src/V3Number.cpp (+6/-1) and adds t_const_number_unsized_parse. It is listed in Changes 5.032 and was not mentioned in the findings.",
+    "impact": "Verilation-time improvement only, and only for sources with many unsized literals. Probably negligible for Chisel output."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "docs/guide/deprecations.rst in 5.032 repeats the plan that Verilator will require C++20 or newer for compiling Verilator and all Verilated models 'no sooner than May 2025'. 5.032 itself still accepts C++14, so svsim's -std=c++17 is fine here. It is a forward-looking risk for later versions in the catalog.",
+    "evidence": "The 5.032 deprecations.rst section 'C++14 compiler support' adds '(Likely to be removed shortly after GitHub removes Ubuntu 20.04 continuous-integration action runners...)'. include/verilatedos.h:281-284 still allows C++14.",
+    "impact": "No action for 5.032. For later versions (5.034 and up), check verilatedos.h, because svsim's hard-coded -std=c++17 will break once C++20 is required."
+   },
+   {
+    "category": "semantics",
+    "claim": "The V3Delayed NBA scheme selection for unpacked arrays changed: arrays without a basic element type now use the ShadowVar scheme. Arrays of packed or basic elements, which covers every Chisel/firtool memory, still use FlagShared, and loop and fork cases are unchanged.",
+    "evidence": "A -w diff of V3Delayed.cpp chooseScheme() (lines 248-281) adds `if (basicp) return Scheme::FlagShared; return Scheme::ShadowVar;` after the unchanged inLoop and inSuspOrFork branches. Changes 5.032: 'Fix NBAs to unpacked arrays of unpacked structs (#5603)'.",
+    "impact": "None for this project, but it confirms that the nonblocking memory write scheme is unchanged between 5.030 and 5.032."
+   },
+   {
+    "category": "other",
+    "claim": "Configuration-file waiver matching changed. `lint_off -match` now compares against the whole multi-line message including source context. Existing rules get a trailing '*' appended so old rules still match. `lint_off -contents` and `--waiver-multiline` are new, and `--no-std` now also disables the std waiver file.",
+    "evidence": "V3Config.cpp (WaiverSetting with m_contents/m_match; addIgnoreMatch comment 'Since Verilator 5.031 the error message compared has context, so allow old rules to still match using a final *'). V3FileLine.cpp builds wsstr (message plus context) before V3Config::waive. docs/guide/exe_verilator.rst documents the new semantics.",
+    "impact": "Only matters if the project passes its own .vlt waivers using -match. The svsim command line given has none, and no lint output is expected anyway."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "Runtime fatal message text changed in a few rarely-hit paths: the duplicated '%Error: ' prefix was removed from VL_FATAL_MT messages for 'Simulation threads must be >= 1', 'There is no next time slot scheduled', the generated 'No delays in the design' and the coverage selftest. vl_fatal() itself still prints '%Error: file:line: msg' and then 'Aborting...'.",
+    "evidence": "Commit 6e204ed0d 'Internals: Cleanup error error on fatals' (include/verilated.cpp, verilated_cov.cpp, verilated_timing.cpp, src/V3EmitCModel.cpp). v5.032 verilated.cpp:150-171 shows vl_fatal unchanged.",
+    "impact": "Only affects tooling that greps those exact message strings. The svsim driver guards nextTimeSlot() with eventsPending(), so the path is not expected to be hit."
+   }
+  ]
+ }
+}
