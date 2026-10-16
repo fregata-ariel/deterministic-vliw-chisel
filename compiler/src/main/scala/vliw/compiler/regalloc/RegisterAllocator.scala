@@ -20,7 +20,8 @@ final case class Allocation(schedule: Schedule, register: Map[Int, Int]) {
       case Node.Compute(Op.Add, a, b) => ComputeOp.Add(register(i), register(a), register(b))
       case Node.Compute(Op.Sub, a, b) => ComputeOp.Sub(register(i), register(a), register(b))
       case Node.Compute(Op.Mul, a, b) => ComputeOp.Mul(register(i), register(a), register(b))
-      case other                      => sys.error(s"not a compute node: $other")
+      case Node.Mac(a, b, c) => ComputeOp.Mac(register(i), register(a), register(b), register(c))
+      case other             => sys.error(s"not a compute node: $other")
     }
     def memory(i: Int): MemoryOp = dag.nodes(i) match {
       case Node.Load(addr)     => MemoryOp.Ld(register(i), addr)

@@ -23,7 +23,8 @@ class DagSpec extends AnyFunSuite {
       n match {
         case Node.Load(a)           => values(i) = mem(a); mem
         case Node.Compute(op, a, b) => values(i) = op(values(a), values(b)); mem
-        case Node.Store(a, v)       => mem.updated(a, values(v))
+        case Node.Mac(a, b, c) => values(i) = Op.Add(Op.Mul(values(a), values(b)), values(c)); mem
+        case Node.Store(a, v)  => mem.updated(a, values(v))
       }
     }
   }

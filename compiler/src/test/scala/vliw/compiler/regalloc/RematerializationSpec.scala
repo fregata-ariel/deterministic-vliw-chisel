@@ -5,7 +5,7 @@ import scala.util.Random
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.KernelCompiler
-import vliw.compiler.dag.{Dag, EdgeKind, Node}
+import vliw.compiler.dag.{Dag, EdgeKind, Fusion, Node}
 import vliw.compiler.dsl._
 import vliw.compiler.dsl.LoweredKernel.{Bin, Read, Write}
 import vliw.compiler.schedule.{ListScheduler, Priority}
@@ -25,9 +25,14 @@ class RematerializationSpec extends AnyFunSuite {
     v("register_file")("count") = n
     MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
   }
-  // 8, 12 and 16 registers on the three machines of the benchmarks.
+  private val mvp1 = MachineDescription
+    .load(java.nio.file.Paths.get("config", "machine-mvp1.json"))
+    .fold(es => fail(es.mkString("\n")), identity)
+  // 8, 12 and 16 registers on the three machines of the benchmarks, and on the three mvp-1
+  // machines (#77), whose DAGs have MACs.
   private val machines = for {
-    m <- Seq(machine, machineFile("slow_units.json"), machineFile("ii_units.json"))
+    m <- Seq(machine, machineFile("slow_units.json"), machineFile("ii_units.json")) ++
+      Seq(mvp1, machineFile("mvp1_rp4.json"), machineFile("mvp1_mac3.json"))
     r <- Seq(8, 12, 16)
   } yield withRegisters(m, r)
 
@@ -44,15 +49,16 @@ class RematerializationSpec extends AnyFunSuite {
       n match {
         case Node.Load(a)           => values(i) = mem(a); mem
         case Node.Compute(op, a, b) => values(i) = op(values(a), values(b)); mem
-        case Node.Store(a, v)       => mem.updated(a, values(v))
+        case Node.Mac(a, b, c) => values(i) = Op.Add(Op.Mul(values(a), values(b)), values(c)); mem
+        case Node.Store(a, v)  => mem.updated(a, values(v))
       }
     }
   }
 
   test("a split gives the moved readers a copy of the LD; ids stay topological; values stay") {
     val rng = new Random(70L)
-    Benchmarks.all.foreach { k =>
-      val p = prepared(k, machine)
+    for (m <- Seq(machine, mvp1); k <- Benchmarks.all) {
+      val p = prepared(k, m)
       val lowered = Lowering.lower(p.layout)
       // Moves the later half of the readers of every shared LD, one LD at a time.
       val split = p.dag.nodes.indices.reverse.foldLeft(p.dag) { (d, v) =>
@@ -71,6 +77,7 @@ class RematerializationSpec extends AnyFunSuite {
       // Every data edge names an operand of its node, and every operand has its edge.
       split.nodes.zipWithIndex.foreach {
         case (Node.Compute(_, a, b), i) => assert(operandsOf(split, i) == Set(a, b))
+        case (Node.Mac(a, b, c), i)     => assert(operandsOf(split, i) == Set(a, b, c))
         case (Node.Store(_, v), i)      => assert(operandsOf(split, i) == Set(v))
         case (_: Node.Load, i)          => assert(operandsOf(split, i).isEmpty)
       }
@@ -93,8 +100,36 @@ class RematerializationSpec extends AnyFunSuite {
     assert(s.nodes(st) == Node.Load(0) && s.nodes(st + 1) == Node.Store(5, st))
     s.nodes.zipWithIndex.foreach {
       case (Node.Compute(_, a, b), i) => assert(operandsOf(s, i) == Set(a, b))
+      case (Node.Mac(a, b, c), i)     => assert(operandsOf(s, i) == Set(a, b, c))
       case (Node.Store(_, v), i)      => assert(operandsOf(s, i) == Set(v))
       case (_: Node.Load, i)          => assert(operandsOf(s, i).isEmpty)
+    }
+  }
+
+  test("a split re-points whichever operand of a MAC reads the LD") {
+    def mac(a: Int, b: Int, c: Int) = Bin(Op.Add, Bin(Op.Mul, Read(a), Read(b)), Read(c))
+    // [10] = [0] * [1] + [2]; [11] = [1] * [0] + [3]; [12] = [3] * [2] + [0]: fused, LD 0, LD 1,
+    // LD 2, MAC 3, ST 4, LD 3, MAC 6, ST 7, MAC 8, ST 9. The LD of [0] is the first operand of
+    // MAC 3, the second of MAC 6 and the addend of MAC 8.
+    val d = Fusion.fuse(
+      Dag.build(
+        mvp1,
+        Vector(Write(10, mac(0, 1, 2)), Write(11, mac(1, 0, 3)), Write(12, mac(3, 2, 0)))
+      )
+    )
+    assert(d.nodes(3) == Node.Mac(0, 1, 2) && d.nodes(6) == Node.Mac(1, 0, 5))
+    assert(d.nodes(8) == Node.Mac(5, 2, 0) && d.readers(0) == Vector(3, 6, 8))
+    val later = d.split(0, Set(6, 8)) // the copy at 6; MAC 3 keeps the original
+    assert(later.nodes(3) == Node.Mac(0, 1, 2) && later.nodes(6) == Node.Load(0))
+    assert(later.nodes(7) == Node.Mac(1, 6, 5) && later.nodes(9) == Node.Mac(5, 2, 6))
+    val first = d.split(0, Set(3)) // the copy at 3
+    assert(first.nodes(3) == Node.Load(0) && first.nodes(4) == Node.Mac(3, 1, 2))
+    assert(first.nodes(7) == Node.Mac(1, 0, 6) && first.nodes(9) == Node.Mac(6, 2, 0))
+    val memory = Map(0 -> 2L, 1 -> 3L, 2 -> 5L, 3 -> 7L)
+    val expected = memory ++ Map(10 -> 11L, 11 -> 13L, 12 -> 37L)
+    for (s <- Seq(d, later, first)) {
+      assert(evaluate(s, memory) == expected)
+      s.nodes.zipWithIndex.foreach { case (n, i) => assert(operandsOf(s, i) == n.operands.toSet) }
     }
   }
 

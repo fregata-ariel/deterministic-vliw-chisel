@@ -3,7 +3,7 @@ package vliw.compiler.regalloc
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.Verifier
-import vliw.compiler.dag.Dag
+import vliw.compiler.dag.{Dag, Fusion}
 import vliw.compiler.dsl._
 import vliw.compiler.dsl.LoweredKernel.{Bin, Read, Write}
 import vliw.compiler.schedule.{ListScheduler, Priority}
@@ -66,6 +66,28 @@ class RegisterAllocatorSpec extends AnyFunSuite {
     for (x <- iv; y <- iv if x.value < y.value && a.register(x.value) == a.register(y.value))
       assert(x.end <= y.start || y.end <= x.start, s"$x and $y share r${a.register(x.value)}")
     assert(a.register.values.max + 1 == RegisterAllocator.maxLive(s))
+  }
+
+  test("a MAC reads its three operands at issue: their intervals end there (mvp-1)") {
+    val mvp1 = MachineDescription
+      .load(java.nio.file.Paths.get("config", "machine-mvp1.json"))
+      .fold(es => fail(es.mkString("\n")), identity)
+    def mac(a: Int, b: Int, c: Int) = Bin(Op.Add, Bin(Op.Mul, Read(a), Read(b)), Read(c))
+    // [10] = [0] * [1] + [2]: LD 0, LD 1, LD 2, MAC 3, ST 4.
+    val d = Fusion.fuse(Dag.build(mvp1, Vector(Write(10, mac(0, 1, 2)))))
+    val s = ListScheduler.schedule(d)
+    assert(s.issue == Vector(0, 1, 2, 4, 6))
+    val iv = RegisterAllocator.intervals(s)
+    assert(iv == Vector(Interval(0, 0, 4), Interval(1, 1, 4), Interval(2, 2, 4), Interval(3, 4, 6)))
+    val a = RegisterAllocator.allocate(s).fold(e => fail(e), identity)
+    assert(a.bundles(4).compute == ComputeOp.Mac(a.register(3), 0, 1, 2))
+    // [10] = [0] * [0] + [0]: one LD read by three fields; the MAC may reuse its register.
+    val one = Fusion.fuse(Dag.build(mvp1, Vector(Write(10, mac(0, 0, 0)))))
+    val so = ListScheduler.schedule(one)
+    assert(RegisterAllocator.intervals(so) == Vector(Interval(0, 0, 2), Interval(1, 2, 4)))
+    val ao = RegisterAllocator.allocate(so).fold(e => fail(e), identity)
+    assert(ao.bundles(2).compute == ComputeOp.Mac(0, 0, 0, 0))
+    assert(ao.bundles(4).memory == MemoryOp.St(10, 0))
   }
 
   test("allocated benchmarks pass the verifier on three machines with 16 registers") {

@@ -100,9 +100,11 @@ object Main {
       val json = o.out.resolve(s"${k.name}.json")
       ProgramFile.write(hex, c.words).fold(e => exit(2, e), identity)
       Files.write(json, (ujson.write(tc, indent = 2) + "\n").getBytes(StandardCharsets.UTF_8))
+      val fused = if (machine.hasMac) s", ${c.dag.macs} MUL + ADD pairs fused into MAC" else ""
       println(
         s"${k.name}: ${c.cycles} cycles (lower bounds ${c.dag.cyclesLowerBound} from dependences, " +
-          s"${c.dag.resourceLowerBound} from slots), ${c.allocated.attempt}; wrote $hex and $json"
+          s"${c.dag.resourceLowerBound} from slots), ${c.allocated.attempt}$fused; " +
+          s"wrote $hex and $json"
       )
     }
   }

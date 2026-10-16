@@ -6,17 +6,18 @@
 |---|---|---|---|
 | メモリ配置・lowering | `Kernel` → `LoweredKernel`（アドレス単位の式） | `vliw.compiler.dsl` | #47 |
 | DAG | `LoweredKernel` → `Dag` | `vliw.compiler.dag` | #48 |
+| MAC への融合 | `Dag` → `Dag`（machine に MAC があるときだけ。MUL＋ADD を MAC に） | `vliw.compiler.dag.Fusion` | #77 |
 | list scheduling | `Dag` → `Schedule`（各ノードの発行サイクルと HALT。値は仮想レジスタ） | `vliw.compiler.schedule` | #49 |
 | register allocation | `Dag` → `Allocated`（スケジュールと物理レジスタ、bundle 列） | `vliw.compiler.regalloc` | #50 |
 | コード生成と検証 | → 命令語（verifier の最終検査に通ったもの）、`.hex`、テストケース | `vliw.compiler.KernelCompiler` | #51 |
 
 Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節に（#76）、そのスケジューリングは「[Modulo Scheduling](#modulo-scheduling)」の節にある（#68）。
 
-ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約（規則 L11）は #77 で加える。規則は [ADR-0019](DECISIONS.md)（融合）と ADR-0018（L11）に書いた。
+ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約（規則 L11）は、直線のカーネルについて「[MAC への融合](#mac-への融合)」と「[list scheduling](#list-scheduling)」の節にある（#77）。規則は [ADR-0019](DECISIONS.md)（融合）と ADR-0018（L11）に書いた。ループ（ループ IR と Modulo Scheduling）での融合と L11 は #77 で加える。mvp-0 の machine では、どの段の結果も変わらない。
 
 ## DAG
 
-`Dag.build(machine, writes)`（または `Dag.of(lowered, machine)`）は、lowering した式から演算の DAG を作る。
+`Dag.build(machine, writes)`（または `Dag.of(lowered, machine)`）は、lowering した式から演算の DAG を作る。MAC への融合は、その後の別の段である（下の「[MAC への融合](#mac-への融合)」）。
 
 ### ノード
 
@@ -24,6 +25,7 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 |---|---|
 | `Load(addr)` | LD。アドレスは即値なので静的に決まる |
 | `Compute(op, a, b)` | ADD・SUB・MUL。オペランドはノード番号 |
+| `Mac(a, b, c)` | MAC（ISA mvp-1）。値は `a × b + c` の下位32bit。DSL には無く、融合（下の「MAC への融合」）だけが作る |
 | `Store(addr, value)` | ST。値はノード番号 |
 
 値はまだ仮想値で、レジスタは決めていない。等しい値は1つのノードにまとめる（値番号付け）。
@@ -66,9 +68,42 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 
 3カーネルとも資源の下限の方が大きく、スロット数が性能を決める。
 
+### MAC への融合
+
+machine に MAC があるとき（ISA mvp-1、`MachineDescription.hasMac`）、`KernelCompiler.prepare` は DAG を作った後、スケジュールの前に `Fusion.fuse` で MUL と ADD を MAC にする（[ADR-0019](DECISIONS.md)）。MAC のない machine では DAG を変えない。
+
+| 形 | 扱い |
+|---|---|
+| MUL m の読む側が ADD a だけ | `Mac(m.a, m.b, a のもう1つのオペランド)` にする。m がどちらのオペランドでもよい |
+| m に、ほかの読む側がある（ADD・SUB・MUL・ST のどれでも） | 融合しない。値を計算し直さない |
+| `ADD(m, m)` | 融合しない |
+| `ADD(m1, m2)` で、両方を融合できる | 後の MUL（番号の大きい方）を融合し、先の MUL を足す数に残す |
+| SUB | 融合しない |
+
+- 判定は、融合する前の DAG で ADD ごとに行う。`Fusion.pairs` が融合する組（MUL, ADD）を返す。融合した DAG に、融合できる組は残らない
+- MAC は ADD の番号に入り、MUL を除いた後の番号を1つずつ詰める。番号は位相順のままである。データ依存の辺はオペランドから作り直す（MAC からの辺の距離は MAC の L）。メモリ順序の辺は LD と ST の間にしかないので、端の番号を付け替えるだけである
+- MAC の値は `ADD(MUL(a, b), c)` と同じで、乗算の数は増えない
+- 融合は戦略の次元にしない（rematerialization と同じ）。DAG はカーネルと machine だけで決まり、全ての試行が同じ DAG を使う。DSL に MAC は無いので、`Dag.macs`（MAC の数）が融合した組の数である
+
+ベンチマークでは、全ての組を融合する。`fir4x8` と `matmul3` は、各出力の和の最初の MUL を足す数に残し、残りの MUL が MAC になる。
+
+| カーネル | 融合した組 | LD | MUL | MAC | ST | `cyclesLowerBound`（MAC の L 2 / 3） | `resourceLowerBound` |
+|---|---|---|---|---|---|---|---|
+| `saxpy8` | 8 | 17 | 0 | 8 | 8 | 6 / 7 | 26 |
+| `fir4x8` | 24 | 15 | 8 | 24 | 8 | 12 / 15 | 33 |
+| `matmul3` | 18 | 18 | 9 | 18 | 9 | 10 / 12 | 28 |
+
+Compute の演算が減るので、`fir4x8` と `matmul3` のスロットの下限は 57 → 33、46 → 28 になる。依存の鎖は延びる（`fir4x8` は 9 → 12）。
+
 ### テスト
 
 `compiler/src/test/.../dag/DagSpec`：ISA の命令例の DAG（ノード・辺・距離・下限）、machine description による距離の変化、値番号付け、メモリ順序の4種類の辺、ベンチマークのノード数と下限、辺が ASAP で満たされること、DAG をノード順に実行した結果が lowering の評価と一致すること。
+
+`compiler/src/test/.../dag/FusionSpec`（#77）
+- 手作りの例: ISA の命令例（ノード・辺・距離・下限。MAC の L 3 の構成も）、ほかの読む側がある MUL（ADD・ST・SUB・MUL）、SUB と `ADD(m, m)`、`ADD(MUL, MUL)` で後の MUL を融合すること（後の MUL を ST も読むときは先の MUL）、MAC の鎖と MAC の積の融合、MAC のない machine で DAG が変わらないこと
+- MUL を除いた後も、メモリ順序の辺（ST → LD・LD → ST・ST → ST）の端が正しいこと（手作りの例と、6語を読み書きする乱数の500の書込みの列）
+- 乱数の書込みの列、ベンチマーク、乱数の DSL カーネル（`RandomKernels`、`crosscheck/RandomKernelSpec` と同じ作り方）で、組がノードのオペランドから数えた規則と一致すること、データ依存の辺がオペランドと一致し、メモリ順序の辺が規則どおりであること、融合した DAG を辺を守る乱数の順序で実行した結果が、融合しない DAG と lowering の評価に一致すること
+- 上の表の値
 
 ## list scheduling
 
@@ -79,12 +114,28 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 | 制約 | 方法 | 規則（[ISA.md](ISA.md)） |
 |---|---|---|
 | 依存 | 辺 `(from, to, d)` について、`to` は `issue(from) + d` 以降 | L3、L8、L10 |
-| スロット | 各サイクルに Compute・Memory それぞれ高々1つ | 構造 |
-| 書戻しポート | ADD/SUB/MUL は Compute ポートを、LD は Memory ポートを、境界 E_(s+L) に予約する。予約済みの境界を使う配置はしない（例: MUL(s) の後の ADD(s+1)） | L5 |
-| II | 同じ演算の発行は II 以上空ける | L9 |
+| スロット | 各サイクルに Compute・Memory それぞれ高々1つ。MAC は Compute | 構造 |
+| 書戻しポート | ADD/SUB/MUL/MAC は Compute ポートを、LD は Memory ポートを、境界 E_(s+L) に予約する。予約済みの境界を使う配置はしない（例: MUL(s) の後の ADD(s+1)） | L5 |
+| II | 同じ演算の発行は II 以上空ける（MAC の L と II は `operations.MAC` から取る） | L9 |
+| 読出しポート | bundle のオペランドの欄の数（ADD/SUB/MUL は 2、MAC は 3、ST は 1、LD は 0）の和を `register_file.read_ports` 以下にする | L11 |
 | HALT | 全操作が完了する境界 `max(s+L)` に置く。HALT の bundle には他の操作を置かない | L2、L6 |
 
 同じレジスタへの書込み区間の重複（L4）と、書込み中のレジスタの読出し（L3 のうち、レジスタの再利用によるもの）は、レジスタ割り当て（#50）で扱う。レジスタの上限を与えると、生きている値の数も制約にする（下の「register allocation」）。
+
+読出しポートは、各サイクルで Compute を先に埋め、次に Memory を埋めるときに数える。`read_ports` が3の mvp-1 では、MAC を置いた bundle に ST を置けず、ST は次のサイクル以降に待つ。その bundle の Memory には、LD なら置ける。この素朴な方法に固定し、ST のために MAC を遅らせる工夫はしない（[ADR-0019](DECISIONS.md)）。mvp-0 の演算は bundle 当たり高々3つを読むので、mvp-0 では制約にならない。読出しポートの検査は、レジスタの上限以外の制約を調べる部分（`ListScheduler` の `free`）に入れる。このため、読出しポートだけで空く Memory スロットは、rematerialization の「詰まり」に数えない（下の「rematerialization」）。
+
+### 制約で待ったサイクルの数
+
+比較の記録のために、list scheduling は `Schedule` に2つの数を残す（#77）。どちらも置き方を変えない。Modulo Scheduling の `Schedule` では0である。
+
+| 値 | 数えるサイクル |
+|---|---|
+| `heldByReadPorts` | 準備ができた ST が、読出しポート（L11）以外の制約（依存・スロット・書戻しポート・II・レジスタの上限）を全て満たすのに、bundle の読出しが `read_ports` を超えるので置けなかったサイクル |
+| `heldByWritePort` | 準備ができた Compute のノードが、書戻しポート（L5）以外の制約を全て満たすのに、その境界のポートが予約済みなので置けなかったサイクル |
+
+- 各スロットはサイクルごとに1回だけ埋めるので、どちらもサイクル当たり高々1つ増える。数えるのは、そのスロットを埋める直前の状態である
+- 待ったノードの代わりに、同じスロットに別のノードを置いたサイクルも数える（例: ST が待ち、LD を置いた）
+- mvp-0 では `heldByReadPorts` は常に0である
 
 ### 優先度
 
@@ -113,9 +164,28 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 
 スロットの下限は、これらを数えていない。
 
+### 結果（mvp-1、レジスタの上限なし）
+
+cycles と、括弧の中に `heldByReadPorts` / `heldByWritePort` を示す。mvp-1 の3つの構成は、`config/machine-mvp1.json`（`read_ports` 3、MAC の L 2）、`tests/machines/mvp1_rp4.json`（`read_ports` 4）、`tests/machines/mvp1_mac3.json`（MAC の L 3）である。
+
+| 構成 | 優先度 | `saxpy8` | `fir4x8` | `matmul3` |
+|---|---|---|---|---|
+| mvp-0（既定） | `CriticalPath` | 26（0 / 1） | 63（0 / 30） | 52（0 / 25） |
+| | `ProgramOrder` | 28（0 / 1） | 63（0 / 30） | 53（0 / 24） |
+| mvp-1 | `CriticalPath` | 27（7 / 0） | 44（6 / 0） | 40（7 / 0） |
+| | `ProgramOrder` | 28（5 / 0） | 40（0 / 0） | 39（0 / 0） |
+| `read_ports` 4 | `CriticalPath` | 26（0 / 0） | 38（0 / 0） | 33（0 / 0） |
+| | `ProgramOrder` | 28（0 / 0） | 40（0 / 0） | 39（0 / 0） |
+| MAC の L 3 | `CriticalPath` | 27（6 / 0） | 44（5 / 0） | 40（6 / 0） |
+| | `ProgramOrder` | 29（2 / 0） | 53（0 / 19） | 45（0 / 11） |
+
+- MAC の L が2では、`fir4x8` と `matmul3` の Compute の演算は MUL と MAC だけで、どちらも L 2 なので、書戻しポートで待つことがない（ADR-0018）。L 3 では、MAC(s) と MUL(s+1) が同じ境界を使う
+- `read_ports` 3 では、`CriticalPath` は MAC の後の ST を待たせ、`read_ports` 4 より `fir4x8` で6、`matmul3` で7サイクル長い。`saxpy8` は Memory スロットが律速で、ST が MAC と重なれないので1サイクル長い
+
 ### テスト
 
-- `compiler/.../schedule/ScheduleSpec`: スケジューラとは独立に書いた検査で、依存・スロット・書戻しポート・II・HALT の位置を確かめる。対象はベンチマーク3つ × 構成3つ（既定、`slow_units`、`ii_units`）× 優先度2つ。cycles が両方の下限以上であることと、上の表の値も確かめる
+- `compiler/.../schedule/ScheduleSpec`: スケジューラとは独立に書いた検査で、依存・スロット・書戻しポート・II・読出しポート・HALT の位置を確かめる。対象はベンチマーク3つ × 構成3つ（既定、`slow_units`、`ii_units`）× 優先度2つ。cycles が両方の下限以上であることと、上の表の値も確かめる
+- 同じ `ScheduleSpec` で、mvp-1（#77）: 3つの構成の、上限なしと上限付き（16本、reserve 0〜8）の全スケジュールが上の検査に合格し、`read_ports` 3 では MAC と ST が同じ bundle に無く、4 ではあること。手作りの例で、読出しポートで待つ ST（`read_ports` 3 と 4 の発行サイクル）、書戻しポートで待つ Compute のノード（ADD、MAC の L 3 での MUL）と、その数。2つの数が、発行サイクルだけから数え直した値と一致すること（6つの構成のベンチマークと、乱数の DSL カーネル）。MAC の II（L9）。上の表の値
 - 命令列にした結果の確認は、レジスタ割り当ての後で行う（下の「register allocation」のテスト）
 
 ## register allocation
@@ -133,6 +203,8 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 - L3: v の読出しはすべて u_v 以前で、新しい書込みの発行サイクル以前なので、書込み中の読出しにならない（u_v での読出しは発行サイクル自身の読出しで、旧値 v を読む）
 - L4: v の書込み区間 `[s_v, s_v + L)` は、データ依存により u_v までに終わる
 - 値: 新しい値は u_v + 1 以降に見えるので、v の読出しはすべて v を読む
+
+MAC は3つのオペランドを発行サイクルに読むので、3つとも読む側に数える（同じ値を2つの欄で読んでも、読む側は1つ）。
 
 ### 割り当て
 
@@ -158,12 +230,12 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 | 項目 | 内容 |
 |---|---|
 | 複製してよい LD | DAG のどの ST も書かない語の LD（`Dag.rematerializable`）。今の DSL では入力・スカラー・定数の全て。ST のある語の LD は複製しない |
-| 止める点 | レジスタの上限のために、準備ができて他の制約（依存・スロット・書戻しポート・II）を全て満たすノードがあるのに、スロットが空く cycle（詰まり） |
+| 止める点 | レジスタの上限のために、準備ができて他の制約（依存・スロット・書戻しポート・II・読出しポート）を全て満たすノードがあるのに、スロットが空く cycle（詰まり） |
 | 候補 | 置いた LD のうち、読む側に、置いたものと置いていないものの両方があるもの。複製は、置いていない読む側のための新しい LD で、元の LD のレジスタは置いた読む側の最後の発行で空く |
 | 選ぶ候補 | 置いていない読む側の中で優先度が最も高いものの優先度が、最も低い候補（次の使用が最も遠い）。同じならば番号の小さい方 |
 | 次 | 置いていない読む側を複製に付け替えた DAG（`Dag.split`）で、試行を最初からやり直し、前に止まった cycle 以降の最初の詰まりで止まる（それより前の詰まりは、候補があっても見送る）。候補がなければ、その cycle の詰まりは見送って先に進む。行き詰まって候補もなければ `Stuck` |
 
-- DAG: 複製は、付け替える読む側の最小の番号に入り、そこから後の番号を1つずつ増やす。番号は位相順のままである。複製の辺は、読む側へのデータ依存の辺だけである（書込みのない語なので、メモリ順序の辺は生じない）
+- DAG: 複製は、付け替える読む側の最小の番号に入り、そこから後の番号を1つずつ増やす。番号は位相順のままである。複製の辺は、読む側へのデータ依存の辺だけである（書込みのない語なので、メモリ順序の辺は生じない）。MAC は、3つのオペランドのどれが LD を読んでいても付け替える
 - 終わること: 複製ごとに LD が1つ増え、各語の LD の数は読む側の数以下である。詰まりを探し始める cycle は、複製の後は前に止まった cycle、見送りの後はその次の cycle で、減らない
 - 時間: 複製と見送りのたびに試行を最初からやり直すので、1つの試行の時間は、複製と見送りの数 × スケジュールの長さに比例する。3カーネルは全ての試行を合わせて数秒である。命令領域に収まらない大きなカーネル（例えば `matmul(6)`）では数十秒かかり、最後は verifier が命令領域の超過（L2）で拒否する
 - 結果: 上限付きで成功したスケジュールなので、割り当ては必ず成功する。`Allocated.dag` は複製を含む DAG、`CompiledKernel.dag` はカーネルの DAG（下限の表はこちら）
@@ -193,6 +265,29 @@ ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約
 
 vliw の、方式ごとに cycles 最小の値である。複製なしでは、12本の `matmul3`、8本の `fir4x8` と `matmul3` はどの試行でも収まらず、12本の `fir4x8` は 69 cycles だった。`matmul3` は12本の方が16本より速い。12本で選ばれる program-order、reserve 0 の試行は、複製なしでは行き詰まり、複製で 55 cycles（LD 37）になる。16本では同じ試行が複製なしで収まる（57 cycles）ので、複製を作らない（常に複製を許せば 54 cycles。ADR-0016）。16本でも、行き詰まる試行（critical-path の reserve 0・4・5、program-order の reserve 4〜8）には複製が現れるが、どれも 56 cycles より速くない。単一発行と、戦略を固定した系列の比較は [benchmarks/REGISTERS.md](../benchmarks/REGISTERS.md) にある。
 
+### 結果（mvp-1、8・12・16 レジスタ、#77）
+
+方式ごとに cycles 最小の値で、括弧の中は LD の数である。mvp-0 の行は上の表と同じ。レジスタ数だけを変えた構成で測る。
+
+| 構成 | レジスタ | `saxpy8` | `fir4x8` | `matmul3` |
+|---|---|---|---|---|
+| mvp-0（既定） | 16 / 12 / 8 | 26 / 26 / 28 | 65 / 66 / 70 | 56 / 55 / 61 |
+| mvp-1（`read_ports` 3） | 16 / 12 / 8 | 27 / 27 / 27 | 40 / 40 / 40（LD 15 / 15 / 29） | 39 / 39 / 49（LD 18 / 24 / 32） |
+| `read_ports` 4 | 16 / 12 / 8 | 26 / 26 / 26 | 38 / 40 / 40（LD 27 / 15 / 29） | 33 / 38 / 49（LD 18 / 24 / 32） |
+| MAC の L 3 | 16 / 12 / 8 | 27 / 27 / 27 | 44 / 44 / 53（LD 27 / 32 / 15） | 40 / 44 / 55（LD 18 / 32 / 38） |
+
+`saxpy8` の LD はどれも17である。16本で選ばれた試行は次のとおり。
+
+| 構成 | `saxpy8` | `fir4x8` | `matmul3` |
+|---|---|---|---|
+| mvp-1 | critical-path、上限なし | program-order、上限なし | program-order、上限16、reserve 0 |
+| `read_ports` 4 | critical-path、上限なし | critical-path、上限16、reserve 1（複製あり） | critical-path、上限16、reserve 0 |
+| MAC の L 3 | critical-path、上限なし | critical-path、上限16、reserve 1（複製あり） | critical-path、上限16、reserve 0 |
+
+- 16本では、ADR-0018 の見積り（`fir4x8` 65 → 40、`matmul3` 56 → 39（`read_ports` 3）・33（4）、`saxpy8` 26 → 27（3）・26（4））と一致する。ただし `read_ports` 4 の `fir4x8` は、複製（rematerialization）のある試行が 38 cycles になる。複製なしでは 40 cycles である（MAC の L 3 では 44 と 46）
+- MAC で同時に生きる値が減る。上限なしの `fir4x8` は、critical-path で20、program-order で13（mvp-0 では33）。mvp-1 の `fir4x8` は program-order の上限なしで16本に収まり、8本でも 40 cycles である
+- 選ばれた試行の `heldByReadPorts` は、mvp-1 の16本で `saxpy8` 7、`fir4x8` と `matmul3` 0 である。`read_ports` 3 の損失は、選ばれた試行の cycles では `saxpy8` 1、`fir4x8` 2、`matmul3` 6 サイクルになる
+
 ### 制約
 
 複製できるのは、置いた読む側のある LD だけである。読む側をまだ1つも置いていない LD がレジスタを占めて行き詰まる試行は、複製でも収まらない（例えば8本の `saxpy8` の critical-path の試行）。3本では、`fir4x8` と `matmul3` はどの試行でも収まらない（2つの LD の MUL と、和の値で3本を使う）。このときは理由付きのエラーにする。spill（計算した値を ST して後で LD する）はしない。
@@ -201,6 +296,7 @@ vliw の、方式ごとに cycles 最小の値である。複製なしでは、1
 
 - `compiler/.../regalloc/RegisterAllocatorSpec`
   - 区間の定義と、同じレジスタを使う値の区間が重ならないこと
+  - MAC の3つのオペランドの区間が MAC の発行で終わること。同じ LD を3つの欄で読む MAC（#77）
   - 3構成のベンチマークで、割り当て後の命令列を verifier が合法と判定すること
   - 成功した全ての試行についても、verifier が合法と判定すること
   - 上の表の値、レジスタが足りないときのエラー
@@ -209,6 +305,8 @@ vliw の、方式ごとに cycles 最小の値である。複製なしでは、1
   - 候補と選び方（手作りの停止状態。2つの候補から次の使用が遠い方を、同じならば番号の小さい方を選ぶこと）。ST が読む LD の付け替え
   - 3構成 × 8・12・16 本で、複製なしで収まる試行は同じ結果になり、複製は行き詰まる試行にだけ現れること。全てのカーネルが収まり、成功した全ての試行の命令列を verifier が合法と判定すること。命令列だけから見て、2回以上 LD する語を ST が書かないこと
   - コンパイラの選択が、複製で cycles が真に減るときだけ変わること。上の2つの表の値と、`slow_units` と `ii_units` の8・12・16本の値（II だけで空くスロットは詰まりに数えないこと）。常に複製を許したとき（`Remat.Always`）の、ADR-0016 が挙げる値。2回のコンパイルが同じ命令列になること
+  - mvp-1（#77）: 上の3構成 × 8・12・16 本の検査を、mvp-1 の3構成でも行う。`split` が MAC の3つのオペランドのどれでも付け替えること（手作りの例と、融合したベンチマークの DAG）
+- `compiler/.../MacCompilerSpec`（#77）: mvp-1 の3構成 × 8・12・16 本で、ベンチマークが verifier に合格し、MAC のノードごとに、割り当てたレジスタの `mac rd, rs1, rs2, rs3` があること。`read_ports` 3 では MAC と ST が同じ bundle に無いこと。命令列を ISA の意味論で実行した結果（テストの中の簡単な実行。ソースは発行サイクルに読み、結果は L サイクル後に commit する）が DSL の参照実装と一致すること。乱数で作った300のカーネルでも同じ。`read_ports` 4 の命令列を `read_ports` 3 の machine で検査すると、MAC と ST のある bundle ごとに L11 の違反になること。上の表の値
 - `crosscheck/CompiledKernelSpec`: 割り当て後のベンチマークを参照モデル（3構成、`regs8`、`regs12`）と RTL（既定の構成、`regs8`、`regs12`）で実行し、結果が DSL の参照実装と、cycles がスケジュールと一致すること
 - `crosscheck/BenchmarkSpec`: [benchmarks/REGISTERS.md](../benchmarks/REGISTERS.md) と、8・12本のテストケース・メトリクスが生成し直した内容と一致すること。それらのテストケースが参照モデルと RTL で成り立つこと。各レジスタ数の、戦略を固定した系列の全ての命令列が参照モデルで期待どおりになること
 
@@ -216,8 +314,8 @@ vliw の、方式ごとに cycles 最小の値である。複製なしでは、1
 
 `KernelCompiler.compile(kernel, machine)` は、上の各段を順に行い、`CompiledKernel` を返す。
 
-1. メモリ配置と lowering、DAG
-2. スケジュールとレジスタ割り当て（`Allocation.bundles` が bundle 列を作る。最後は HALT）
+1. メモリ配置と lowering、DAG（machine に MAC があれば融合する）
+2. スケジュールとレジスタ割り当て（`Allocation.bundles` が bundle 列を作る。最後は HALT。MAC のノード `Mac(a, b, c)` は `mac rd, rs1, rs2, rs3` で、rs1・rs2 が a・b、rs3 が c のレジスタ）
 3. エンコード
 4. **独立の verifier（[VERIFIER.md](VERIFIER.md)）による最終検査**。入力宣言は、配置の初期化済みの語（M_in）だけで、R_in は空
 
@@ -237,7 +335,7 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
 | `--seed` | 1 | テストケースの入力値の乱数の種 |
 | `--priority` | 全部 | 優先度を1つに固定する。既定では全部を試し、cycles 最小を選ぶ |
 
-カーネルごとに次の2つを書き、cycles・下限・選ばれた試行を表示する。終了コードは、入力の誤りが2、コンパイラの誤りが3。
+カーネルごとに次の2つを書き、cycles・下限・選ばれた試行を表示する（MAC のある machine では、融合した組の数も）。終了コードは、入力の誤りが2、コンパイラの誤りが3。
 
 | ファイル | 内容 |
 |---|---|

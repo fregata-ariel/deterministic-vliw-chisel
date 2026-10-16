@@ -44,7 +44,9 @@ class LoopGraphSpec extends AnyFunSuite {
       val after = d.nodes(i) match {
         case Node.Load(a)           => result(i) = mem(a); mem
         case Node.Compute(op, a, b) => result(i) = op(operand(i, a), operand(i, b)); mem
-        case Node.Store(a, v)       => mem.updated(a, operand(i, v))
+        case Node.Mac(a, b, c)      =>
+          result(i) = Op.Add(Op.Mul(operand(i, a), operand(i, b)), operand(i, c)); mem
+        case Node.Store(a, v) => mem.updated(a, operand(i, v))
       }
       done(i) = true
       after
@@ -75,6 +77,7 @@ class LoopGraphSpec extends AnyFunSuite {
       keys :+ (n match {
         case Node.Load(a)           => ("LD", a)
         case Node.Compute(op, a, b) => (op, keys(a), keys(b))
+        case Node.Mac(a, b, c)      => ("MAC", keys(a), keys(b), keys(c))
         case Node.Store(a, v)       => ("ST", a, keys(v))
       })
     }
