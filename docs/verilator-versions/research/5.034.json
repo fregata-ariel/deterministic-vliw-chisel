@@ -1,0 +1,215 @@
+{
+ "version": "5.034",
+ "research": {
+  "version": "5.034",
+  "range": "v5.032..v5.034",
+  "findings": [
+   {
+    "category": "jobs_options",
+    "claim": "The defaults for --build-jobs and --verilate-jobs (set to 1 when no option gives them) moved from the end of V3Options::parseOptsList() to V3Options::notify(). parseOptsList() also runs again for each -f/-F file. Before this change, a nested -f/-F file that was processed before -j set both values to 1, so a later -j N was silently ignored. svsim puts '--build-jobs 0 --verilate-jobs 1' (or its default '-j 0') before '-F <file list>', so its jobs settings were never affected and work the same in 5.034. The meaning of -j, --build-jobs and --verilate-jobs is unchanged: 0 means hardware_concurrency, and an explicit --build-jobs/--verilate-jobs still overrides -j.",
+    "evidence": "Changes 5.034: \"Fix `-j` ignored after `-f` (#5749). [Luca Colagrande]\". Commit d4f4fefd. src/V3Options.cpp:965-966 (v5.034, in notify()): `if (m_buildJobs == -1) m_buildJobs = 1; if (m_verilateJobs == -1) m_verilateJobs = 1;`, removed from the end of parseOptsList() (v5.032:src/V3Options.cpp:1840-1841). The -j handler is unchanged at v5.034:src/V3Options.cpp:1835-1836: `if (m_buildJobs == -1) m_buildJobs = val;`.",
+    "impact": "None for the current svsim argument order. If -j were ever placed after -F, 5.034 would apply it (e.g. '-j 0' would turn on multi-threaded verilation), where 5.020-5.032 would have quietly used 1.",
+    "expected_measurement": "Same as 5.032. With '--build-jobs 0 --verilate-jobs 1' the build should run 'make -j <nproc>' (4 on the measurement box) and verilation should be single-threaded. '-j 0' placed before -F should behave as in 5.032."
+   },
+   {
+    "category": "thread_pool_exit",
+    "claim": "Nothing about the thread pool, mutexes or the exit path changed in this range. The verilator_bin exit race (upstream issue 4931) should therefore behave exactly as in 5.032.",
+    "evidence": "`git diff --stat v5.032 v5.034 -- src/V3ThreadPool.cpp src/V3ThreadPool.h src/V3Mutex.h src/Verilator.cpp` shows no changes. `git log v5.032..v5.034 -- 'src/*Thread*' 'src/V3Mutex*' 'include/verilated_threads*'` is empty. In src/V3Error.cpp the only change (commit 2e1fa8f3/bdcfc4e2 range) is `if (!extra.empty() && !m_errorSuppressed)`. vlAbortOrExit(), including the `::_exit(1)` path for verilateJobs()>1, is unchanged. The thread pool is still created at v5.034:src/Verilator.cpp:667 `new V3ThreadPool{v3Global.opt.verilateJobs()}`.",
+    "impact": "The abort rate with '-j 0' should match whatever 5.032 shows. With '--verilate-jobs 1' (VliwChiselSim settings) there should be no thread-pool-related aborts.",
+    "expected_measurement": "The '-j 0' abort count is statistically equal to 5.032's result, and there are 0 aborts in 3000 runs with '--build-jobs 0 --verilate-jobs 1'."
+   },
+   {
+    "category": "seed_random",
+    "claim": "AstRand now reports itself as impure (non-removable) only for seeded $urandom(seed)/$random(seed) and for internal reset randoms. Unseeded $urandom, which is what +define+RANDOM=$urandom produces, stays pure as before. Internal reset randoms (AstRand::Reset) are only created by V3Unknown under --x-assign unique, which svsim does not pass. So the number and order of RNG draws in firtool's RANDOMIZE_REG_INIT/MEM_INIT code should not change.",
+    "evidence": "Changes 5.034: \"Fix mis-optimizing away `$urandom` (#5703). [Parker Schless]\". Commit dfe28f7e. v5.034:src/V3AstNodeExpr.h:1832 `bool isPure() override { return !m_reset && !seedp(); }`. The only creator of AstRand::Reset is v5.034:src/V3Unknown.cpp:362, guarded by `if (!m_allowXUnique || v3Global.opt.xAssign() != \"unique\")` (the constant-folding path otherwise).",
+    "impact": "None for Chisel/firtool output, which uses unseeded `$urandom`. The fix only matters for designs that call $urandom(seed) and discard the result.",
+    "expected_measurement": "$urandom sequences equal to 5.032 and 5.020."
+   },
+   {
+    "category": "seed_random",
+    "claim": "The runtime random-number code is unchanged in this range, and also unchanged since v5.020. This covers VlRNG, vl_thread_rng(), randSeedDefault64(), vl_sys_rand32() (unseeded lrand48), +verilator+seed+ parsing (minimum 1) and +verilator+rand+reset+. Prediction: without +verilator+seed+, every run gives the same values, equal to 5.020's (48c2e0e4 9efdd502 0b1e5d9c 797673c4). Seed 1 gives 8084023f f77f7fff ff7fffff fffffffc, seed 2 gives f1080460 eeff3fff feffffff fffffffa, and +verilator+seed+0 is still rejected.",
+    "evidence": "The include/verilated.cpp diff v5.032..v5.034 touches only VL_TO_STRING(double) ('%d'->'%g') and VerilatedScope::varInsert. v5.034:include/verilated.cpp:2856 `commandArgVlUint64(arg, \"+verilator+seed+\", u64, 1, std::numeric_limits<int>::max())`. :2922-2928 randSeedDefault64() uses `(randSeed()<<32)^randSeed()`, or vl_sys_rand32() when the seed is 0. :366-380 vl_thread_rng() is unchanged. `git diff v5.020 v5.034` of verilated.cpp, verilated_funcs.h, verilated_types.h and verilated_imp.h has no changed lines mentioning rand64, sys_rand32, lrand48 or m_state, and no changes to the seed/rand+reset argument parsing. verilated.h only reorders the randReset/randSeed declarations.",
+    "impact": "Seed handling is unchanged: no-seed runs stay identical across runs, and seeded runs reproduce 5.020's values bit for bit.",
+    "expected_measurement": "No seed: 48c2e0e4 9efdd502 0b1e5d9c 797673c4 in every run. Seed 1: 8084023f f77f7fff ff7fffff fffffffc. Seed 2: f1080460 eeff3fff feffffff fffffffa. Seed 0: rejected with 'must be an unsigned integer, greater than 0'."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "No command-line option or define that svsim uses was removed or renamed, and the C++ runtime API used by simulation-driver.cpp is unchanged. verilated.h only changes the internal VerilatedScope::varInsert signature (called by generated code, which is regenerated) and adds the VlIsCustomStruct trait. The required C++ standard is still C++14 minimum with C++17 as the newest tested, so svsim's -std=c++17 is fine.",
+    "evidence": "The include/verilated.h diff v5.032..v5.034 shows `void varInsert(..., int udims, int pdims, ...)` (was `int dims, ...`) and `template <typename> struct VlIsCustomStruct : public std::false_type {};`. The driver uses VerilatedContext debug/traceEverOn/commandArgs/time/timeInc/gotFinish/coveragep()->write and model eval/eval_step/final/eventsPending/nextTimeSlot, none of which changed. The src/V3Options.cpp diff only adds options (--coverage-expr, --coverage-expr-max, --preproc-resolve, --preproc-token-limit, --public-ignore, -Wwarn-UNSUPPORTED) or moves existing DECL_OPTIONs. v5.034:configure.ac:404-413 still tries gnu++17/c++17/gnu++14/c++14.",
+    "impact": "svsim's command line and C++ driver should build unchanged.",
+    "expected_measurement": "The 53 ChiselSim builds verilate and compile without option errors or C++ compile errors."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "The value of '+incdir+' is now split on '+' into several include directories (Verilog-XL style). svsim emits '+incdir+<dir>' only when include directories are configured, and the project's invocation has none. A directory path containing '+' would now be split wrongly.",
+    "evidence": "Changes 5.034: \"Support `+incdir` with multiple directories.\". Commit 76b2ac9c. v5.034:src/V3Options.cpp:1135 DECL_OPTION(\"+incdir+\") loops `while ((pos = dirs.find('+')) != string::npos) { addIncDirUser(...dirs.substr(0, pos)...) }`. The string '+incdir+' appears in the svsim Verilator backend classes.",
+    "impact": "None for the current project, which uses no include dirs. A latent risk only if include dirs with '+' in the path are ever added.",
+    "expected_measurement": "n/a"
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "A fix for calls to DPI 'context' functions: V3LinkResolve no longer attaches a second AstScopeName when the call already has one. The case hit was a context function call inside a function's variable initializer. svsim's testbench uses DPI context imports/exports (simulation_body, simulation_final, initTestBenchScope, run_simulation) that already work on 5.020, so no change is expected.",
+    "evidence": "Changes 5.034: \"Fix dpi context functions (#5788). [Ryszard Rozak, Antmicro Ltd.]\". Commit 2a23ec74. v5.034:src/V3LinkResolve.cpp:224 `if (nodep->taskp() && !nodep->scopeNamep() && (nodep->taskp()->dpiContext() || nodep->taskp()->dpiExport()))`. svsim strings: `import \"DPI-C\" context task simulation_body();`, `export \"DPI-C\" task run_simulation;`.",
+    "impact": "No expected impact on svsim's DPI bridge. The fix only removes a duplicated scope node.",
+    "expected_measurement": "n/a"
+   },
+   {
+    "category": "warnings_lint",
+    "claim": "New warning code COVERIGN. Unsupported covergroup, coverpoint, coverage option and 'cover sequence' constructs now report COVERIGN instead of E_UNSUPPORTED, and -Wno-UNSUPPORTED or -Wwarn-UNSUPPORTED also covers COVERIGN. Chisel cover statements lower to 'cover property', which is still parsed into the supported AstCover, so firtool output should not trigger it. No other default-on warning was added and no warning became an error in this range. The only other lint-related changes reduce warnings: SYMRSVDWORD no longer fires for list/map/deque/nullptr, and the BLKSEQ fix only affects suspendable processes.",
+    "evidence": "Changes 5.034: \"Add `COVERIGN` warning, as a more specific UNSUPPORTED error.\". Commit e171463f. v5.034:src/verilog.y:6192 `BBCOVERIGN($2, \"Ignoring unsupported: cover sequence\")`; the 'yCOVER yPROPERTY' rule at :6188 still builds AstCover. src/V3FileLine.h: `if (code == V3ErrorCode::E_UNSUPPORTED) warnOn(V3ErrorCode::COVERIGN, flag);`. src/V3Error.h adds `COVERIGN, // Coverage ignored`.",
+    "impact": "None expected. ChiselSim builds should stay free of warnings.",
+    "expected_measurement": "0 %Warning lines across the 53 ChiselSim builds, as on 5.020."
+   },
+   {
+    "category": "build_requirements",
+    "claim": "No new requirements for building Verilator on Ubuntu 24.04. configure.ac only changes the version and adds -Wno-subobject-linkage to the flags it probes for. The C++ standard selection (gnu++17/c++17 newest, c++14 oldest) and the python3 check are unchanged, and there are no bison/flex changes. The release notes announce that support for the end-of-life Ubuntu 20.04 is ending.",
+    "evidence": "v5.034:Changes:16 \"* This is likely the last version to support Ubuntu 20.04, which is at end-of-life.\". The configure.ac diff v5.032..v5.034 covers only AC_INIT 5.034, `[-Wno-subobject-linkage],` (v5.034:configure.ac:481) and a comment typo. `git diff --stat v5.032 v5.034 -- src/Makefile_obj.in src/Makefile.in src/bisonpre src/flexfix docs/guide/install.rst` is empty.",
+    "impact": "Building from source with g++ 13, python3 and the stock bison/flex on Ubuntu 24.04 should work as it does for 5.032.",
+    "expected_measurement": "n/a"
+   },
+   {
+    "category": "other",
+    "claim": "-Wno-subobject-linkage was added to CFG_CXXFLAGS_NO_UNUSED, which is the flag set verilated.mk uses when svsim's '--build' compiles the generated model. It only suppresses a g++ warning. The change is in configure.ac only and is not listed in Changes.",
+    "evidence": "Commit 70c6651a \"Fix -Wno-subobject-linkage on GCC (#5754)\". v5.034:configure.ac:481 inside `m4_foreach([cflag],[...]) _MY_CXX_CHECK_OPT(CFG_CXXFLAGS_NO_UNUSED,cflag)`.",
+    "impact": "Possibly fewer g++ warnings in the model build. No functional effect.",
+    "expected_measurement": "n/a"
+   },
+   {
+    "category": "other",
+    "claim": "Expression coverage was added, and '--coverage' now also turns it on. svsim can emit '--coverage' when coverage is enabled in its settings, but the project's invocation has no coverage flags.",
+    "evidence": "Changes 5.034: \"Add expression coverage (#4677) (#5719). [Todd Strader]\". Commit 34ced254. v5.034:src/V3Options.h:433 `m_coverageLine = m_coverageToggle = m_coverageExpr = m_coverageUser = flag;`. New options --coverage-expr and --coverage-expr-max (default 32). The svsim backend contains the strings '--coverage', '--coverage-line', '--coverage-toggle' and '--coverage-user'.",
+    "impact": "None with the current settings. If ChiselSim coverage were turned on with '--coverage', 5.034 would add expression cover points, producing a larger model, slower simulation and more coverage data.",
+    "expected_measurement": "n/a"
+   },
+   {
+    "category": "semantics",
+    "claim": "V3Simulate (used for constant-function/parameter evaluation and V3Table lookup-table generation) used to mark reusable AstConst nodes with user1, which clashed with the user1 values it also stores for nodes. It now uses a generational allocator, and a lookup bug on array initializers is fixed. Wrong constant values are possible only in those rare constructs; firtool output is not expected to hit them. No changes were made in this range to V3Assert/V3AssertPre, and none to scheduling apart from trigger splitting.",
+    "evidence": "Changes 5.034: \"Fix V3Simulate constant reuse (#5709). [Geza Lore]\". Commit 010ae580. v5.034:src/V3Simulate.h:143 `size_t m_constGeneration = 0;`, :253 `return m_constps[nodep->dtypep()].allocate(m_constGeneration, nodep);`. The new test t_simulate_array.v checks a localparam computed by a function that uses an array. `git log v5.032..v5.034 -- src/V3Assert.cpp src/V3AssertPre.cpp` is empty.",
+    "impact": "Cycle counts and assertion behaviour of the synchronous RTL are not expected to change.",
+    "expected_measurement": "Simulation results, cycle counts and assertion outcomes identical to 5.032 for the same seed."
+   },
+   {
+    "category": "performance",
+    "claim": "The trigger-computation and trigger-dump functions are now split by the usual output-split rules (splitCheck). This only matters for designs with very many triggers. A ChiselSim design with one clock has few triggers, so verilation, C++ compile and runtime performance should not change noticeably. Other optimizations in this release (labels as final if-statements, empty function bodies) are minor.",
+    "evidence": "Changes 5.034: \"Optimize splitting trigger computation and dump (#5798). [Geza Lore]\". Commit 812861e7. v5.034:src/V3Sched.cpp:793-794 `splitCheck(funcp); splitCheck(dumpp);`. Also \"Optimize labels as final `if` block statements (#5744).\" (05c7a3b9, V3Const) and \"Optimize empty function definition bodies (#5750).\" (001c098e).",
+    "impact": "Negligible for this project.",
+    "expected_measurement": "Verilation and simulation wall times within noise of 5.032."
+   }
+  ],
+  "notes": "Only one release section lies in this range: Verilator 5.034 (2025-02-24). There are 93 commits in v5.032..v5.034. Nothing changed in src/V3ThreadPool.*, src/V3Mutex.h, src/Verilator.cpp, include/verilated_threads.* or the runtime RNG code. Release-note items judged not relevant to this project and left out of the findings: VPI work, constrained randomization (unpacked structs, associative arrays, arrays in structs), nested/generated classes, --hierarchical DPI cost changes (AstCFunc::instrCount now defaults to instrCountDpi, used only for --threads partitioning and protect-lib), --public-ignore, --preproc-resolve, --preproc-token-limit (the old 40000 limit is now configurable, default unchanged), `resetall, $monitor with dotted refs, V3Life forced assigns, the NBA-LHS ExprStmt lift in V3Delayed (#5736) and the FileLine copy-constructor refcount fix (#5769). The svsim option order (jobs options before -F) comes from the task's command line; I did not decompile svsim's Scala classes to confirm it. No builds or runs were performed; the evidence comes from git objects in the blobless clone at /tmp/claude-0/-home-user-deterministic-vliw-chisel/72342c7d-9f6b-5534-9c62-327a6a17dee8/scratchpad/vsrc."
+ },
+ "verify": {
+  "verdicts": [
+   {
+    "index": 0,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.034 has 'Fix `-j` ignored after `-f` (#5749). [Luca Colagrande]'. Commit d4f4fefd1 removes `if (m_buildJobs == -1) m_buildJobs = 1; if (m_verilateJobs == -1) m_verilateJobs = 1;` from the end of parseOptsList (v5.032 V3Options.cpp:1840-1841) and adds them to notify() (v5.034 :965-966), also moving `m_available = true` to the end of notify(). parseOptsFile calls parseOptsList again (v5.034 :2013), so under 5.032 any -f/-F file processed before -j reset both values to 1. The -j handler (v5.034 :1826-1836) only sets values that are still -1, and --build-jobs/--verilate-jobs set them unconditionally (:1197-1206, :1685-1694), with 0 meaning hardware_concurrency. docs/guide/exe_verilator.rst (v5.034) still says -j applies only when --build-jobs/--verilate-jobs are not given. buildMakeCmd (Verilator.cpp:764-773) is unchanged: it adds ' -j N' when buildJobs > 0 and MAKEFLAGS has no -jobserver-auth. The svsim backend bytecode in the scratchpad confirms the order: the parallelism flags (Uniform -> '-j N', Different -> '--build-jobs' / '--verilate-jobs') are emitted right after '--assert', before the file list.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 1,
+    "verdict": "confirmed",
+    "evidence": "`git diff --stat v5.032 v5.034` over src/V3ThreadPool.cpp, V3ThreadPool.h, V3Mutex.h, Verilator.cpp and include/verilated_threads.* shows no change, and `git log v5.032..v5.034` over those paths is empty. The only edits touching the exit path are small. V3Error.cpp changes one line (`if (!extra.empty() && !m_errorSuppressed)`), from commit bdcfc4e28 ('Reduce verbosity under --debug default level'), not 2e1fa8f33 as the researcher wrote (2e1fa8f33 is --preproc-resolve). V3Os.cpp changes only UINFO strings. vlAbortOrExit() is identical, including the `::_exit(1)` branch for verilateJobs()>1 on a non-main thread (v5.034 V3Error.cpp:88-106). The pool is still created at Verilator.cpp:667 and ~V3ThreadPool is unchanged. So the exit-race behaviour should match 5.032.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 2,
+    "verdict": "confirmed",
+    "evidence": "Commit dfe28f7ed ('Fix misoptimizing away `$urandom` (#5703)') adds only `bool isPure() override { return !m_reset && !seedp(); }` to AstRand (v5.034 V3AstNodeExpr.h:1832). The default AstNode::isPure() returns true (V3Ast.h:2493) and 5.032's AstRand had no override, so before this change every AstRand was pure. Now only seeded $urandom(seed)/$random(seed) and Reset variants are impure, and unseeded $urandom is unchanged. `git grep AstRand` finds one creation site for the Reset flavour, V3Unknown.cpp:362. It is in the else branch of `if (!m_allowXUnique || xAssign != \"unique\")`. The svsim bytecode only passes `--x-assign fast --x-initial fast` for OptimizeForSimulationSpeed and nothing for the Default style, so --x-assign unique is never passed. The seeded-$urandom change cannot affect firtool's unseeded `RANDOM=$urandom`.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 3,
+    "verdict": "confirmed",
+    "evidence": "The include/verilated.cpp diff v5.032..v5.034 touches only VL_TO_STRING(double), VerilatedVarProps::entSize/datapAdjustIndex and VerilatedScope::varInsert. I extracted lines 260-400 of v5.020 and 279-419 of v5.034 (VlRNG ctor, get/set_randstate, vl_sys_rand32, vl_thread_rng, VL_RANDOM_W, VL_RAND_RESET_I/Q). The only differences are the added VL_RAND_RESET_ASSIGN_I and a window offset. vl_thread_rng() sets m_state[0] from randSeedDefault64(), and randSeedDefault64() uses (seed<<32)^seed when seed != 0, else two vl_sys_rand32() calls, with vl_sys_rand32() = lrand48()<<16 ^ lrand48(). Both functions are textually identical in v5.020 and v5.034 (2791-2797 vs 2922-2928). '+verilator+seed+' is parsed with commandArgVlUint64(..., 1, INT_MAX) at v5.034:2856, so seed 0 is still rejected. '+verilator+rand+reset+' uses the 0..2 range. VL_RANDOM_I/Q still call vl_rand64() (verilated_funcs.h:86-87). VL_RAND_RESET_I/Q still return 0 when randReset()==0, so no extra draws occur by default. verilated.h only reorders the randReset/randSeed declarations relative to 5.020. The predicted seed values assume the generated model draws in the same order. Nothing in the range changes how an unseeded AstRand is lowered, so this holds.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 4,
+    "verdict": "confirmed",
+    "evidence": "The V3Options.cpp diff v5.032..v5.034 adds --coverage-expr(-max), --preproc-resolve, --preproc-token-limit, --public-ignore and -Wwarn-UNSUPPORTED, and the rest is moved DECL_OPTIONs. It also changes +incdir+ handling and strips a leading '.' in language-extension options. Nothing is removed or renamed: -cc, -exe, -build, -o, -top-module, -Mdir, -assert, -timescale, -CFLAGS, +define+, -F, -build-jobs and -verilate-jobs are all still present. The verilated.h diff is only the VlIsCustomStruct trait and the varInsert(udims, pdims) signature, which is called from regenerated __Syms.cpp. verilated_cov.*, verilated_vcd/fst and verilated_threads.h are untouched in the range. simulation-driver.cpp uses VerilatedContext debug/traceEverOn/commandArgs/time/timeInc/gotFinish/coveragep()->write and model eval/eval_step/final/eventsPending/nextTimeSlot, none of which changed. configure.ac:404-413 still lists gnu++17/c++17/gnu++14/c++14, so svsim's -std=c++17 is fine.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 5,
+    "verdict": "confirmed",
+    "evidence": "Commit 76b2ac9cc ('Support `+incdir` with multiple directories') makes DECL_OPTION(\"+incdir+\") loop `while ((pos = dirs.find('+')) != npos) addIncDirUser(...)` (v5.034 V3Options.cpp:1135). The svsim Backend bytecode builds '+incdir+' + dir for each entry in commonSettings.includeDirs, so it is emitted only when include directories are configured. The project's command has none, and a path containing '+' would be split.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 6,
+    "verdict": "confirmed",
+    "evidence": "Commit 2a23ec74e changes V3LinkResolve to `if (nodep->taskp() && !nodep->scopeNamep() && (dpiContext() || dpiExport()))` (v5.034 :224), so it no longer attaches a second AstScopeName. The added test t_dpi_context.v calls `int res = dpic_get1();` as a variable initializer inside an automatic function, which matches the described case. Workspace.class in the svsim scratchpad contains `import \"DPI-C\" context task simulation_body();`, `context task simulation_final()`, `context function void initTestBenchScope()` and `export \"DPI-C\" task run_simulation`. For these the scope name is attached exactly once, as before, so no behaviour change is expected.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 7,
+    "verdict": "confirmed",
+    "evidence": "Main point verified. Commit e171463fa adds COVERIGN to V3Error.h. BBCOVERIGN replaces BBUNSUP for covergroup, coverpoint, bins, cross and 'cover sequence' (v5.034 verilog.y:40, 6192 and others). V3FileLine.h makes `warnOn(E_UNSUPPORTED)` also toggle COVERIGN, and the new -Wwarn-UNSUPPORTED handles both. `yCOVER yPROPERTY` still builds AstCover (verilog.y:6188). The diff of all added v3warn/v3error sites shows no new default-on warning that Chisel output would hit. The new errors are class-only (import in class, nested interface class, extern scope, constraint types) or the task-as-function message moved from V3LinkDot to V3Width. COVERIGN is not in styleError()/defaultsOff(), so it is default-on, but only for unsupported coverage constructs. One sub-claim is wrong. In V3LanguageWords.h only the bare words list/map/deque/set/vector (and std::multimap/multiset spelling) were dropped and std::-prefixed names added. 'nullptr' is not dropped: lines 123-124 still define it as 'C++ common word' and 'C++11 keyword' (emplace keeps the first), so it still triggers SYMRSVDWORD. The claim that firtool emits only 'cover property' is an inference about firtool, not checkable in the Verilator git objects.",
+    "corrected_claim": "New default-on warning COVERIGN replaces E_UNSUPPORTED for unsupported covergroup/coverpoint/coverage-option/'cover sequence' constructs, and -Wno-UNSUPPORTED / -Wwarn-UNSUPPORTED also cover it. Chisel/firtool output (concurrent 'cover property', which still builds AstCover) should not hit it. No other default-on warning was added and no warning became an error. Warning-reducing change: SYMRSVDWORD no longer fires for the bare words list, map, deque, set and vector (now only std::-qualified), but 'nullptr' still fires. BLKSEQ is a style warning (default off), and its fix only affects suspendable processes."
+   },
+   {
+    "index": 8,
+    "verdict": "confirmed",
+    "evidence": "The configure.ac diff v5.032..v5.034 has three hunks: AC_INIT 5.034 2025-02-24, `[-Wno-subobject-linkage],` at line 481, and the comment 'it's' -> 'its'. The C++ standard probe (gnu++17, c++17, gnu++14, c++14, lines 410-413) is unchanged. `git diff --stat` over src/Makefile_obj.in, src/Makefile.in, src/bisonpre, src/flexfix, docs/guide/install.rst, include/verilated.mk.in and src/config_build.h.in is empty. Makefile.in changes only the docs/help2man rule, and CMakeLists.txt changes 2 lines. Changes line 16 reads '* This is likely the last version to support Ubuntu 20.04, which is at end-of-life.', which is irrelevant for Ubuntu 24.04.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 9,
+    "verdict": "confirmed",
+    "evidence": "Commit 70c6651aa ('Fix -Wno-subobject-linkage on GCC (#5754)') only adds `[-Wno-subobject-linkage],` to the m4_foreach list that feeds _MY_CXX_CHECK_OPT(CFG_CXXFLAGS_NO_UNUSED, ...) (configure.ac:481). include/verilated.mk.in:93 puts $(CFG_CXXFLAGS_NO_UNUSED) in VK_CPPFLAGS_ALWAYS, which the generated model's makefile uses. `grep -i subobject` on v5.034:Changes finds nothing, so it is not listed there.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 10,
+    "verdict": "confirmed",
+    "evidence": "Changes 5.034 lists 'Add expression coverage (#4677) (#5719). [Todd Strader]' under Important. V3Options.h:433 reads `m_coverageLine = m_coverageToggle = m_coverageExpr = m_coverageUser = flag;`, and coverage() now ORs in m_coverageExpr. --coverage-expr and --coverage-expr-max (default 32) are new. The svsim CoverageSettings.toCompileFlags bytecode emits '--coverage' only when line, toggle and user are all enabled. Otherwise it emits '--coverage-line', '--coverage-toggle' and '--coverage-user' individually, which do not enable expression coverage. So the claim is accurate and only an all-on coverage setting would switch expression coverage on.",
+    "corrected_claim": ""
+   },
+   {
+    "index": 11,
+    "verdict": "confirmed",
+    "evidence": "The V3Simulate change is as described. Commit 010ae580b adds ConstAllocator with a generation counter (V3Simulate.h:143, 253) and adds `else if (AstConst* constp = VN_CAST(itemp, Const)) setValue(nodep, constp)` for array initializers. Two sub-claims are wrong or incomplete. (1) `git log v5.032..v5.034 -- src/V3Assert.cpp src/V3AssertPre.cpp` is NOT empty. It lists 1857f6399 'Fix `$monitor` with dotted references (#5794)', which makes V3Assert clone the VarRef/VarXRef into the AstSenItem for $monitor (V3AssertPre.cpp is unchanged). That does not touch assert/cover semantics. (2) Other scheduling-ish edits exist besides trigger splitting: V3SenExprBuilder drops the isFired check before clearFired for events, V3Active adds CT_SUSPENDABLE, V3Delayed lifts AstExprStmt from NBA LHS, V3Life stops optimizing AssignForce, and V3CCtors/V3Sched set keepIfEmpty. None of these are produced by firtool output unless it uses events, force or LHS function calls. V3Simulate is used by V3Const (constant functions), V3Table (lookup tables) and V3Unroll (loop unrolling, lines 188/210), not only by constants/tables. Firtool's `for` loops in RANDOMIZE_*_INIT blocks go through V3Unroll, so this project is in principle exposed. The change only removes a corruption risk, so no output change is expected.",
+    "corrected_claim": "V3Simulate (used by V3Const constant functions, V3Table lookup tables and V3Unroll loop unrolling) used user1 both to mark reusable AstConst nodes and to hold node values, so constants could be corrupted. It now uses a generational allocator, and a lookup bug on array initializers is also fixed. Firtool's RANDOMIZE for-loops pass through V3Unroll, so the fix is in principle on the path. It only removes a wrong-constant risk, so no cycle-count or assertion change is expected. V3Assert.cpp did change in the range, but only for $monitor sensitivity items; V3AssertPre.cpp is unchanged. Other small scheduling-adjacent changes are event clearFired (V3SenExprBuilder), suspendable processes (V3Active), NBA with expression statements on the LHS (V3Delayed), AssignForce (V3Life) and keepIfEmpty."
+   },
+   {
+    "index": 12,
+    "verdict": "confirmed",
+    "evidence": "Commit 812861e7f ('Optimize splitting trigger computation and dump (#5798)') adds `splitCheck(funcp); splitCheck(dumpp);` in createTriggers (v5.034 V3Sched.cpp:793-794), so function splitting applies only above the normal size threshold. Commit 05c7a3b90 adds replaceJumpGoNext, which removes a trailing JumpGo before its label, including inside a single If. Commit 001c098e5 makes empty non-loose AstCFunc bodies inline `{}` declarations and sets keepIfEmpty on _ctor_var_reset-style and top functions. These are structural C++ output changes, not performance risks, and a single-clock Chisel design has few triggers. The 'negligible' conclusion is plausible, but it is an expectation rather than a measurement.",
+    "corrected_claim": ""
+   }
+  ],
+  "missed": [
+   {
+    "category": "svsim_compat",
+    "claim": "DPI scope bookkeeping in V3EmitCSyms was reworked: AstScopeName entries go into a new m_dpiScopeNames map and are merged into m_scopeNames only after varsExpand() and buildVpiHierarchy(), when v3Global.dpi() is true. VerilatedScope::varInsert now takes (udims, pdims, ...).",
+    "evidence": "`git diff v5.032 v5.034 -- src/V3EmitCSyms.cpp` shows `ScopeNames m_dpiScopeNames;`, `m_dpiScopeNames.emplace(...)` in visit(AstScopeName) and the merge loop in visit(AstNetlist) (v5.034 :283-292). It also shows the new `.varInsert(__Vfinal, name, ..., udim, pdim, bounds)` emission. The svsim testbench relies on `svGetScope()` in initTestBenchScope() and later svSetScope for its DPI context tasks/functions.",
+    "impact": "Low. dpi() is true whenever the svsim testbench is verilated, so the merge always runs before the scope table is emitted, and varInsert callers are regenerated. A DPI scope or svSetScope failure would show up immediately as testbench startup errors in the 53 ChiselSim builds, not as subtle result changes."
+   },
+   {
+    "category": "semantics",
+    "claim": "Fix handling forced assigns in V3Life (#5757): V3Life now treats AssignForce as a non-optimizable node. Previously, value forwarding could make a read after `force a = 2` still see the pre-force value. This only affects designs or tests that use force/release (for example Chisel probe force APIs), where results may now differ from 5.032 and earlier because the earlier results were wrong.",
+    "evidence": "Changes 5.034: 'Fix handling forced assigns in V3Life (#5757). [Bartłomiej Chmiel, Antmicro Ltd.]'. Commit a379382d3 changes V3Life.cpp to `if (nodep->isTimingControl() || VN_IS(nodep, AssignForce)) { setNoopt(); ...}`. The new test t_force_assign.v asserts `force a = 2; if (a != 2) $stop; a = 3; if (a != 2) $stop;`.",
+    "impact": "None for tests that do not use force. If any ChiselSim test uses probe force/release, its behaviour could change (more correct) between 5.032 and 5.034."
+   },
+   {
+    "category": "other",
+    "claim": "--preproc-token-limit is a knob only; the default stays 40000 tokens per line, the former hard-coded LINE_TOKEN_MAX, so firtool-generated very long lines behave as before.",
+    "evidence": "Commit 283f6c743 removes `LINE_TOKEN_MAX = 40000` from V3PreProc.h and uses v3Global.opt.preprocTokenLimit() with m_preprocTokenLimit = 40000 (V3Options.h). docs say 'Defaults to 40000 tokens'.",
+    "impact": "None by default. If a huge generated line ever hits 'Too many preprocessor tokens on a line', the limit can now be raised."
+   },
+   {
+    "category": "svsim_compat",
+    "claim": "The 'task called as function' check moved from V3LinkDot (taskFuncSwapCheck) to V3Width, and AstTaskRef/AstFuncRef creation for resolved calls now depends on whether a value is expected (m_vup). New errors: 'Cannot call a task/void-function as a function/member function'. Statement-level calls such as the svsim testbench's `simulation_body();` are parsed as AstTaskRef (verilog.y:4135-4136), so they are unaffected.",
+    "evidence": "Commit 78d6ec811 ('Fix error message when call task as a function (#3089)') deletes taskFuncSwapCheck from V3LinkDot.cpp and adds the V3Width.cpp checks in visit(AstFuncRef) and the member-call path.",
+    "impact": "Low. It can only matter if the testbench or firtool output used a task call in an expression, which it does not. It is a source of new error messages, not a behaviour change."
+   },
+   {
+    "category": "semantics",
+    "claim": "The generated C++ structure changes for empty functions. Empty non-loose AstCFunc bodies are no longer emitted as separate definitions and are declared inline as `{}`, except functions marked keepIfEmpty (top-level eval functions, _ctor_var_reset-style ctors, evalAsserts). This does not change simulation results, but it changes the generated file contents and the set of symbols in the model.",
+    "evidence": "Commit 001c098e5 (Changes: 'Optimize empty function definition bodies (#5750)') edits V3EmitCBase.cpp (emitCFuncDecl prints ' {}' when emptyBody() && !isLoose()), V3EmitCFunc.h (skips empty non-loose functions), V3AstNodeOther.h (emptyBody() now honours keepIfEmpty), and V3CCtors.cpp/V3Sched.cpp (keepIfEmpty(true)).",
+    "impact": "Low. svsim's C++ driver uses only the public model API. It matters only for anything that diffs or greps the generated sources."
+   }
+  ]
+ }
+}
