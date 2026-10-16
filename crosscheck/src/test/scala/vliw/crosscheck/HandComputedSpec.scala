@@ -42,33 +42,32 @@ class HandComputedSpec extends AnyFunSuite with VliwChiselSim {
     )
   )
 
-  private def compiled = for {
+  /** The cases compiled for `m` in both issue modes. On ISA mvp-1 every program has MAC. */
+  private def compiled(m: MachineDescription) = for {
     (k, in, out, expected) <- cases
     single <- Seq(false, true)
-  } yield (
-    KernelCompiler.compile(k, machine, singleIssue = single).fold(e => fail(e), identity),
-    in,
-    out,
-    expected
-  )
+  } yield {
+    val c = KernelCompiler.compile(k, m, singleIssue = single).fold(e => fail(e), identity)
+    assert(!m.hasMac || c.bundles.exists(_.compute.isInstanceOf[ComputeOp.Mac]), k.name)
+    (c, in, out, expected)
+  }
 
-  test("hand-computed outputs on the reference model, both issue modes") {
-    compiled.foreach { case (c, in, out, expected) =>
+  private def onModel(m: MachineDescription): Unit =
+    compiled(m).foreach { case (c, in, out, expected) =>
       val run = ReferenceModel
-        .run(machine, c.words, c.layout.inputs(in).fold(e => fail(e), identity))
+        .run(m, c.words, c.layout.inputs(in).fold(e => fail(e), identity))
         .fold(v => fail(v.toString), identity)
       assert(run.cycles == c.cycles)
       val got =
         expected.indices.map(i => run.memory(c.layout.elem(out, i)).getOrElse(fail("undefined")))
-      assert(got == expected, c.kernel.name)
+      assert(got == expected, s"${c.kernel.name} on ${m.machineId}")
     }
-  }
 
-  test("hand-computed outputs on the RTL, both issue modes") {
-    simulate(new Core(CoreParams(machine))) { dut =>
-      compiled.foreach { case (c, in, out, expected) =>
+  private def onRtl(m: MachineDescription): Unit =
+    simulate(new Core(CoreParams(m))) { dut =>
+      compiled(m).foreach { case (c, in, out, expected) =>
         val inputs = c.layout.inputs(in).fold(e => fail(e), identity)
-        val run = CoreDriver.run(dut, machine, c.words, inputs, c.layout.outputAddresses)
+        val run = CoreDriver.run(dut, m, c.words, inputs, c.layout.outputAddresses)
         assert(run.violations.isEmpty && run.cycles == c.cycles, c.kernel.name)
         assert(
           expected.indices.map(i => run.memory(c.layout.elem(out, i)).toLong) == expected,
@@ -76,5 +75,27 @@ class HandComputedSpec extends AnyFunSuite with VliwChiselSim {
         )
       }
     }
+
+  test("hand-computed outputs on the reference model, both issue modes") {
+    onModel(machine)
+  }
+
+  test("hand-computed outputs on the RTL, both issue modes") {
+    onRtl(machine)
+  }
+
+  // ISA mvp-1 (#77): the same outputs from code with MUL + ADD fused into MAC.
+  private def load(path: java.nio.file.Path) =
+    MachineDescription.load(path).fold(es => fail(es.mkString("\n")), identity)
+  private val mvp1 = load(MachineDescription.Mvp1Path)
+
+  test("ISA mvp-1: hand-computed outputs on the reference model, both issue modes") {
+    val variants = Seq("mvp1_rp4.json", "mvp1_mac3.json")
+      .map(f => load(java.nio.file.Paths.get("tests", "machines", f)))
+    (mvp1 +: variants).foreach(onModel)
+  }
+
+  test("ISA mvp-1: hand-computed outputs on the RTL, both issue modes (machine-mvp1)") {
+    onRtl(mvp1)
   }
 }

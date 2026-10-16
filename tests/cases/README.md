@@ -62,18 +62,19 @@
 | `isa/TestCaseSpec` | 全ケースが形式どおりに読めること |
 | `compiler/VerifierSpec` | verifierが報告する規則の集合が `expect.verdict` と一致すること |
 | `sim/ReferenceModelSpec` | 参照モデルの結果（cycles、最終状態、golden trace、最初の違反）が期待値と合うこと |
-| `crosscheck/DifferentialSpec` | 乱数で作ったプログラムで、verifierと参照モデルの判定が一致すること（既定の構成と、レイテンシー・II・容量を変えた4構成）。合法なプログラムで、cyclesとcommit時刻が入力値に依存しないこと |
+| `crosscheck/DifferentialSpec` | 乱数で作ったプログラムで、verifierと参照モデルの判定が一致すること（既定の構成と、レイテンシー・II・容量を変えた4構成）。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json`・`mvp1_rp4.json`・`mvp1_mac3.json` と、MAC の II を2にした構成の4つ。生成器は rd = rs3、書込み中の rs3（L3）、同じ bundle の MAC と ST（読出し3本で L11、4本で合法）、MAC と後の ADD/SUB/MUL の書戻しポートの衝突（L5）を作り、参照モデルが最初に当たる規則はすべて出る（mvp-1 では L11 と、MAC の II が2の構成の L9 を含む）。合法なプログラムで、cyclesとcommit時刻が入力値に依存しないこと |
 | `sim/MetricsSpec` | 合法な全ケースで、メトリクスの値が命令列と整合すること |
 | `hw/CaseSpec` | 合法な全ケースを RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
 | `hw/AssertionSpec` | 不正な全ケースで、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
-| `crosscheck/CompiledKernelSpec` | DSL のベンチマークを list scheduling と register allocation で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出すこと |
-| `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL） |
+| `crosscheck/CompiledKernelSpec` | DSL のベンチマークを list scheduling と register allocation で命令列にし、最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出すこと。ISA mvp-1 では、MUL + ADD を MAC に融合した DAG から、レジスタ16・12・8本で作る。MAC の命令は融合した組の数だけあり、読出し3本の構成では MAC と ST が同じ bundle に無い（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`。RTL はレジスタ16本の構成で、12本・8本の命令列も実行する） |
+| `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL）。ISA mvp-1 の MAC を含む命令列でも同じ出力になること（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json`） |
 | `crosscheck/BenchmarkSpec` | `benchmarks/` の記録がソースから生成し直した内容と一致し、記録した命令列が参照モデルと RTL で期待どおりになること |
-| `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと |
+| `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと。ISA mvp-1 でも同じ（参照モデルは `machine-mvp1.json` と `mvp1_rp4.json`、RTL は MAC を含む60個を `machine-mvp1.json` で）。読む側が複数ある MUL は、ADD が読んでも MUL のまま残ること |
+| `crosscheck/ModuloKernelSpec` | ループのベンチマークを Modulo Scheduling（#68）で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出し、トレースから読んだ II が記録した II と一致すること（`ModuloTrace`）。ISA mvp-1 では、ループごとの融合の判定（`mvp1_mac3.json` の `dot8` は MII が上がるので融合しない）、II と cycles、融合したループの MAC の命令を確かめる（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`） |
 | `crosscheck/FixedPipelineKernelSpec` | ベンチマークの固定パイプライン（#75）を ChiselSim で実行し、乱数・全0・全1の入力で DSL の参照実装と同じ出力を、計画どおりの cycles と発行・書戻しの cycle で出すこと。FIR の係数を変えても同じ回路で正しいこと（係数可変） |
-| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成）。RTL のタイミングが入力値に依存しないこと |
+| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json` と `mvp1_mac3.json`）。RTL のタイミングが入力値に依存しないこと |
 
-RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
+RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
 
 新しいケースは `tests/cases/<name>.json` に置けば、上のテストすべてが自動的に対象にする。
 
@@ -86,9 +87,9 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 | `tests/machines/ii_units.json` | ADD・SUB・MUL の II が2、LD の II が3 | `ii_*` |
 | `tests/machines/regs3.json` | レジスタ3本（ほかは既定の構成と同じ） | Modulo Scheduling のテスト（`compiler/.../modulo/ModuloSchedulerSpec`、#68） |
 | `tests/machines/regs8.json`、`tests/machines/regs12.json` | レジスタ8本、12本（ほかは既定の構成と同じ） | レジスタ数を変えたベンチマーク（rematerialization、#70）。`crosscheck/CompiledKernelSpec` が参照モデルと RTL で実行する |
-| `config/machine-mvp1.json` | ISA mvp-1 の既定の構成: mvp-0 に MAC（latency 2、II 1）を足し、読出しポートは3本（[ADR-0018](../../docs/DECISIONS.md)） | `mac_*`（`mac_store_rp4` を除く） |
-| `tests/machines/mvp1_rp4.json` | mvp-1 で読出しポートだけ4本（制約なしの比較用。RTL の範囲外） | `mac_store_rp4` |
-| `tests/machines/mvp1_mac3.json` | mvp-1 で MAC のレイテンシーだけ3（感度の確認） | `mac3_*` |
+| `config/machine-mvp1.json` | ISA mvp-1 の既定の構成: mvp-0 に MAC（latency 2、II 1）を足し、読出しポートは3本（[ADR-0018](../../docs/DECISIONS.md)） | `mac_*`（`mac_store_rp4` を除く）。`crosscheck` の ISA mvp-1 のテスト |
+| `tests/machines/mvp1_rp4.json` | mvp-1 で読出しポートだけ4本（制約なしの比較用。RTL の範囲外） | `mac_store_rp4`。`crosscheck` の ISA mvp-1 のテスト（verifier と参照モデル） |
+| `tests/machines/mvp1_mac3.json` | mvp-1 で MAC のレイテンシーだけ3（感度の確認） | `mac3_*`。`crosscheck` の ISA mvp-1 のテスト |
 
 ## mutation チェック
 

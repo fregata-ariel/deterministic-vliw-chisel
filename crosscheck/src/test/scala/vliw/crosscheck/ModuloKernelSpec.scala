@@ -72,17 +72,18 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
     ignore(s"on the RTL, ${m.machineId}: outside the RTL's range") {}
   }
 
-  test("on the RTL (default machine): DSL results, the scheduled cycles, and the II in the trace") {
-    assert(CoreParams.check(machine).isRight && machines.tail.forall(CoreParams.check(_).isLeft))
-    val rng = new Random(6868)
-    simulate(new Core(CoreParams(machine))) { dut =>
-      for (c <- compiled(machine)) {
+  /** Every loop compiled for `m` on one RTL core: DSL results, the scheduled cycles, and the II in
+    * the trace.
+    */
+  private def onRtl(m: MachineDescription, rng: Random): Unit =
+    simulate(new Core(CoreParams(m))) { dut =>
+      for (c <- compiled(m)) {
         val outputs =
           c.kernel.outputs.flatMap(o => (0 until o.length).map(c.layout.elem(o.name, _)))
         val in = values(c.kernel.unroll, rng)
         val run = CoreDriver.run(
           dut,
-          machine,
+          m,
           c.words,
           c.layout.inputs(in).fold(e => fail(e), identity),
           outputs.toSet
@@ -96,7 +97,75 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
         assert(ModuloTrace.check(c.graph, c.result.map, rows(run.trace), c.ii) == Right(Some(c.ii)))
       }
     }
+
+  test("on the RTL (default machine): DSL results, the scheduled cycles, and the II in the trace") {
+    assert(CoreParams.check(machine).isRight && machines.tail.forall(CoreParams.check(_).isLeft))
+    onRtl(machine, new Random(6868))
   }
+
+  // ISA mvp-1 (#77): the loops fused into MAC when the MII does not grow (ADR-0019), on three read
+  // ports, four (the reference model only) and MAC latency 3.
+  private val mvp1 =
+    MachineDescription.load(MachineDescription.Mvp1Path).fold(es => fail(es.mkString), identity)
+  private val rp4 = machineFile("mvp1_rp4.json")
+  private val mac3 = machineFile("mvp1_mac3.json")
+  private val mvp1Machines = Seq(mvp1, rp4, mac3)
+
+  /** Per loop (name, index), on the machines of `mvp1Machines` in order: whether it is fused, its
+    * II and its cycles (as `compiler/.../ModuloSchedulerSpec` records them). product8 has no MUL +
+    * ADD pair; dot8 is not fused at MAC latency 3, where its accumulation through the MAC would
+    * raise the MII from 2 to 3.
+    */
+  private val mvp1Loops: Map[(String, String), Seq[(Boolean, Int, Int)]] = Map(
+    ("saxpy8", "i") -> Seq((true, 3, 29), (true, 3, 29), (true, 3, 32)),
+    ("fir4x8", "i") -> Seq((true, 4, 46), (true, 4, 43), (true, 5, 60)),
+    ("matmul3", "i") -> Seq((true, 9, 38), (true, 9, 45), (true, 10, 39)),
+    ("matmul3", "m") -> Seq((true, 9, 40), (true, 9, 34), (true, 9, 40)),
+    ("product8", "i") -> Seq((false, 2, 19), (false, 2, 19), (false, 2, 19)),
+    ("dot8", "i") -> Seq((true, 2, 21), (true, 2, 21), (false, 3, 28))
+  )
+
+  private def macStore(b: Bundle) =
+    b.compute.isInstanceOf[ComputeOp.Mac] && b.memory.isInstanceOf[MemoryOp.St]
+
+  test(
+    "ISA mvp-1 on the reference model: fusion by the MII, MAC in the code, DSL results, the scheduled cycles, and the II in the trace"
+  ) {
+    val rng = new Random(77)
+    val loops = for ((m, j) <- mvp1Machines.zipWithIndex; c <- compiled(m)) yield {
+      val where = s"${c.kernel.name} (${c.kernel.index}) on ${m.machineId}"
+      val loop = (c.kernel.name, c.kernel.index)
+      val (fuses, ii, cycles) = mvp1Loops(loop)(j)
+      assert(c.fusion.map(_.fuses).contains(fuses) && c.ii == ii && c.cycles == cycles, where)
+      // One MAC instruction per MAC of the table, in fused loops only; none next to a ST on three
+      // read ports (L11).
+      val table = c.result.map.count(e => c.graph.nodes(e.instance.node).mnemonic == "MAC")
+      val code = c.bundles.count(_.compute.isInstanceOf[ComputeOp.Mac])
+      assert(code == table && (code > 0) == fuses, where)
+      assert(m.readPorts == 4 || !c.bundles.exists(macStore), where)
+      (0 until 3).foreach { _ =>
+        val in = values(c.kernel.unroll, rng)
+        val run = ReferenceModel
+          .run(m, c.words, c.layout.inputs(in).fold(e => fail(e), identity))
+          .fold(v => fail(s"$where: $v"), identity)
+        assert(run.cycles == c.cycles, where)
+        val out = c.layout.outputs(a => run.memory(a).getOrElse(fail(s"$where: [$a] undefined")))
+        assert(out == Interpreter.run(c.kernel.unroll, in).fold(e => fail(e), identity), where)
+        val trace = run.trace.cycles.map(_.toJson: ujson.Value)
+        assert(ModuloTrace.check(c.graph, c.result.map, trace, c.ii) == Right(Some(c.ii)), where)
+      }
+      loop
+    }
+    assert(loops.size == 3 * mvp1Loops.size && loops.toSet == mvp1Loops.keySet)
+  }
+
+  Seq(mvp1, mac3).zipWithIndex.foreach { case (m, i) =>
+    test(s"ISA mvp-1 on the RTL, ${m.machineId}: DSL results, the scheduled cycles, and the II") {
+      assert(CoreParams.check(m).isRight && CoreParams.check(rp4).isLeft)
+      onRtl(m, new Random(7768L + i))
+    }
+  }
+  ignore(s"ISA mvp-1 on the RTL, ${rp4.machineId}: outside the RTL's range (read_ports 4, #57)") {}
 
   /** Per row: the issued mnemonics (compute, memory), the ports of the register commits, and
     * whether a word is stored.
