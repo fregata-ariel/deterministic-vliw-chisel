@@ -1,6 +1,6 @@
 # Benchmarks
 
-Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）の記録。結果の表は [RESULTS.md](RESULTS.md) にある。
+Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）の記録。結果の表は [RESULTS.md](RESULTS.md) にある。MAC のある構成（ISA mvp-1、#77）とない構成の比較は [MAC.md](MAC.md) にある。
 
 **cycle ベースの比較である。** Fmax・面積・電力は未測定（#57）で、時間や電力の主張はしない。
 
@@ -47,6 +47,10 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 - Modulo Scheduling と list scheduling の比較（[MODULO.md](MODULO.md)）では、list scheduling の側は戦略を固定した系列の各行で、Modulo Scheduling の側は1つの戦略（最初に命令列ができた II）である。比はその組合せの比で、Modulo Scheduling の cycles 最小ではない
 - レジスタ数を変える比較（#70）では、レジスタ上限はそれぞれのレジスタ数になる。戦略を固定した系列は、優先度と `loadReserve` が同じ行（上限なしの行は上限なしの行）どうしを比べる。片方にしかない行（`loadReserve` がもう一方のレジスタ数/2 を超える行）は、片方だけの行として記録し、比に含めない
 - 上限付きの試行は、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数を読み直す（rematerialization、[docs/DECISIONS.md](../docs/DECISIONS.md) ADR-0016）。記録では、読み直した行（LD がカーネルの DAG より多い行）の cycles に「（LD n）」を添える。添えていない行の LD の数は、カーネルの DAG の数（[REGISTERS.md](REGISTERS.md) の、方式ごとに cycles 最小の表の括弧の値）である。同じ行でも、片方の構成だけが読み直すことがある（レジスタの少ない方が速くなることもある）ので、比を書くときは両方の LD の数も書く
+- MAC のある構成とない構成の比較（#77、[MAC.md](MAC.md)）では、mvp-0（`config/machine.json`）と、MAC のある3つの構成を、同じカーネル・入力・配置・試行で比べる。3つの構成は、mvp-1（`config/machine-mvp1.json`）、読出しポート4本の rp4（`tests/machines/mvp1_rp4.json`）、MAC の latency 3 の mac3（`tests/machines/mvp1_mac3.json`）である。どれもレジスタは16本なので、戦略を固定した系列の行は同じで、同じ行どうしを比べる
+- MAC のある構成の DAG は、MUL + ADD を MAC に融合したもので、演算数が mvp-0 と違う。融合は戦略の次元ではない（全ての試行が同じ DAG を使う。ADR-0019）ので、同じ行の比は、MAC と融合の効果と読む
+- 読出しポート3本の制約（L11、MAC と ST を同じ bundle に置けない）の効果は、mvp-1 と rp4 の同じ行の差で言う。rp4 には RTL が無い（#57）ので、rp4 の値は参照モデルと verifier だけで確かめた値だと書く。mac3 は感度の確認で、mvp-1 との差は MAC の latency だけの効果である
+- MAC の latency と II（`operations.MAC`）は演算器の契約の値である。Modulo Scheduling のループの II（`metrics` の `ii`）と混同しない
 
 ## 記録
 
@@ -58,6 +62,9 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 | `cases/<kernel>_<loop>_modulo.json`、`metrics/<kernel>_<loop>_modulo.json` | Modulo Scheduling したループの命令列・入力・期待値と、実行の記録。`metrics` の `ii` は、トレースで確かめた II |
 | [REGISTERS.md](REGISTERS.md) | レジスタ数を変えた記録（#70）。8・12・16 本（`tests/machines/regs8.json`、`regs12.json`、既定の構成）の、方式ごとに cycles 最小の系列（cycles、16 本に対する比、LD の数、試行）と、戦略を固定した系列の同じ行どうしの比、片方だけの行と不成立の数 |
 | `cases/<kernel>_<mode>_r8.json`・`_r12.json`、`metrics/` の同じ名前 | 8・12 本の、方式ごとに cycles 最小の系列の命令列・入力・期待値と、実行の記録 |
+| [MAC.md](MAC.md) | MAC のある構成とない構成の記録（ISA mvp-1、#77 Phase A）。mvp-0・mvp-1・rp4・mac3 の条件（machine の id・revision・hash、MAC の latency と II）、方式ごとに cycles 最小の系列（cycles、mvp-0 に対する比、LD の数、試行、MUL・MAC・ADD の数と融合した組、Compute の NOP 率と書戻しポートの利用率、書戻しポートと読出しポートで待ったサイクル、MAC と ST の bundle、読出しの数ごとの bundle）、戦略を固定した系列の同じ行どうしの比、読出しポートの制約（mvp-1 と rp4 の行ごとの差、制約が当たった bundle、rp4 の命令列を mvp-1 で検査した L11 の違反の数）、6つのループの Modulo Scheduling（3本目の読出しポートを含む・除く ResMII、RecMII、II と理由、配置、cycles、融合の判定）、ADR-0018 の見積りとの比較 |
+| `cases/<kernel>_<mode>_mac.json`・`_mac_rp4.json`・`_mac3.json`、`metrics/` の同じ名前 | mvp-1・rp4・mac3 の、方式ごとに cycles 最小の系列の命令列・入力・期待値と、実行の記録（`vliw-metrics/2`） |
+| `cases/<kernel>_<loop>_modulo_mac.json`・`_mac_rp4.json`・`_mac3.json`、`metrics/` の同じ名前 | mvp-1・rp4・mac3 の、6つのループを Modulo Scheduling した命令列・入力・期待値と、実行の記録（`vliw-metrics/2`。`ii` はトレースで確かめた II） |
 | `metrics/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の、参照モデルでの実行の記録。`vliw-metrics/1`（[docs/METRICS.md](../docs/METRICS.md)）。machine の revision と hash、命令列の hash を含む |
 
 記録は、すべてソースから生成する。手で編集しない。
@@ -66,6 +73,7 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 sbt "crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords"   # benchmarks/ を書き直す
 sbt "compiler/run verify benchmarks/cases/fir4x8_vliw.json"      # 記録した命令列の検査
 sbt "sim/run benchmarks/cases/fir4x8_vliw.json"                  # 参照モデルで実行
+sbt "sim/run benchmarks/cases/fir4x8_vliw_mac.json"              # mvp-1 の記録（machine はテストケースが指す）
 ```
 
 CI の `crosscheck/BenchmarkSpec` は、次を確かめる。
@@ -78,3 +86,4 @@ CI の `crosscheck/BenchmarkSpec` は、次を確かめる。
 - Modulo Scheduling のテストケースが、参照モデルでも RTL でも成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること
 - 固定パイプライン（#75）が、記録した入力で、記録した出力と cycles を ChiselSim で出すこと。「VLIW の命令列」の回路の計画が、記録した命令列の各 bundle と同じ操作を同じ cycle に発行し、cycles が VLIW と同じであること。記録が名前を挙げる Verilator と JDK で測っていること
 - 8・12 本の machine description が、既定の構成とレジスタ数だけ違うこと。8・12 本のテストケースが、参照モデルでも RTL でも成り立つこと。戦略を固定した系列と、方式ごとに cycles 最小の系列についての上の確認を、8・12・16 本のそれぞれで行うこと
+- MAC のある構成（#77）: rp4 と mac3 が、`config/machine-mvp1.json` と `read_ports` だけ、MAC の latency だけ違うこと。RTL の範囲外は rp4 だけであること。配置と入力が mvp-0 と同じで、融合した組の数だけ MUL と ADD が減り、MAC が増えること。テストケースが参照モデルで成り立ち、mvp-1 と mac3 では RTL でも同じ出力と cycles になり、RTL のトレースが参照モデルのトレースと一致すること（ループは RTL のトレースでも II を確かめる）。戦略を固定した系列と、方式ごとに cycles 最小の系列についての上の確認を、3つの構成でも行うこと。`vliw-metrics/2` の読出しの欄が命令列と一致すること。rp4 の全ての命令列（両方の系列とループ）を mvp-1 の machine で検査すると、MAC と ST の bundle ごとにちょうど1つ L11 の違反になり、ほかの違反が無いこと。読出し3本の構成の命令列に MAC と ST の bundle が無く、単一発行の命令列が mvp-1 と rp4 で同じであること

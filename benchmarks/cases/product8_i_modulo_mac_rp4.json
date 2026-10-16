@@ -1,0 +1,47 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "product8_i_modulo_mac_rp4",
+  "description": "generated from the loop of product8 over i by Modulo Scheduling at II 2; expected outputs from the DSL reference implementation, cycles predicted by the scheduler",
+  "program": [
+    "@0:  nop             | ld r0, [0]",
+    "@1:  nop             | ld r1, [1]",
+    "@2:  nop             | nop",
+    "@3:  mul r0, r0, r1  | ld r1, [2]",
+    "@4:  nop             | nop",
+    "@5:  mul r0, r0, r1  | ld r1, [3]",
+    "@6:  nop             | nop",
+    "@7:  mul r0, r0, r1  | ld r1, [4]",
+    "@8:  nop             | nop",
+    "@9:  mul r0, r0, r1  | ld r1, [5]",
+    "@10: nop             | nop",
+    "@11: mul r0, r0, r1  | ld r1, [6]",
+    "@12: nop             | nop",
+    "@13: mul r0, r0, r1  | ld r1, [7]",
+    "@14: nop             | nop",
+    "@15: mul r0, r0, r1  | nop",
+    "@16: nop             | nop",
+    "@17: nop             | st [8], r0",
+    "@18: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 19,
+    "memory": {
+      "8": 838172672
+    }
+  },
+  "machine": "tests/machines/mvp1_rp4.json"
+}

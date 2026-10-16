@@ -1,0 +1,71 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "saxpy8_vliw_mac3",
+  "description": "generated from the DSL kernel saxpy8; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (critical-path, no register limit)",
+  "program": [
+    "@0:  nop             | ld r0, [16]",
+    "@1:  nop             | ld r1, [0]",
+    "@2:  nop             | ld r2, [8]",
+    "@3:  nop             | ld r3, [1]",
+    "@4:  mac r1, r0, r1, r2 | ld r2, [9]",
+    "@5:  nop             | ld r4, [2]",
+    "@6:  mac r2, r0, r3, r2 | ld r3, [10]",
+    "@7:  nop             | ld r5, [3]",
+    "@8:  mac r3, r0, r4, r3 | ld r4, [11]",
+    "@9:  nop             | ld r6, [4]",
+    "@10: mac r4, r0, r5, r4 | ld r5, [12]",
+    "@11: nop             | ld r7, [5]",
+    "@12: mac r5, r0, r6, r5 | ld r6, [13]",
+    "@13: nop             | ld r8, [6]",
+    "@14: mac r6, r0, r7, r6 | ld r7, [14]",
+    "@15: nop             | ld r9, [7]",
+    "@16: mac r7, r0, r8, r7 | ld r8, [15]",
+    "@17: nop             | st [17], r1",
+    "@18: mac r0, r0, r9, r8 | nop",
+    "@19: nop             | st [18], r2",
+    "@20: nop             | st [19], r3",
+    "@21: nop             | st [20], r4",
+    "@22: nop             | st [21], r5",
+    "@23: nop             | st [22], r6",
+    "@24: nop             | st [23], r7",
+    "@25: nop             | st [24], r0",
+    "@26: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709,
+      "16": 181670012
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 27,
+    "memory": {
+      "17": 994936220,
+      "18": 1123534067,
+      "19": 1518996696,
+      "20": 289481026,
+      "21": 3067446782,
+      "22": 2351676203,
+      "23": 2780962004,
+      "24": 2173543421
+    }
+  },
+  "machine": "tests/machines/mvp1_mac3.json"
+}

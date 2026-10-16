@@ -6,7 +6,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 設計原則：**コンパイラが時間配置を決め、ハードウェアがそのスケジュールを実行する。**
 
-Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）、Phase 2（DSL からの自動命令生成。SAXPY・FIR・行列積が機能・サイクルとも一致）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md)・[Phase 2](docs/PHASE2.md) の完了報告）。ベンチマークの記録は [benchmarks/RESULTS.md](benchmarks/RESULTS.md)（資源条件を揃えた固定パイプラインとの比較を含む）、Modulo Scheduling の記録は [benchmarks/MODULO.md](benchmarks/MODULO.md)、レジスタ数を変えた記録は [benchmarks/REGISTERS.md](benchmarks/REGISTERS.md)（cycle ベース。Fmax・面積・電力は未測定）。次は Phase 3（Modulo Scheduling、MAC）です（[#66](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/66)）。
+Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）、Phase 2（DSL からの自動命令生成。SAXPY・FIR・行列積が機能・サイクルとも一致）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md)・[Phase 2](docs/PHASE2.md) の完了報告）。ベンチマークの記録は [benchmarks/RESULTS.md](benchmarks/RESULTS.md)（資源条件を揃えた固定パイプラインとの比較を含む）、Modulo Scheduling の記録は [benchmarks/MODULO.md](benchmarks/MODULO.md)、レジスタ数を変えた記録は [benchmarks/REGISTERS.md](benchmarks/REGISTERS.md)、MAC（ISA mvp-1）のある構成とない構成の比較は [benchmarks/MAC.md](benchmarks/MAC.md)（cycle ベース。Fmax・面積・電力は未測定）。次は Phase 3（Modulo Scheduling、MAC）です（[#66](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/66)）。
 
 ## 最初に読む文書
 
@@ -35,7 +35,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 
 | パス | 責務 |
 |---|---|
-| `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)） |
+| `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)）。ISA mvp-1（MAC）の既定は `config/machine-mvp1.json` |
 | `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定 |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1）。`sbt "hw/run"` で `generated/` にSystemVerilogを出力 |
@@ -43,7 +43,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `sim/` | ISA参照モデル、サイクル精度モデル |
 | `tests/` | 実装をまたいで共有するテストデータ（[テストケース](tests/cases/README.md)、golden、縮小machine定義） |
 | `crosscheck/` | verifier・参照モデル・RTL・コンパイラの間の差分テストと、ベンチマーク記録の生成（テストコードのみ） |
-| `benchmarks/` | 整数SAXPY、FIR、固定サイズ行列積の記録（[RESULTS.md](benchmarks/RESULTS.md)） |
+| `benchmarks/` | 整数SAXPY、FIR、固定サイズ行列積の記録（[RESULTS.md](benchmarks/RESULTS.md)、MAC のある構成との比較は [MAC.md](benchmarks/MAC.md)） |
 | `docs/` | 方針、仕様、判断理由、開発順序 |
 | `scripts/check.sh` | 手元とCIで共通のチェック入口 |
 | `scripts/mutation-check.sh` | mutation チェック（[tests/cases/README.md](tests/cases/README.md#mutation-チェック)） |

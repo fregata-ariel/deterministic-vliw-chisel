@@ -181,6 +181,7 @@ cycles と、括弧の中に `heldByReadPorts` / `heldByWritePort` を示す。m
 
 - MAC の L が2では、`fir4x8` と `matmul3` の Compute の演算は MUL と MAC だけで、どちらも L 2 なので、書戻しポートで待つことがない（ADR-0018）。L 3 では、MAC(s) と MUL(s+1) が同じ境界を使う
 - `read_ports` 3 では、`CriticalPath` は MAC の後の ST を待たせ、`read_ports` 4 より `fir4x8` で6、`matmul3` で7サイクル長い。`saxpy8` は Memory スロットが律速で、ST が MAC と重なれないので1サイクル長い
+- 16本のレジスタでの全ての試行（mvp-0 との比、`read_ports` 3 と 4 の行ごとの差と、制約が当たった bundle の数）は [benchmarks/MAC.md](../benchmarks/MAC.md) にある
 
 ### テスト
 
@@ -621,6 +622,7 @@ II と cycles（II / cycles）。括弧の中は、II を MII より上げた理
 - `read_ports` 3 と 4 は、どのループでも同じ II になる。3 では、予約表の ST の行が MAC の行と重ならない。`fir4x8`（i）の II 4 では、ST は MUL の行に置くしかない。番号の順に置くと LD と MUL が行 0 を取り、ST の行が無くなるので、先読みで置く（1反復の長さは 14 サイクル。4 では番号の順で置け、10 サイクル）。`matmul3`（m）は、ループの後の ST が MAC と同じ bundle に入れない（4 では6つの bundle で重なる）
 - `matmul3`（i）は、`read_ports` 4 の方が 7 cycles 多い。4 では番号の順の配置が II 9 で成功し、1反復が 23 サイクルになる。3 では番号の順の配置が失敗し、先読みのある配置が1反復を 15 サイクルに置く。制約の効果ではなく、配置の手順の効果である（配置も、cycles 最小を探さない。ADR-0015）
 - MAC の L 3 では、`fir4x8`（i）の II 4 と `matmul3`（i）の II 9 に予約表が無い（スロットと書戻しポート）。Compute の行を全て使うと、書戻しポートの行も全てを1回ずつ使うので、Compute の演算の L の和が II の倍数でなければならない。`fir4x8` は 2 + 3 × 3 = 11、`matmul3`（i）は 3 × 2 + 6 × 3 = 24 で、そうならない。`dot8` は融合しない
+- 4つの構成の記録（テストケースとメトリクス）と、配置の手順、`read_ports` 4 で MAC と ST が同じ bundle に入る数は [benchmarks/MAC.md](../benchmarks/MAC.md) にある
 
 ### テスト
 
