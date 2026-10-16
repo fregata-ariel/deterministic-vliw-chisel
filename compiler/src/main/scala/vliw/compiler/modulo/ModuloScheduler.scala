@@ -205,9 +205,9 @@ object ModuloScheduler {
   /** Places the Each nodes in a reservation table of `ii` rows: in node order, each at the first
     * cycle from its earliest (dependences on the placed nodes) within `ii` cycles and before its
     * latest (dependences of placed nodes on it), whose rows are free; with `lookahead`, also only
-    * where the remaining nodes of its slot class can still get rows (of both classes while a MAC
-    * and a ST are left on a machine with three read ports; once the look-ahead is not decided, the
-    * rest of the placement goes without it). No backtracking.
+    * where the remaining nodes of its slot class can still get rows (of both classes for a MAC or a
+    * ST on a machine with three read ports; once the look-ahead is not decided, the rest of the
+    * placement goes without it). No backtracking.
     */
   def place(g: LoopGraph, ii: Int, lookahead: Boolean): Either[Outcome.NoTime, Map[Int, Int]] = {
     val res = new Resources(g)
@@ -231,14 +231,25 @@ object ModuloScheduler {
             .minOption
             .getOrElse(Int.MaxValue)
           val rest = each.drop(i + 1).map(g.nodes(_).mnemonic)
+          // A MAC or a ST takes the third read port of its row. While a MAC and a ST are left,
+          // `fit` decides both slot classes together; once only one of them is left, the remaining
+          // nodes of the other class are checked too, since they may no longer issue at that row.
+          val readers = Mii.readPortUsers(g.machine)
+          val classes =
+            if (readers(m) && !readers.forall(rest.contains)) Slot.all else Seq(slot(g, n))
           (earliest to latest.min(earliest + ii - 1))
             .find { c =>
               val need = res.uses(m, c).map(row)
               need.distinct.size == need.size && need.forall(!rows.contains(_)) &&
-              (!ahead || res.fit(ii, slot(g, n), rest, rows ++ need).getOrElse {
-                ahead = false
-                true
-              })
+              (!ahead || classes
+                .foldLeft(Option(true)) {
+                  case (Some(true), s) => res.fit(ii, s, rest, rows ++ need)
+                  case (decided, _)    => decided
+                }
+                .getOrElse {
+                  ahead = false
+                  true
+                })
             }
             .toRight(Outcome.NoTime(n, earliest, latest))
             .map { c =>

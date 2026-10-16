@@ -696,6 +696,60 @@ class ModuloSchedulerSpec extends AnyFunSuite {
     }
   }
 
+  // [20 + k] = [k] * [10] + [11]; [30 + k] = [k] * [12] + [13]; [40 + k] = [k]. Per iteration
+  // without fusion: LD 1 + ST 3 in the memory slot, MUL 2 + ADD 2 in the compute slot, MII 4.
+  // Fused, the two MACs and the three STs take the third read port 5 times with three read ports.
+  private val macsAndStores = {
+    def term(h: Int) =
+      Bin(Op.Add, Bin(Op.Mul, Read(Address(0, 1)), Read(Address(h, 0))), Read(Address(h + 1, 0)))
+    Loop(
+      8,
+      Vector(),
+      Vector(
+        Write(Address(20, 1), term(10)),
+        Write(Address(30, 1), term(12)),
+        Write(Address(40, 1), Read(Address(0, 1)))
+      ),
+      Vector()
+    )
+  }
+
+  test("mvp-1: the fusion choice leaves out the third read port, so 3 and 4 ports fuse the same") {
+    // Without the port the fused MII stays 4, so the loop fuses on both machines (ADR-0019).
+    for ((m, mii) <- Seq(mvp1 -> 5, rp4 -> 4)) {
+      val (g, choice) = FusionChoice.of(LoopGraph.build(m, macsAndStores))
+      val c = choice.getOrElse(fail(m.machineId))
+      assert(Fused(c.pairs, c.unfusedMII, c.fusedMII, c.fuses) == Fused(2, 4, 4, true), m.machineId)
+      assert(g.ids(Place.Each).map(g.nodes(_).mnemonic).count(_ == "MAC") == 2, m.machineId)
+      // With three read ports the fused loop has MII 5: the cost of the constraint alone.
+      assert(c.fused.mii == mii && Mii.of(g).mii == mii, m.machineId)
+    }
+    // Random loops: the same loops fuse with three and four read ports.
+    for ((k, _) <- RandomLoops.kernels(77, 300)) {
+      def graph(m: MachineDescription) =
+        ModuloCompiler.prepare(k, m).fold(e => fail(s"${k.name}: $e"), _.graph)
+      assert(graph(mvp1).nodes == graph(rp4).nodes, k.name)
+    }
+  }
+
+  test("mvp-1: the look-ahead after the last MAC checks the rows left for the STs") {
+    val (g, _) = FusionChoice.of(LoopGraph.build(mvp1, macsAndStores))
+    // II 5: the five MACs and STs take the five rows of the third read port, and the LD a MAC row.
+    assert(ModuloScheduler.table(g, 5) == Right(true))
+    // In node order the LD takes row 0, the first MAC row 2 and its ST row 4. The second MAC must
+    // then take row 0, which holds the LD but no ST: at row 3 the two STs left would have row 1
+    // only. Without the look-ahead it takes row 3, and the last ST finds no row.
+    assert(ModuloScheduler.place(g, 5, lookahead = false).isLeft)
+    assert(ModuloScheduler.place(g, 5, lookahead = true).isRight)
+    for ((m, ii) <- Seq(mvp1 -> 5, rp4 -> 4)) {
+      val s = ModuloScheduler
+        .schedule(FusionChoice.of(LoopGraph.build(m, macsAndStores))._1)
+        .fold(e => fail(e.message), identity)
+      assert(s.ii == ii && s.attempts.size == 1, m.machineId)
+      checkSchedule(s)
+    }
+  }
+
   /** Runs a legal program as docs/ISA.md defines it, independently of the compiler: each bundle
     * reads its sources in its cycle, and each result commits `latency` cycles later.
     */
