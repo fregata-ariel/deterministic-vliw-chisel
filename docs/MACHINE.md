@@ -82,6 +82,7 @@ machine description の契約は3段に分かれる。ローダが受け付け�
 | 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
 | 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10 |
 | RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体 |
+| 固定パイプライン（#75） | `FixedParams`（`hw`） | RTL と同じ。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017） |
 
 RTL が対応しない理由は次のとおり。
 

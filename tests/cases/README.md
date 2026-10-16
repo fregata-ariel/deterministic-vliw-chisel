@@ -57,6 +57,7 @@
 | `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL） |
 | `crosscheck/BenchmarkSpec` | `benchmarks/` の記録がソースから生成し直した内容と一致し、記録した命令列が参照モデルと RTL で期待どおりになること |
 | `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと |
+| `crosscheck/FixedPipelineKernelSpec` | ベンチマークの固定パイプライン（#75）を ChiselSim で実行し、乱数・全0・全1の入力で DSL の参照実装と同じ出力を、計画どおりの cycles と発行・書戻しの cycle で出すこと。FIR の係数を変えても同じ回路で正しいこと（係数可変） |
 | `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成）。RTL のタイミングが入力値に依存しないこと |
 
 RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。

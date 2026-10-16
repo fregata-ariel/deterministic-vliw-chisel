@@ -129,3 +129,65 @@
 | program-order | 16 | 6 | 57（LD 39） | 83（LD 27） | 1.46 |
 | program-order | 16 | 7 | 58（LD 39） | 84（LD 28） | 1.45 |
 | program-order | 16 | 8 | 59（LD 41） | 87（LD 31） | 1.47 |
+
+## 資源条件を揃えた固定パイプライン（#75）
+
+命令メモリ・命令制御・RF を持たない、カーネル専用の回路（`vliw.hw.FixedPipeline`）の core latency。cycles は VLIW の記録と同じく start の受理（E_0）から done までで、ホストによる初期配置と完了後の読出しを含めない。ChiselSim で `FixedDriver`（`CoreDriver` と同じ数え方）が測り、`BenchmarkSpec` が上の記録と同じ入力で cycles と出力を確かめる。**cycle の比を実時間の速度比と呼ばない**（Fmax・面積は未測定。#80）。
+
+| カーネル | single | vliw | 固定: VLIW の命令列 | 固定: 上限なし | 下限（固定） |
+|---|---|---|---|---|---|
+| `saxpy8` | 42 | 26 | 26 | 26 | 26（memory） |
+| `fir4x8` | 81 | 65 | 65 | 63 | 62（compute + L5） |
+| `matmul3` | 75 | 56 | 56 | 52 | 51（compute + L5） |
+
+| 系列 | スケジュール | 値の置き場 |
+|---|---|---|
+| 固定: VLIW の命令列 | 上の vliw の行の命令列と同じ発行サイクル（同じ試行、同じ DAG） | VLIW のレジスタ割当て（16 本以内）。両方の書戻しポートから書く語には 2:1 の mux |
+| 固定: 上限なし | VLIW と同じ `ListScheduler` を、同じ DAG に、レジスタの上限なしで、両方の優先度で（cycles 最小、同じならば値レジスタ最少、それも同じならば先の優先度）。VLIW との違いは RF の容量だけである | 寿命が重ならない値で共有（書戻しポートごとの left-edge。書込みの mux なし）。値レジスタは 16 本を超えてよい（**差**） |
+
+下限は、どの合法な計画にも成り立つ値で、理由を添える。memory: Memory の操作は1サイクルに1つ。compute: 最初の演算は LD の値だけを読み（2語を読むならば 1 + L(LD) 以降）、演算は1サイクルに1つ、最後の演算の後に ST が続く。L5: 最初になれる演算がすべてレイテンシー l+1、最後になれる演算がすべて l ならば、どこかで l+1 の演算の次に l の演算が来て、その2つを続くサイクルに置くと同じ境界に書き戻すので、Compute が1サイクル空く。cycles は、最後の書込みの境界 T に1を足した値である（下の「終了」）。
+
+### 揃えた条件と、揃えられない差
+
+| 項目 | VLIW（`Core`） | 固定パイプライン（`FixedPipeline`） |
+|---|---|---|
+| 算術・カーネル・入力 | 32bit、2^32 を法とする。`Benchmarks` の3カーネル | 同じ。同じ `ComputeSlot` |
+| 配置 | `MemoryLayout.fixedOrder` | 同じ。入力・scalar・定数（FIR の係数を含む）を、layout のアドレスから LD で読む。アドレスは回路の定数 |
+| Scratchpad | 2 bank × 256 語、1RW、1サイクル1アクセス | 同じ `MemorySlot` |
+| 演算器 | ADD・SUB・MUL、レイテンシー ADD 1、SUB 1、MUL 2、LD 2、ST 1、II 1。Compute の発行は1サイクルに1つ、書戻しは境界ごとに1つ（L5） | 同じ `ComputeSlot`（発行1つ、書戻し1つ）。計画が使わない種類（SUB）の演算器も slot の中にあるが、kind の decode がそれを選ばない（合成で消えるかは #80） |
+| MUL→ADD の連結 | なし | なし。値はいつもレジスタを経る（MAC は #77、#80） |
+| 中間値（**差**） | 16 本の RF（3R/2W） | 値のレジスタ。読む側の mux は、そのポートが読むレジスタだけを入力にする |
+| 制御（**差**） | 命令メモリ 256 bundle、PC、decoder、HALT | サイクルカウンタと、その値の decode。選択・有効・アドレスはすべてサイクルの定数 |
+| 終了 | HALT を h（全ての操作が完了する境界、L6）に発行し、E_(h+1) で done（h+1 cycles） | HALT の命令はない。最後の書込みの境界 E_T の cycle T を HALT の cycle とみなし、E_(T+1) で done（T+1 cycles）。同じスケジュールは VLIW と同じ cycles になる。E_T で done を上げれば1サイクル少ない（HALT の bundle の分。この表では使わない） |
+| 違反の扱い | L1〜L7 を信号にし、assertion にする | 計画を組み立て時に検査する（`FixedPlan.violations`。同じ規則）。シミュレーションでは書戻しと範囲の assertion |
+| 対応する machine | `CoreParams.check` の範囲 | 同じ範囲を同じ理由で拒否する |
+
+### 回路の固定の遅延と II の契約
+
+- 開始: idle 中だけ start を受理し、受理の境界を E_0 とする。busy 中の start は無視する。
+- 遅延: 1回の実行は T+1 cycles（上の表）で、入力値によらない。busy は cycle 0〜T に high、done は cycle T+1 に1サイクルだけ high になり、そのとき出力は Scratchpad にある。
+- 操作: サイクル s に発行した LD と演算は E_(s+L) でレジスタに書き、ST は E_(s+1) で Scratchpad に書く（L は machine description の値）。
+- II: 実行が終わるまで次の start を受けない。次の start を cycle T+1 に出すと E_(T+2) で受理するので、受理から次の受理まで T+2 cycles（Core と同じ）。そのあいだにホストが入力を書き、出力を読む。入出力のストリーミングを含む throughput・II は測っていない。
+
+### 係数可変
+
+FIR の係数は layout の定数の語（`fir4x8` ではアドレス 11、12、13、14）から読み、回路は係数の値を持たない。互いに異なる4つの係数ならば、layout と DAG は (1,2,3,4) と同じになり、同じ回路になる。等しい係数を含む組（例 (2,2,3,3)）では、`MemoryLayout` が同じ値の定数を1語にまとめるので、配置（出力のアドレスを含む）と DAG が変わり、別の layout・別の回路として扱う。(1,2,3,4) の回路に、その4つの値を係数の4語として書けば、出力は DSL の参照実装と一致する。どちらも `FixedPipelineKernelSpec` が確かめる。
+
+### RTL のパラメータ
+
+| カーネル | 系列 | 計画 | T（最後の書込み） | 値レジスタ（32bit） | operand mux の入力（A / B / ST） | カウンタ | 演算器 |
+|---|---|---|---|---|---|---|---|
+| `saxpy8` | VLIW の命令列 | the VLIW program's schedule and registers (critical-path, no register limit) | 25 | 11（Compute 9 / Memory 10 / 両方 8） | 9 / 10 / 5 | 5 bit | ADD（L1）、MUL（L2） |
+| `saxpy8` | 上限なし | critical-path, no register limit | 25 | 10（Compute 8 / Memory 2 / 両方 0） | 9 / 2 / 5 | 5 bit | ADD（L1）、MUL（L2） |
+| `fir4x8` | VLIW の命令列 | the VLIW program's schedule and registers (program-order, 16 registers, load reserve 4) | 64 | 16（Compute 16 / Memory 11 / 両方 11） | 10 / 15 / 2 | 7 bit | ADD（L1）、MUL（L2） |
+| `fir4x8` | 上限なし | program-order, no register limit | 62 | 44（Compute 32 / Memory 12 / 両方 0） | 12 / 33 / 1 | 6 bit | ADD（L1）、MUL（L2） |
+| `matmul3` | VLIW の命令列 | the VLIW program's schedule and registers (critical-path, 16 registers, load reserve 1) | 55 | 16（Compute 16 / Memory 12 / 両方 12） | 15 / 14 / 3 | 6 bit | ADD（L1）、MUL（L2） |
+| `matmul3` | 上限なし | critical-path, no register limit | 51 | 38（Compute 27 / Memory 11 / 両方 0） | 21 / 26 / 1 | 6 bit | ADD（L1）、MUL（L2） |
+
+### 条件の出典
+
+| 項目 | 値 |
+|---|---|
+| machine | `vliw2-i32-sp2` revision 2、`sha256:a4af6064e049415dc9822614264a01f06b6e1be39c86bc41c5fcdda3e7d89e21` |
+| ツール | Chisel 7.15.0、firtool 1.158.0、Verilator 5.020、Scala 2.13.18、JDK 21 |
+| 計測 | ChiselSim（Verilator、`VliwChiselSim`）。`FixedDriver` が start から done までを数える |

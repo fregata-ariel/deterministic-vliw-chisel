@@ -8,7 +8,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import vliw.compiler.KernelCompiler
 import vliw.compiler.regalloc.RegisterAllocator
 import vliw.compiler.schedule.Priority
-import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
+import vliw.hw.{Core, CoreDriver, CoreParams, FixedDriver, FixedOp, FixedPipeline, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
@@ -21,6 +21,7 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   private val fixed = BenchmarkRecords.fixed(machine)
   private val modulo = ModuloRecords.records(machine)
   private val registers = RegisterRecords.series(records, fixed, machine)
+  private val fixedPipelines = BenchmarkRecords.fixedPipelines(records, machine)
   private val regenerate = "sbt \"crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords\""
 
   /** The generator section depends on the JVM that ran it; everything else must match exactly. */
@@ -32,15 +33,16 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     } else text
 
   test("benchmarks/ holds exactly the generated records") {
-    BenchmarkRecords.files(records, fixed, machine, Some(modulo), Some(registers)).foreach {
-      case (path, expected) =>
+    BenchmarkRecords
+      .files(records, fixed, machine, Some(modulo), Some(registers), Some(fixedPipelines))
+      .foreach { case (path, expected) =>
         assert(Files.exists(path), s"$path is missing; run $regenerate")
         val actual = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
         assert(
           comparable(path, actual) == comparable(path, expected),
           s"$path is out of date; run $regenerate"
         )
-    }
+      }
   }
 
   test("the recorded test cases hold on the reference model") {
@@ -103,6 +105,69 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
         }
       }
     }
+  }
+
+  test("the fixed pipelines give the recorded outputs in the recorded cycles on ChiselSim") {
+    fixedPipelines.foreach { f =>
+      val name = f.kernel.name
+      // The burnt-in circuit takes the recorded VLIW program's cycles.
+      assert(f.burntIn.cycles == f.vliw.compiled.cycles, name)
+      assert(f.planned.cycles >= f.bound._1 && f.planned.cycles <= f.burntIn.cycles, name)
+      val tc =
+        TestCase.parse(ujson.write(f.vliw.testCase)).fold(es => fail(es.mkString("\n")), identity)
+      // Cycle by cycle, the burnt-in plan issues what the recorded program's bundles issue.
+      val bundles = new BundleCodec(machine).decodeAll(tc.words).toOption.get
+      def compute(o: ComputeOp) = o match {
+        case _: ComputeOp.Add => Seq("ADD")
+        case _: ComputeOp.Sub => Seq("SUB")
+        case _: ComputeOp.Mul => Seq("MUL")
+        case _                => Nil
+      }
+      def memory(o: MemoryOp) = o match {
+        case MemoryOp.Ld(_, a) => Seq(s"LD $a")
+        case MemoryOp.St(a, _) => Seq(s"ST $a")
+        case _                 => Nil
+      }
+      val ops = f.burntIn.plan.ops
+      bundles.zipWithIndex.foreach { case (b, c) =>
+        assert(
+          ops.collect { case x: FixedOp.Compute if x.issue == c => x.mnemonic } == compute(
+            b.compute
+          ),
+          s"$name $c"
+        )
+        assert(
+          ops.collect {
+            case FixedOp.Load(`c`, a)     => s"LD $a"
+            case FixedOp.Store(`c`, a, _) => s"ST $a"
+          } == memory(b.memory),
+          s"$name $c"
+        )
+      }
+      assert(bundles.last.compute == ComputeOp.Halt && bundles.size == f.burntIn.cycles, name)
+      f.circuits.foreach { case (series, c) =>
+        assert(c.prepared.layout == f.vliw.compiled.layout, s"$name $series")
+        simulate(new FixedPipeline(c.params)) { dut =>
+          val run = FixedDriver.run(dut, tc.inputs.memory, tc.expect.memory.keySet)
+          assert(run.cycles == c.cycles, s"$name $series")
+          tc.expect.memory.foreach { case (a, v) =>
+            assert(run.memory(a) == BigInt(v), s"$name $series [$a]")
+          }
+        }
+      }
+    }
+  }
+
+  test("the fixed pipelines are measured with the Verilator and JDK that the records name") {
+    // RESULTS.md names the versions that ADR-0004 pins; ChiselSim runs the Verilator on the PATH.
+    assert(
+      BenchmarkRecords.verilatorVersion == BenchmarkRecords.PinnedVerilator,
+      s"Verilator ${BenchmarkRecords.verilatorVersion}; the records and ADR-0004 name ${BenchmarkRecords.PinnedVerilator}"
+    )
+    assert(
+      Runtime.version().feature().toString == BenchmarkRecords.PinnedJdk,
+      s"JDK ${Runtime.version().feature()}; the records and ADR-0004 name ${BenchmarkRecords.PinnedJdk}"
+    )
   }
 
   test("the fixed series gives every attempt of the compiler, in its order, to both modes") {

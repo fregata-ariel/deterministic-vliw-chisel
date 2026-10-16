@@ -43,6 +43,7 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 - 2つの方式・構成の効果を言うときは、戦略を固定した系列の同じ行どうしで比べる。「方式ごとに cycles 最小」どうしの比は、試行の違いの効果も含む
 - 「不成立」の行は、比に含めない。不成立の数と理由も、比較の結果として書く
 - 今後の比較（MAC のある・なし #77、Modulo Scheduling と list scheduling #68、レジスタ数 #70）も、同じ2つの系列で記録する
+- 固定パイプライン（#75、RESULTS.md）と比べるときは、どの回路の値かを書く。「VLIW の命令列」は VLIW と同じスケジュール・同じレジスタで、cycles は VLIW と同じになる（違いは命令メモリ・制御・RF で、面積と Fmax は #80）。「上限なし」は、同じスケジューラでレジスタの上限を外したもので、VLIW との cycles の差は RF の容量の効果である。値のレジスタは 16 本を超える
 - Modulo Scheduling と list scheduling の比較（[MODULO.md](MODULO.md)）では、list scheduling の側は戦略を固定した系列の各行で、Modulo Scheduling の側は1つの戦略（最初に命令列ができた II）である。比はその組合せの比で、Modulo Scheduling の cycles 最小ではない
 - レジスタ数を変える比較（#70）では、レジスタ上限はそれぞれのレジスタ数になる。戦略を固定した系列は、優先度と `loadReserve` が同じ行（上限なしの行は上限なしの行）どうしを比べる。片方にしかない行（`loadReserve` がもう一方のレジスタ数/2 を超える行）は、片方だけの行として記録し、比に含めない
 - 上限付きの試行は、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数を読み直す（rematerialization、[docs/DECISIONS.md](../docs/DECISIONS.md) ADR-0016）。記録では、読み直した行（LD がカーネルの DAG より多い行）の cycles に「（LD n）」を添える。添えていない行の LD の数は、カーネルの DAG の数（[REGISTERS.md](REGISTERS.md) の、方式ごとに cycles 最小の表の括弧の値）である。同じ行でも、片方の構成だけが読み直すことがある（レジスタの少ない方が速くなることもある）ので、比を書くときは両方の LD の数も書く
@@ -51,7 +52,7 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 
 | ファイル | 内容 |
 |---|---|
-| [RESULTS.md](RESULTS.md) | 条件と、2つの系列の結果の表（戦略を固定した系列は、この表だけに記録する）。方式ごとに cycles 最小の系列は cycles、演算数、下限、NOP率、書戻しポート・bank の利用率、レジスタ数、命令列の hash、選ばれた試行。戦略を固定した系列は、試行ごとの両方式の cycles と比、不成立の理由 |
+| [RESULTS.md](RESULTS.md) | 条件と、2つの系列の結果の表（戦略を固定した系列は、この表だけに記録する）。方式ごとに cycles 最小の系列は cycles、演算数、下限、NOP率、書戻しポート・bank の利用率、レジスタ数、命令列の hash、選ばれた試行。戦略を固定した系列は、試行ごとの両方式の cycles と比、不成立の理由。資源条件を揃えた固定パイプライン（#75）の core latency（VLIW の命令列を焼き込んだ回路と、レジスタの上限なしでスケジュールした回路、下限）、揃えた条件と差、回路の遅延と II の契約、RTL のパラメータ、ツールの版 |
 | `cases/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の命令列、入力宣言（入力値は `sampleInputs(kernel, 1)`）、期待値（出力と cycles）。`vliw-testcase/1`（[docs/TESTCASE.md](../docs/TESTCASE.md)） |
 | [MODULO.md](MODULO.md) | Modulo Scheduling（#68）の記録。比べる4つのループ（`saxpy8`、`fir4x8`、`matmul3` の行のループと累算のループ）の MII・II・II を上げた理由・cycles と、戦略を固定した系列の各行（vliw）との比。6つのループ × 3構成と `regs3` の値（#68 の受入テストのループを含む）と、`saxpy(n)` の系列 |
 | `cases/<kernel>_<loop>_modulo.json`、`metrics/<kernel>_<loop>_modulo.json` | Modulo Scheduling したループの命令列・入力・期待値と、実行の記録。`metrics` の `ii` は、トレースで確かめた II |
@@ -75,4 +76,5 @@ CI の `crosscheck/BenchmarkSpec` は、次を確かめる。
 - 方式ごとに cycles 最小の系列が、固定した系列の中の、その方式で cycles 最小（同じならば LD 最少）の最初の試行と一致すること
 - 単一発行の命令列は1 bundle に1操作だけで、vliw より速くならないこと
 - Modulo Scheduling のテストケースが、参照モデルでも RTL でも成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること
+- 固定パイプライン（#75）が、記録した入力で、記録した出力と cycles を ChiselSim で出すこと。「VLIW の命令列」の回路の計画が、記録した命令列の各 bundle と同じ操作を同じ cycle に発行し、cycles が VLIW と同じであること。記録が名前を挙げる Verilator と JDK で測っていること
 - 8・12 本の machine description が、既定の構成とレジスタ数だけ違うこと。8・12 本のテストケースが、参照モデルでも RTL でも成り立つこと。戦略を固定した系列と、方式ごとに cycles 最小の系列についての上の確認を、8・12・16 本のそれぞれで行うこと

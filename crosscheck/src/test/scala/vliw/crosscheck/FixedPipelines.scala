@@ -1,0 +1,128 @@
+package vliw.crosscheck
+
+import vliw.compiler.{CompiledKernel, KernelCompiler}
+import vliw.compiler.dag.{Dag, Node}
+import vliw.compiler.dsl.Kernel
+import vliw.compiler.schedule.{ListScheduler, Priority, Schedule}
+import vliw.hw.{FixedOp, FixedParams, FixedPlan, StoragePolicy}
+import vliw.isa.MachineDescription
+
+/** Fixed pipelines (#75) of the DSL kernels: the kernel's layout (`MemoryLayout.fixedOrder`) and
+  * DAG, list-scheduled under the machine's slots, write-back ports, latencies and IIs, as the plan
+  * of a [[vliw.hw.FixedPipeline]]. Two series per kernel: the kernel's VLIW program burnt in (the
+  * same schedule and registers), and the same list scheduler without a register limit.
+  */
+object FixedPipelines {
+
+  /** Where a plan comes from. */
+  sealed trait Strategy extends Product with Serializable
+  object Strategy {
+
+    /** A priority of the compiler's list scheduler without a register limit. */
+    final case class NoLimit(priority: Priority) extends Strategy {
+      override def toString: String = s"${priority.name}, no register limit"
+    }
+
+    /** The schedule and the register allocation of the kernel's VLIW program. */
+    final case class Vliw(attempt: vliw.compiler.regalloc.Attempt) extends Strategy {
+      override def toString: String = s"the VLIW program's schedule and registers ($attempt)"
+    }
+  }
+
+  /** The plan of `kernel` with the schedule it came from. `cycles` is the core latency, counted as
+    * on the Core: done is high in cycle T + 1, where E_T is the boundary of the last write.
+    */
+  final case class Planned(
+      prepared: KernelCompiler.Prepared,
+      strategy: Strategy,
+      schedule: Schedule,
+      plan: FixedPlan,
+      policy: StoragePolicy = StoragePolicy.ByLifetime
+  ) {
+    def kernel: Kernel = prepared.kernel
+    def machine: MachineDescription = prepared.machine
+    lazy val params: FixedParams = FixedParams(machine, plan, policy)
+    def cycles: Int = params.cycles
+  }
+
+  /** The DAG's nodes with their issue cycles; value ids are node ids. */
+  def plan(name: String, dag: Dag, issue: Int => Int): FixedPlan =
+    FixedPlan(
+      name,
+      dag.nodes.zipWithIndex.map {
+        case (Node.Load(addr), i)        => FixedOp.Load(issue(i), addr)
+        case (Node.Compute(op, a, b), i) => FixedOp.Compute(issue(i), op.mnemonic, a, b)
+        case (Node.Store(addr, v), i)    => FixedOp.Store(issue(i), addr, v)
+      }
+    )
+
+  /** The plans without a register limit, in the order of the compiler's priorities. */
+  def attempts(p: KernelCompiler.Prepared): Seq[Planned] =
+    Priority.all.map { pr =>
+      val s = ListScheduler.schedule(p.dag, pr)
+      Planned(p, Strategy.NoLimit(pr), s, plan(p.kernel.name, p.dag, s.issue(_)))
+    }
+
+  /** A lower bound of the cycles (T + 1, as [[vliw.hw.FixedParams.cycles]]) of any legal plan of
+    * `dag` (one compute and one memory slot, one commit per port and boundary), with the reason
+    * that sets it. Bounds of the boundary T of the last write:
+    *   - memory: M operations issue in distinct cycles, the last at M-1 or later;
+    *   - compute: the first compute operation reads loads only, so it issues at L(LD) or later (1 +
+    *     L(LD) when it reads two words); C operations take C distinct cycles; the last one is read
+    *     only by stores, so a ST follows it;
+    *   - L5: if the operations that can issue first all have latency l+1 and those that can be last
+    *     all have latency l, somewhere an (l+1) is followed by an l, and not in the next cycle
+    *     (both would write at one boundary): one compute cycle stays empty.
+    */
+  def lowerBound(dag: Dag): (Int, String) = {
+    def lat(m: String) = dag.machine.operation(m).latency
+    val n = dag.nodes.indices
+    val memory = n.filterNot(i => dag.nodes(i).isInstanceOf[Node.Compute])
+    val compute = n.filter(i => dag.nodes(i).isInstanceOf[Node.Compute])
+    val mem = memory.size - 1 + memory.map(dag.latency).min
+    if (compute.isEmpty) (mem + 1, "memory")
+    else {
+      def operands(i: Int) = dag.nodes(i) match {
+        case Node.Compute(_, a, b) => Seq(a, b).distinct
+        case _                     => Nil
+      }
+      val first = compute.filter(i => operands(i).forall(o => dag.nodes(o).isInstanceOf[Node.Load]))
+      val last =
+        compute.filter(i => dag.readers(i).forall(r => dag.nodes(r).isInstanceOf[Node.Store]))
+      val start = first.map(i => operands(i).size - 1 + lat("LD")).min
+      val (f, l) = (first.map(dag.latency).toSet, last.map(dag.latency).toSet)
+      val bubble = if (f.size == 1 && l.size == 1 && f.head == l.head + 1) 1 else 0
+      val tail = last.map(dag.latency).minOption.fold(1)(_ + lat("ST"))
+      val comp = start + compute.size - 1 + bubble + tail
+      if (comp > mem) (comp + 1, if (bubble > 0) "compute + L5" else "compute")
+      else (mem + 1, "memory")
+    }
+  }
+
+  /** The VLIW program of `c` as a plan: its schedule (of its DAG, with the LD copies of a
+    * rematerializing attempt) and its registers, so that the circuit is that program without
+    * instruction memory, decoder and register file; it takes `c.cycles`.
+    */
+  def burntIn(c: CompiledKernel): Planned = {
+    val a = c.allocated
+    val dag = a.dag
+    val registers = dag.nodes.indices.map { i =>
+      if (dag.nodes(i).isInstanceOf[Node.Store]) None else a.allocation.register.get(i)
+    }.toVector
+    Planned(
+      KernelCompiler.Prepared(c.kernel, c.machine, c.layout, dag),
+      Strategy.Vliw(a.attempt),
+      a.schedule,
+      plan(c.kernel.name, dag, a.schedule.issue(_)),
+      StoragePolicy.Assigned(registers)
+    )
+  }
+
+  /** The plan without a register limit with the fewest cycles, then the fewest value registers,
+    * then the first priority.
+    */
+  def planned(kernel: Kernel, machine: MachineDescription): Either[String, Planned] =
+    KernelCompiler.prepare(kernel, machine).map { p =>
+      attempts(p).minBy(a => (a.cycles, a.params.registers))
+    }
+}
