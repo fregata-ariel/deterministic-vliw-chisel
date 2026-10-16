@@ -70,6 +70,7 @@ class FixedPipelineSpec extends AnyFunSuite with VliwChiselSim {
     )
     has(broken(Load(0, 0), Load(0, 1)), "cycle 0 issues 2 memory")
     has(broken(Load(0, base.scratchpadWords)), "outside the scratchpad")
+    has(broken(Load(0, 0), Store(2, base.scratchpadWords, 0)), "outside the scratchpad")
     has(broken(Load(0, 0), Store(2, 0, 0)), "word 0 is both loaded and stored")
     has(broken(Load(0, 0), Store(2, 1, 0), Store(3, 1, 0)), "word 1 is stored 2 times")
     has(broken(Load(0, 0), Compute(2, "HALT", 0, 0)), "HALT is not a compute operation")
@@ -107,6 +108,13 @@ class FixedPipelineSpec extends AnyFunSuite with VliwChiselSim {
     )
     val overlap = FixedParams.check(base, plan, assigned(Some(0), Some(1), Some(0), Some(2), None))
     assert(overlap.left.toOption.exists(_.exists(_.contains("overlap in register 0"))), overlap)
+    // The mirrored overlap: [0] (4..4) starts where [1] (2..4) is read last.
+    val mirrored = FixedPlan(
+      "mirrored",
+      Vector(Load(2, 0), Load(0, 1), Compute(4, "ADD", 0, 1), Store(5, 2, 2))
+    )
+    val both0 = FixedParams.check(base, mirrored, assigned(Some(0), Some(0), Some(1), None))
+    assert(both0.left.toOption.exists(_.exists(_.contains("overlap in register 0"))), both0)
     val missing = FixedParams.check(base, plan, assigned(Some(0), None, Some(2), Some(3), None))
     assert(missing.left.toOption.exists(_.exists(_.contains("value 1 has no register"))), missing)
     // A register written by both ports (the memory value [1], then the ADD) gets a write mux.
@@ -161,6 +169,7 @@ class FixedPipelineSpec extends AnyFunSuite with VliwChiselSim {
           val result = BigInt((a * b + a) & 0xffffffffL)
           assert(run.cycles == e.cycles)
           assert(run.doneCycles == Seq(e.cycles), "done is high for exactly one cycle")
+          assert(run.busyCycles == (0 until e.cycles), "busy in cycles 0..T")
           assert(run.computeIssues == e.computeIssues)
           assert(run.memoryIssues == e.memoryIssues)
           assert(run.computeCommits == e.computeCommits)
@@ -169,6 +178,68 @@ class FixedPipelineSpec extends AnyFunSuite with VliwChiselSim {
           assert(run.memory(2) == result)
         }
       }
+    }
+  }
+
+  test("SUB: [2] = ([0] - [1]) * [0] - [1], modulo 2^32, with the operands in order") {
+    val plan = FixedPlan(
+      "sub",
+      Vector(
+        Load(0, 0),
+        Load(1, 1),
+        Compute(3, "SUB", 0, 1), // E_4
+        Compute(4, "MUL", 2, 0), // E_6
+        Compute(6, "SUB", 3, 1), // E_7
+        Store(7, 2, 4) //           E_8: T = 8, done in cycle 9
+      )
+    )
+    val p = FixedParams(base, plan)
+    assert(p.cycles == 9)
+    simulate(new FixedPipeline(p)) { dut =>
+      Seq((3L, 7L), (0L, 0xffffffffL), (0x80000000L, 1L)).zipWithIndex.foreach { case ((a, b), i) =>
+        val run = FixedDriver.run(dut, Map(0 -> a, 1 -> b), Set(2), reset = i == 0, extra = 3)
+        val result = BigInt((((a - b) * a) - b) & 0xffffffffL)
+        assert(run.cycles == 9 && run.doneCycles == Seq(9))
+        assert(run.computeIssues == Seq(3, 4, 6))
+        assert(run.computeCommits == Seq(3, 5, 6))
+        assert(run.stores == Seq((7, 2, result)))
+        assert(run.memory(2) == result)
+      }
+    }
+  }
+
+  test("a start in the done cycle is accepted: acceptances T + 2 cycles apart, as on the Core") {
+    import chisel3.{fromBooleanToLiteral, fromIntToLiteral, fromIntToWidth, fromLongToLiteral}
+    val p = FixedParams(base, example(2, 2))
+    simulate(new FixedPipeline(p)) { dut =>
+      val host = dut.io.host
+      host.start.poke(false.B)
+      host.memWrite.valid.poke(false.B)
+      dut.reset.poke(true.B)
+      dut.clock.step()
+      dut.reset.poke(false.B)
+      Seq(0 -> 7L, 1 -> 3L).foreach { case (a, v) =>
+        host.memWrite.valid.poke(true.B)
+        host.memWrite.bits.addr.poke(a.U)
+        host.memWrite.bits.data.poke(v.U(32.W))
+        dut.clock.step()
+      }
+      host.memWrite.valid.poke(false.B)
+      host.start.poke(true.B)
+      dut.clock.step() // E_0
+      host.start.poke(false.B)
+      (0 until 2).foreach { run =>
+        (0 until p.cycles).foreach { c =>
+          assert(dut.io.busy.peek().litToBoolean && !dut.io.done.peek().litToBoolean, s"$run $c")
+          dut.clock.step()
+        }
+        // Cycle T + 1: done, and a start here is accepted at E_(T+2).
+        assert(dut.io.done.peek().litToBoolean && !dut.io.busy.peek().litToBoolean, s"$run")
+        host.start.poke(true.B)
+        dut.clock.step()
+        host.start.poke(false.B)
+      }
+      assert(dut.io.busy.peek().litToBoolean)
     }
   }
 }

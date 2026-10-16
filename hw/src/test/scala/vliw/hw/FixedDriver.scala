@@ -15,7 +15,8 @@ final case class FixedRun(
     computeCommits: Vector[Int],
     memoryCommits: Vector[Int],
     stores: Vector[(Int, Int, BigInt)], // (cycle, addr, value)
-    doneCycles: Vector[Int]
+    doneCycles: Vector[Int],
+    busyCycles: Vector[Int]
 )
 
 /** Loads a scratchpad image through the host port, starts the pipeline and records every cycle.
@@ -53,7 +54,7 @@ object FixedDriver {
     host.start.poke(false.B)
 
     val o = dut.io.observe
-    val ci, mi, cc, mc, dones = Vector.newBuilder[Int]
+    val ci, mi, cc, mc, dones, busy = Vector.newBuilder[Int]
     val st = Vector.newBuilder[(Int, Int, BigInt)]
     var cycle = 0
     var doneAt = -1
@@ -71,6 +72,7 @@ object FixedDriver {
           o.memCommit.bits.addr.peek().litValue.toInt,
           o.memCommit.bits.data.peek().litValue
         ))
+      if (dut.io.busy.peek().litToBoolean) busy += cycle
       if (dut.io.done.peek().litToBoolean) {
         dones += cycle
         if (doneAt < 0) doneAt = cycle
@@ -96,7 +98,8 @@ object FixedDriver {
       cc.result(),
       mc.result(),
       st.result(),
-      dones.result()
+      dones.result(),
+      busy.result()
     )
   }
 }

@@ -159,7 +159,7 @@
 | 中間値（**差**） | 16 本の RF（3R/2W） | 値のレジスタ。読む側の mux は、そのポートが読むレジスタだけを入力にする |
 | 制御（**差**） | 命令メモリ 256 bundle、PC、decoder、HALT | サイクルカウンタと、その値の decode。選択・有効・アドレスはすべてサイクルの定数 |
 | 終了 | HALT を h（全ての操作が完了する境界、L6）に発行し、E_(h+1) で done（h+1 cycles） | HALT の命令はない。最後の書込みの境界 E_T の cycle T を HALT の cycle とみなし、E_(T+1) で done（T+1 cycles）。同じスケジュールは VLIW と同じ cycles になる。E_T で done を上げれば1サイクル少ない（HALT の bundle の分。この表では使わない） |
-| 違反の扱い | L1〜L7 を信号にし、assertion にする | 計画を組み立て時に検査する（`FixedPlan.violations`。同じ規則）。シミュレーションでは書戻しと範囲の assertion |
+| 違反の扱い | L1〜L7 を信号にし、assertion にする | 計画を組み立て時に検査する（`FixedPlan.violations`: スロット、L3、L5、L7、L9。L4 にあたる値のレジスタの重なりは `FixedPlan.storageViolations`。命令列がないので L1・L2・L6 は対象外）。シミュレーションでは書戻しと範囲の assertion |
 | 対応する machine | `CoreParams.check` の範囲 | 同じ範囲を同じ理由で拒否する |
 
 ### 回路の固定の遅延と II の契約
@@ -167,7 +167,7 @@
 - 開始: idle 中だけ start を受理し、受理の境界を E_0 とする。busy 中の start は無視する。
 - 遅延: 1回の実行は T+1 cycles（上の表）で、入力値によらない。busy は cycle 0〜T に high、done は cycle T+1 に1サイクルだけ high になり、そのとき出力は Scratchpad にある。
 - 操作: サイクル s に発行した LD と演算は E_(s+L) でレジスタに書き、ST は E_(s+1) で Scratchpad に書く（L は machine description の値）。
-- II: 実行が終わるまで次の start を受けない。次の start を cycle T+1 に出すと E_(T+2) で受理するので、受理から次の受理まで T+2 cycles（Core と同じ）。そのあいだにホストが入力を書き、出力を読む。入出力のストリーミングを含む throughput・II は測っていない。
+- II: 実行が終わるまで次の start を受けない。次の start を cycle T+1（done の cycle）に出すと E_(T+2) で受理するので、受理から次の受理まで最短で T+2 cycles（Core と同じ）。これはホストが入出力をしない場合で、ホストは idle の間（cycle T+1 以降）だけ Scratchpad を読み書きできるので、入力を書き出力を読むときは、その cycles が加わる。入出力のストリーミングを含む throughput・II は測っていない。
 
 ### 係数可変
 

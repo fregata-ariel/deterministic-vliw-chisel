@@ -72,6 +72,7 @@ class FixedPipelineKernelSpec extends AnyFunSuite with VliwChiselSim {
           val run = FixedDriver.run(dut, image, layout.outputAddresses, reset = first, extra = 2)
           assert(run.cycles == p.cycles, what)
           assert(run.doneCycles == Seq(p.cycles), s"$what: done is high for one cycle")
+          assert(run.busyCycles == (0 until p.cycles), s"$what: busy in cycles 0..T")
           assert(layout.outputs(a => run.memory(a).toLong) == expected, what)
           assert(run.computeIssues == computes.map(_.issue).sorted, what)
           assert(run.memoryIssues == memoryOps.map(_.issue).sorted, what)
@@ -83,6 +84,27 @@ class FixedPipelineKernelSpec extends AnyFunSuite with VliwChiselSim {
           check(image, Interpreter.run(k, in).fold(e => fail(e), identity), i == 0, s"input $i")
         }
         if (k.name == "fir4x8") coefficients(layout, check)
+      }
+    }
+  }
+
+  test("a VLIW program that copies LDs (matmul3, 8 registers) burnt in: its own DAG and cycles") {
+    val m = RegisterRecords.machineOf(8)
+    val c = KernelCompiler.compile(Benchmarks.matmul(3), m).fold(e => fail(e), identity)
+    assert(c.allocated.dag.loads > c.dag.loads, "the chosen attempt copies LDs")
+    val b = FixedPipelines.burntIn(c)
+    assert(b.plan.ops.count(_.isInstanceOf[FixedOp.Load]) == c.allocated.dag.loads)
+    assert(b.cycles == c.cycles && b.params.registers <= m.registerCount)
+    simulate(new FixedPipeline(b.params)) { dut =>
+      inputs(c.kernel).take(3).zipWithIndex.foreach { case (in, i) =>
+        val image = c.layout.memoryImage(in).fold(e => fail(e), identity)
+        val run = FixedDriver.run(dut, image, c.layout.outputAddresses, reset = i == 0)
+        assert(run.cycles == c.cycles, s"input $i")
+        assert(
+          c.layout.outputs(a => run.memory(a).toLong) ==
+            Interpreter.run(c.kernel, in).fold(e => fail(e), identity),
+          s"input $i"
+        )
       }
     }
   }
