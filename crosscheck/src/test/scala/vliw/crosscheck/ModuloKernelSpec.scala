@@ -182,7 +182,7 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
     assert(got.filter(_._5).map(_._1) == Vector(15) && run.cycles == 16)
   }
 
-  test("hand-written loops through memory give the memory of LoopLowering.evaluate") {
+  test("hand-written loops give the memory of LoopLowering.evaluate") {
     val loops = Seq(
       Loop(
         6,

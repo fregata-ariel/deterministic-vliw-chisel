@@ -84,6 +84,14 @@ class RowFitSpec extends AnyFunSuite {
     )
     // One SUB of unit II 2 in 4 rows: rows 2 and 3 taken, port row 2 taken, unit rows 0 and 2 taken.
     assert(RowFit.fits(4, Vector(Kind(1, 2, port = true, 1)), 0xc, 0x4, Vector(0x5)) == Some(false))
+    // One ADD in 2 rows, row 1 taken: at row 0 it writes back at port row 1, so the taken port row
+    // alone decides.
+    assert(RowFit.fits(2, Vector(Kind(1, 1, port = true, 1)), 0x2, 0x2, Vector(0)) == Some(false))
+    assert(RowFit.fits(2, Vector(Kind(1, 1, port = true, 1)), 0x2, 0x0, Vector(0)) == Some(true))
+    // One operation without a port in 3 rows, unit rows 1 and 2 taken: only row 0 is left, and the
+    // taken slot row alone decides.
+    assert(RowFit.fits(3, Vector(Kind(1, 1, port = false, 1)), 0x1, 0, Vector(0x6)) == Some(false))
+    assert(RowFit.fits(3, Vector(Kind(1, 1, port = false, 1)), 0x0, 0, Vector(0x6)) == Some(true))
   }
 
   test("RowFit does not decide above 62 rows or beyond its budget") {

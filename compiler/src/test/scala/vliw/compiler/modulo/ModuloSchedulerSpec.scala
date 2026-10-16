@@ -153,6 +153,12 @@ class ModuloSchedulerSpec extends AnyFunSuite {
     val e = ModuloCompiler.compile(loop("matmul3 m"), slow).swap.getOrElse(fail("compiled"))
     assert(e.startsWith("matmul3: 2 iterations of the loop over m: no II from 18 to 24"), e)
     (18 to 24).foreach(ii => assert(e.contains(s"II $ii: ${live(17)}"), e))
+    val layout = LoopLowering.layout(loop("matmul3 m"), slow).fold(e => fail(e), identity)
+    val no = ModuloScheduler
+      .schedule(LoopGraph.of(LoopLowering.lower(loop("matmul3 m"), layout), slow))
+      .swap
+      .getOrElse(fail("scheduled"))
+    assert((no.mii.resMII, no.mii.bounding, no.mii.recMII, no.iiMax) == ((18, compute, 1, 24)))
   }
 
   /** Checks a schedule against the machine, independently of the scheduler: dependences of the
@@ -322,8 +328,9 @@ class ModuloSchedulerSpec extends AnyFunSuite {
     }
   }
 
-  // Hand-written loops with dependences through memory (a LoopKernel has none): RecMII, the
-  // attempts and the cycles; the program passes the verifier.
+  // Hand-written loops: five with dependences through memory (a LoopKernel has none), one of them at
+  // a distance of 2 iterations, and two without one whose loop state a later node reads. RecMII,
+  // the attempts and the cycles; the program passes the verifier.
   private val memoryLoops
       : Seq[(String, Loop, Seq[(MachineDescription, Int, Int, Seq[(Int, String)], Int)])] = Seq(
     (
@@ -413,7 +420,7 @@ class ModuloSchedulerSpec extends AnyFunSuite {
     )
   )
 
-  test("dependences through memory: hand-written loops") {
+  test("hand-written loops: dependences through memory, and states read by a later node") {
     val declaration = Verifier.Declaration(Set.empty, (0 until 64).toSet)
     for ((name, l, cases) <- memoryLoops; (m, recMII, ii, before, cycles) <- cases) {
       val s = ModuloScheduler.schedule(LoopGraph.build(m, l)).fold(e => fail(e.message), identity)

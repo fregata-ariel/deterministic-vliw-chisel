@@ -366,7 +366,7 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 | 結果 | 意味 | #68 の原因 |
 |---|---|---|
 | 予約表なし（`NoMrt`） | 1反復の演算が II 行の予約表に収まらない（`RowFit` が依存を無視して判定する）。ポートと演算器を外して判定し直し、衝突する資源の組（スロット、スロット + 書戻しポート、スロット + 演算器、…）を挙げる | (a) |
-| 配置できない（`NoTime`） | 番号の順・後戻りなしの配置で、あるノードの範囲に置ける時刻が無い。ふつうは予約表があるときだが、`RowFit` が打ち切ったときは予約表があるかが決まっていない（理由に「whether a reservation table exists is not decided」と書く。最遅が無いときは範囲の上端を空けて書く） | (a) と区別する |
+| 配置できない（`NoTime`） | 番号の順・後戻りなしの配置で、あるノードの範囲に置ける時刻が無い。ふつうは予約表があるときだが、配置の前の、1反復全体の予約表の判定を `RowFit` が打ち切ったときは、予約表があるかが決まっていない（理由に「whether a reservation table exists is not decided」と書く）。先読みでの打ち切りは先読みを止めるだけで、この注は付けない。最遅が無いときは範囲の上端を空けて書く | (a) と区別する |
 | レジスタ（`TooManyLive`） | 展開した命令列の、同時に生きる値がレジスタ数を超える | (b) |
 | 命令領域（`Overflow`） | 展開した命令列が `instruction_memory.bundles` を超える | - |
 | 収まる（`Fits`） | | |
@@ -413,7 +413,7 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 ### テスト
 
 - `compiler/.../modulo/ModuloSchedulerSpec`
-  - 6つのループ × 3構成（既定、`slow_units`、`ii_units`）の ResMII と律速の資源、RecMII、II、探索の上限、開始、cycles、II ごとの理由
+  - 6つのループ × 3構成（既定、`slow_units`、`ii_units`）の ResMII と律速の資源、RecMII、II、探索の上限、開始、cycles、II ごとの理由。`slow_units` の `matmul3`（m）は不成立なので、ResMII と律速の資源、RecMII、探索の上限と、II ごとの理由（エラー）
   - 全スケジュールを、スケジューラと独立に確かめる。展開した辺、サイクルごとのスロット、演算器の II（L9）、書戻しポート（L5）、HALT（L6）、`start + t + k × II`、表
   - 手で計算した表: `product(4)`（3反復、II 2 = RecMII）と `dot(4)`（3反復、II 3 > MII 2）の、各演算の bundle とスロット
   - 先読みが要る配置（`fir4x8` の II 8）と、次の反復の書戻しポートによる移動。移動しないと verifier が L5 で拒否すること
@@ -422,12 +422,12 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
   - レジスタ3本（`tests/machines/regs3.json`）: `saxpy8` は II 3〜5 で4つの値が生き、II 6 で収まる。`dot8` はどの II にも収まらず、理由付きのエラーになる
   - 命令領域: `saxpy(83)` は 254 bundle で収まり、`saxpy(84)` は 257 bundle で、カーネル名・反復回数・bundle 数・容量を含むエラーになる。`saxpy(n)`（n = 8〜64）は II 3、3n + 5 cycles。`dot(84)` はちょうど 256 bundle で収まり、`dot(85)` は 259 bundle で収まらない。命令領域を 80 bundle にすると、`matmul3`（i）は II 20 で 87 bundle になって収まらず、探索を続けて II 21（70 bundle）を使う
   - SUB が Compute スロットと書戻しポートと SUB の演算器を使うこと（ResMII 3）
-  - メモリを通る依存のある手作りの `Loop`（反復距離2の依存、ループの状態を後のノードが読むもの、状態と配列の両方を書くものを含む。RecMII、`NoTime`、cycles、verifier）
+  - 手作りの `Loop`。メモリを通る依存のある5つ（反復距離2の依存を含む）と、メモリを通る依存は無いが、ループの状態を後のノードが読む2つ（1つは、反復をまたぐ辺が、それが値を渡す反復の中の辺より後に並ぶ）。RecMII、`NoTime`、cycles、verifier
 - `compiler/.../modulo/RowFitSpec`: `RowFit` を、行への割り当てを全て試す方法と、すでに使われた行のある3000の乱数の表で比べる。使用済みのポートと演算器を数えること。62行を超えるときと、手数の上限を超えたときに `None`（決まらない）を返すこと
 - `crosscheck/ModuloKernelSpec`
   - 参照モデル（3構成とレジスタ3本）: 結果が DSL の参照実装と、cycles が予測と一致し、トレースの照合で II が記録と一致すること。RTL（既定の構成）でも同じ。`slow_units` と `ii_units` は RTL の対応範囲外なので、理由を付けてスキップと表示する
   - 手で計算したトレース: `product(4)` と `dot(4)` の、各行の発行、書戻しのポート、メモリへの commit、cycles
-  - メモリを通る依存のある手作りの `Loop` を参照モデルで実行し、メモリが `LoopLowering.evaluate` と一致し、トレースの照合に合格すること
+  - 上の手作りの `Loop` を参照モデルで実行し、メモリが `LoopLowering.evaluate` と一致し、トレースの照合に合格すること
   - トレースの照合が、表の反復の入れ替え、初期値の誤り、LD と ST のアドレスの誤り、ソースの入れ替え、別の演算が書いたレジスタを読むソース（ADD と ST）、1行ずれた commit、別のポートの commit、表と違う種類の演算、表に無いスロットの演算、状態の反復距離の誤り、記録と違う II を見つけること
   - 正しいが、反復が II ごとに始まらない命令列を拒否すること: `dot(4)` を展開して list scheduling した命令列（表はトレースと一致する）と、`saxpy8` の最後の ST を1サイクル遅らせた命令列
 - `crosscheck/BenchmarkSpec`: [benchmarks/MODULO.md](../benchmarks/MODULO.md) と、Modulo Scheduling のテストケース・メトリクスが生成し直した内容と一致すること。テストケースが参照モデルと RTL で成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること
