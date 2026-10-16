@@ -19,3 +19,4 @@ fixed-done-early	hw/src/main/scala/vliw/hw/FixedPipeline.scala	when(cycle === p.
 fixed-commit-late	hw/src/main/scala/vliw/hw/FixedPlan.scala	op.issue + machine.operation(op.mnemonic).latency - 1	op.issue + machine.operation(op.mnemonic).latency	the fixed pipeline captures every value one cycle late
 fixed-b-reads-a	hw/src/main/scala/vliw/hw/FixedPipeline.scala	compute.io.b := operand(computes.map(c => c.issue -> c.b))	compute.io.b := operand(computes.map(c => c.issue -> c.a))	the fixed pipeline reads the first operand as the second
 fixed-plan-l5-missed	hw/src/main/scala/vliw/hw/FixedPlan.scala	case ((p, b), ws) if ws.size > 1 =>	case ((p, b), ws) if ws.size > 2 =>	the plan check accepts two writes on one write-back port at one boundary
+fixed-sub-as-add	hw/src/main/scala/vliw/hw/FixedPipeline.scala	Mux(kindIn("SUB"), ComputeKind.Sub, ComputeKind.Add)	Mux(false.B, ComputeKind.Sub, ComputeKind.Add)	the fixed pipeline computes SUB as ADD
