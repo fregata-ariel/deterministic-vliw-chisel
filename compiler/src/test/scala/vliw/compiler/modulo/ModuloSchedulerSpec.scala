@@ -2,16 +2,18 @@ package vliw.compiler.modulo
 
 import org.scalatest.funsuite.AnyFunSuite
 
+import scala.collection.mutable
+
 import vliw.compiler.{KernelCompiler, Verifier}
 import vliw.compiler.dag.Node
-import vliw.compiler.dsl.{Benchmarks, Op}
+import vliw.compiler.dsl.{Benchmarks, Interpreter, Op}
 import vliw.compiler.loop._
 import vliw.compiler.loop.Loop.{Bin, Final, Read, StateRef, Update, Write}
 import vliw.compiler.regalloc.RegisterAllocator
 import vliw.compiler.schedule.Schedule
-import vliw.isa.{BundleCodec, MachineDescription, Rule, Slot}
+import vliw.isa.{Bundle, BundleCodec, ComputeOp, MachineDescription, MemoryOp, Rule, Slot}
 
-import ModuloSchedulerSpec.Expect
+import ModuloSchedulerSpec.{Expect, Fused}
 
 class ModuloSchedulerSpec extends AnyFunSuite {
   private def machineFile(name: String) = MachineDescription
@@ -21,6 +23,11 @@ class ModuloSchedulerSpec extends AnyFunSuite {
   private val slow = machineFile("slow_units.json")
   private val iiUnits = machineFile("ii_units.json")
   private val regs3 = machineFile("regs3.json")
+  private val mvp1 = MachineDescription
+    .load(MachineDescription.Mvp1Path)
+    .fold(es => fail(es.mkString("\n")), identity)
+  private val rp4 = machineFile("mvp1_rp4.json")
+  private val mac3 = machineFile("mvp1_mac3.json")
 
   private def compile(k: LoopKernel, m: MachineDescription) =
     ModuloCompiler
@@ -130,6 +137,61 @@ class ModuloSchedulerSpec extends AnyFunSuite {
   private def loop(label: String) =
     LoopBenchmarks.all.find(k => s"${k.name} ${k.index}" == label).getOrElse(fail(label))
 
+  // ISA mvp-1 (#77): as `expected`, with ResMII without the third read port and the fusion choice.
+  private val thirdPort = "third read port"
+  private val computePort = compute :+ thirdPort
+  private val dotFused = Seq("memory slot", "memory write-back port", "LD unit")
+  private val mvp1Expected: Seq[(String, MachineDescription, Expect, Int, Fused)] = Seq(
+    ("saxpy8 i", mvp1, Expect(3, Seq("memory slot"), 0, 3, 6, 1, 29), 3, Fused(1, 3, 3, true)),
+    ("saxpy8 i", rp4, Expect(3, Seq("memory slot"), 0, 3, 6, 1, 29), 3, Fused(1, 3, 3, true)),
+    ("saxpy8 i", mac3, Expect(3, Seq("memory slot"), 0, 3, 7, 1, 32), 3, Fused(1, 3, 3, true)),
+    ("fir4x8 i", mvp1, Expect(4, computePort, 0, 4, 9, 3, 46), 4, Fused(3, 7, 4, true)),
+    ("fir4x8 i", rp4, Expect(4, compute, 0, 4, 9, 4, 43), 4, Fused(3, 7, 4, true)),
+    (
+      "fir4x8 i",
+      mac3,
+      Expect(4, computePort, 0, 5, 12, 4, 60, Seq(4 -> slotPort)),
+      4,
+      Fused(3, 7, 4, true)
+    ),
+    ("matmul3 i", mvp1, Expect(9, computePort, 0, 9, 15, 4, 38), 9, Fused(6, 15, 9, true)),
+    ("matmul3 i", rp4, Expect(9, compute, 0, 9, 15, 3, 45), 9, Fused(6, 15, 9, true)),
+    (
+      "matmul3 i",
+      mac3,
+      Expect(9, computePort, 0, 10, 19, 3, 39, Seq(9 -> slotPort)),
+      9,
+      Fused(6, 15, 9, true)
+    ),
+    (
+      "matmul3 m",
+      mvp1,
+      Expect(9, computePort :+ "MAC unit", 2, 9, 13, 9, 40),
+      9,
+      Fused(9, 18, 9, true)
+    ),
+    (
+      "matmul3 m",
+      rp4,
+      Expect(9, compute :+ "MAC unit", 2, 9, 13, 9, 34),
+      9,
+      Fused(9, 18, 9, true)
+    ),
+    (
+      "matmul3 m",
+      mac3,
+      Expect(9, computePort :+ "MAC unit", 3, 9, 14, 9, 40),
+      9,
+      Fused(9, 18, 9, true)
+    ),
+    ("product8 i", mvp1, Expect(1, all1, 2, 2, 4, 1, 19), 1, Fused(0, 2, 2, false)),
+    ("product8 i", rp4, Expect(1, all1, 2, 2, 4, 1, 19), 1, Fused(0, 2, 2, false)),
+    ("product8 i", mac3, Expect(1, all1, 2, 2, 4, 1, 19), 1, Fused(0, 2, 2, false)),
+    ("dot8 i", mvp1, Expect(2, dotFused, 2, 2, 5, 2, 21), 2, Fused(1, 2, 2, true)),
+    ("dot8 i", rp4, Expect(2, dotFused, 2, 2, 5, 2, 21), 2, Fused(1, 2, 2, true)),
+    ("dot8 i", mac3, Expect(2, dot1, 1, 3, 6, 2, 28, Seq(2 -> slotPort)), 2, Fused(1, 2, 3, false))
+  )
+
   test("MII, II, the attempts before it, and the cycles of the recorded loops on three machines") {
     for ((label, m, e) <- expected) {
       val c = compile(loop(label), m)
@@ -186,6 +248,11 @@ class ModuloSchedulerSpec extends AnyFunSuite {
       .filter(op(_).writeback.isDefined)
       .groupBy(i => (op(i).writeback, issue(i) + op(i).latency))
       .foreach { case (k, is) => assert(is.size == 1, s"two commits at $k") }
+    // L11: the registers each bundle reads (ADD/SUB/MUL 2, MAC 3, ST 1, LD 0) fit the read ports.
+    val reads = Map("ADD" -> 2, "SUB" -> 2, "MUL" -> 2, "MAC" -> 3, "ST" -> 1, "LD" -> 0)
+    dag.nodes.indices.groupBy(issue).foreach { case (c, is) =>
+      assert(is.map(i => reads(dag.nodes(i).mnemonic)).sum <= m.readPorts, s"reads at $c")
+    }
     assert(s.schedule.halt == dag.nodes.indices.map(i => issue(i) + op(i).latency).max)
     origin.indices.foreach { i =>
       origin(i).iteration.foreach(k =>
@@ -202,6 +269,7 @@ class ModuloSchedulerSpec extends AnyFunSuite {
   test("every schedule respects the dependences and the resources, checked independently") {
     for ((label, m, _) <- expected) checkSchedule(compile(loop(label), m).result)
     checkSchedule(compile(LoopBenchmarks.saxpy(8), regs3).result)
+    for ((label, m, _, _, _) <- mvp1Expected) checkSchedule(compile(loop(label), m).result)
   }
 
   /** The issued operations as (bundle, slot, place, mnemonic, iteration). */
@@ -511,9 +579,210 @@ class ModuloSchedulerSpec extends AnyFunSuite {
     assert(!c.result.attempts.exists(_.outcome.isInstanceOf[Outcome.NoMrt]))
     checkSchedule(c.result)
   }
+
+  test("mvp-1: MII, II, the fusion choice and the cycles of the recorded loops on three machines") {
+    for ((label, m, e, withoutPort, fused) <- mvp1Expected) {
+      val c = compile(loop(label), m)
+      val s = c.result
+      val got = Expect(
+        s.mii.resMII,
+        s.mii.bounding,
+        s.mii.recMII,
+        s.ii,
+        s.iiMax,
+        s.start,
+        c.cycles,
+        s.attempts.init.map(a => a.ii -> a.outcome.toString)
+      )
+      assert(got == e, s"$label on ${m.machineId}")
+      assert(s.mii.withoutReadPort.resMII == withoutPort, s"$label on ${m.machineId}")
+      val f = c.fusion.getOrElse(fail(s"$label on ${m.machineId}: no fusion choice"))
+      assert(
+        Fused(f.pairs, f.unfusedMII, f.fusedMII, f.fuses) == fused,
+        s"$label on ${m.machineId}"
+      )
+      // The loop scheduled is the fused one exactly when the choice fuses it.
+      assert((c.graph.expanded.dag.macs > 0) == f.fuses, s"$label on ${m.machineId}")
+    }
+    // Without MAC in the machine there is no choice.
+    assert(LoopBenchmarks.all.forall(k => compile(k, machine).fusion.isEmpty))
+  }
+
+  test("mvp-1, fusion by the MII: dot8 fuses at MAC latency 2, and not at latency 3") {
+    // Latency 2: LD 2 and MAC 1 per iteration. MII 2: ResMII 2 (memory slot) and RecMII 2 (MAC ->
+    // its MAC of the next iteration), the same as without fusion (ResMII 2, RecMII 1), so it fuses.
+    // II 2, where mvp-0 has no table for MUL and ADD and takes II 3.
+    val l2 = compile(LoopBenchmarks.dot(8), mvp1)
+    assert(l2.fusion.map(f => (f.unfusedMII, f.fusedMII, f.fuses)).contains((2, 2, true)))
+    assert((l2.ii, compile(LoopBenchmarks.dot(8), machine).ii) == ((2, 3)))
+    assert(l2.bundles.count(_.compute.isInstanceOf[ComputeOp.Mac]) == 7)
+    // Latency 3: RecMII 3 > 2, so the loop keeps MUL and ADD and takes II 3, as on mvp-0.
+    val l3 = compile(LoopBenchmarks.dot(8), mac3)
+    assert(l3.fusion.map(f => (f.unfusedMII, f.fusedMII, f.fuses)).contains((2, 3, false)))
+    assert(l3.fusion.map(_.fused.recMII).contains(3) && l3.ii == 3)
+    assert(!l3.bundles.exists(_.compute.isInstanceOf[ComputeOp.Mac]))
+    assert(l3.graph == LoopGraph.of(LoopLowering.lower(l3.kernel, l3.layout), mac3))
+  }
+
+  test("mvp-1: MAC and ST use the third read port once each with three read ports, not with four") {
+    // Per iteration: saxpy8 MAC 1 + ST 1; fir4x8 (i) MAC 3 + ST 1; matmul3 (i) MAC 6 + ST 3;
+    // matmul3 (m) MAC 9 (its ST is after the loop); dot8 MAC 1 (likewise).
+    val uses =
+      Seq("saxpy8 i" -> 2, "fir4x8 i" -> 4, "matmul3 i" -> 9, "matmul3 m" -> 9, "dot8 i" -> 1)
+    for ((label, n) <- uses) {
+      val g = compile(loop(label), mvp1).graph
+      assert(Mii.of(g).resources.find(_.resource == Mii.ReadPort).map(_.uses).contains(n), label)
+      val four = compile(loop(label), rp4).graph
+      assert(four.nodes == g.nodes, label) // the same loop is fused
+      assert(Mii.of(four).resources.forall(_.resource != Mii.ReadPort), label)
+    }
+    assert(Mii.readPortUsers(mvp1) == Set("MAC", "ST"))
+    assert(Mii.readPortUsers(rp4).isEmpty && Mii.readPortUsers(machine).isEmpty)
+  }
+
+  test("mvp-1: the look-ahead decides MAC and ST together (fir4x8 at II 4, three read ports)") {
+    val g = compile(LoopBenchmarks.fir(Seq(1L, 2L, 3L, 4L), 8), mvp1).graph
+    // A table exists: the ST takes the row of the MUL, the three MACs the other rows.
+    assert(ModuloScheduler.table(g, 4) == Right(true))
+    // In node order without the look-ahead, the LD and the MUL take row 0, so the ST, which must
+    // avoid the rows of the MACs, finds no row.
+    assert(g.nodes(12).mnemonic == "ST")
+    assert(
+      ModuloScheduler.place(g, 4, lookahead = false) == Left(Outcome.NoTime(12, 9, Int.MaxValue))
+    )
+    val times = ModuloScheduler.place(g, 4, lookahead = true).getOrElse(fail("II 4"))
+    val stRow = Math.floorMod(times(12), 4)
+    assert(
+      g.ids(Place.Each)
+        .filter(g.nodes(_).mnemonic == "MAC")
+        .forall(n => Math.floorMod(times(n), 4) != stRow)
+    )
+    // With four read ports the ST may share a row with a MAC, and node order fits at once.
+    val four = compile(LoopBenchmarks.fir(Seq(1L, 2L, 3L, 4L), 8), rp4).graph
+    assert(ModuloScheduler.place(four, 4, lookahead = false).isRight)
+  }
+
+  test("mvp-1: a table that only the third read port rules out is (a), with the port named") {
+    // s = [0]; s = s * s + s; [20 + k] = s: one MAC (s * s + s) and one ST per iteration.
+    val l = Loop(
+      4,
+      Vector(Read(Address(0, 0))),
+      Vector(
+        Update(0, Bin(Op.Add, Bin(Op.Mul, StateRef(0), StateRef(0)), StateRef(0))),
+        Write(Address(20, 1), StateRef(0))
+      ),
+      Vector()
+    )
+    for (m <- Seq(mvp1, rp4)) {
+      val (g, choice) = FusionChoice.of(LoopGraph.build(m, l))
+      // Fused: RecMII 2 (MAC -> MAC) against 3 (ADD -> MUL -> ADD).
+      assert(choice.map(c => (c.unfusedMII, c.fusedMII)).contains((3, 2)))
+      assert(g.ids(Place.Each).map(g.nodes(_).mnemonic) == Vector("MAC", "ST"))
+      // One row: each slot class fits, but the MAC and the ST cannot share the third read port.
+      val one = ModuloScheduler.table(g, 1)
+      if (m == mvp1) assert(one == Left(Outcome.NoMrt("slot + third read port (L11)")))
+      else assert(one == Right(true))
+      val s = ModuloScheduler.schedule(g).fold(e => fail(e.message), identity)
+      assert(s.ii == 2)
+      checkSchedule(s)
+      KernelCompiler
+        .verified(
+          m,
+          "s * s + s",
+          Verifier.Declaration(Set.empty, (0 until 64).toSet),
+          s.allocation.bundles
+        )
+        .fold(e => fail(e), identity)
+    }
+  }
+
+  /** Runs a legal program as docs/ISA.md defines it, independently of the compiler: each bundle
+    * reads its sources in its cycle, and each result commits `latency` cycles later.
+    */
+  private def execute(m: MachineDescription, bundles: Vector[Bundle], image: Map[Int, Long]) = {
+    val reg = Array.fill(m.registerCount)(0L)
+    val mem = mutable.Map.from(image)
+    val pending = mutable.ArrayBuffer.empty[(Int, () => Unit)]
+    bundles.indices.foreach { s =>
+      pending.filter(_._1 <= s).foreach(_._2())
+      pending.filterInPlace(_._1 > s)
+      def later(op: String)(commit: () => Unit) = pending += ((s + m.operation(op).latency, commit))
+      bundles(s).compute match {
+        case ComputeOp.Add(d, x, y) =>
+          val v = Op.Add(reg(x), reg(y)); later("ADD")(() => reg(d) = v)
+        case ComputeOp.Sub(d, x, y) =>
+          val v = Op.Sub(reg(x), reg(y)); later("SUB")(() => reg(d) = v)
+        case ComputeOp.Mul(d, x, y) =>
+          val v = Op.Mul(reg(x), reg(y)); later("MUL")(() => reg(d) = v)
+        case ComputeOp.Mac(d, x, y, z) =>
+          val v = Op.Add(Op.Mul(reg(x), reg(y)), reg(z)); later("MAC")(() => reg(d) = v)
+        case ComputeOp.Nop | ComputeOp.Halt => ()
+      }
+      bundles(s).memory match {
+        case MemoryOp.Ld(d, a) => val v = mem(a); later("LD")(() => reg(d) = v)
+        case MemoryOp.St(a, x) => val v = reg(x); later("ST")(() => mem(a) = v)
+        case MemoryOp.Nop      => ()
+      }
+    }
+    pending.foreach(_._2())
+    mem.toMap
+  }
+
+  test("mvp-1: the recorded loops and random loops give the outputs of the DSL reference") {
+    def macStore(b: Bundle) =
+      b.compute.isInstanceOf[ComputeOp.Mac] && b.memory.isInstanceOf[MemoryOp.St]
+    for ((label, m, _, _, _) <- mvp1Expected; seed <- 1 to 3) {
+      val c = compile(loop(label), m)
+      val in = KernelCompiler.sampleInputs(c.kernel.unroll, seed.toLong)
+      val image = c.layout.memoryImage(in).fold(e => fail(e), identity)
+      val want = Interpreter.run(c.kernel.unroll, in).fold(e => fail(e), identity)
+      assert(c.layout.outputs(execute(m, c.bundles, image)) == want, s"$label on ${m.machineId}")
+      // One mac instruction per MAC of the unrolled loop; with three read ports, never with a ST.
+      val macs = c.bundles.count(_.compute.isInstanceOf[ComputeOp.Mac])
+      assert(macs == c.graph.expanded.dag.macs, s"$label on ${m.machineId}")
+      assert(m.readPorts == 4 || !c.bundles.exists(macStore), s"$label on ${m.machineId}")
+    }
+    // Random loops (as LoopGraphSpec makes them) pass the verifier and compute the reference too.
+    // The loops that fit no II on mvp-0 (too many values live at once) fit none on mvp-1 either.
+    val random = RandomLoops.kernels(76, 300).map(_._1)
+    val tooLarge = random.filter(ModuloCompiler.compile(_, machine).isLeft).map(_.name)
+    assert(tooLarge.size == 4)
+    for (m <- Seq(mvp1, rp4, mac3)) {
+      val fused = random.flatMap { k =>
+        ModuloCompiler.compile(k, m) match {
+          case Left(e) =>
+            assert(tooLarge.contains(k.name) && e.contains("no II from"), e)
+            None
+          case Right(c) =>
+            checkSchedule(c.result)
+            val in = KernelCompiler.sampleInputs(k.unroll, 1L)
+            val image = c.layout.memoryImage(in).fold(e => fail(e), identity)
+            val want = Interpreter.run(k.unroll, in).fold(e => fail(e), identity)
+            assert(
+              c.layout.outputs(execute(m, c.bundles, image)) == want,
+              s"${k.name} on ${m.machineId}"
+            )
+            Some(c.fusion.exists(_.fuses))
+        }
+      }
+      assert(fused.size == random.size - tooLarge.size, m.machineId)
+      assert(fused.count(identity) >= 100, s"${fused.count(identity)} on ${m.machineId}")
+    }
+    // With four read ports, MAC and ST share bundles.
+    assert(
+      Seq("saxpy8 i", "fir4x8 i", "matmul3 i").exists(l =>
+        compile(loop(l), rp4).bundles.exists(macStore)
+      )
+    )
+  }
 }
 
 object ModuloSchedulerSpec {
+
+  /** The fusion choice of a loop on a machine with MAC: the pairs, the MII without and with them
+    * (both without the third read port), and whether the loop is fused.
+    */
+  final case class Fused(pairs: Int, unfused: Int, fused: Int, fuses: Boolean)
 
   /** Per loop and machine: ResMII and the resources that set it, RecMII, II, the span of one
     * iteration (the largest II tried), the start of iteration 0, the cycles, and the attempts

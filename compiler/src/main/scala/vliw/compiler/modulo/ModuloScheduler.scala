@@ -107,18 +107,23 @@ object ModuloScheduler {
     each.map(n => t(n) + occupies(n)).max - each.map(t).min
   }
 
-  /** Resource ids of the reservation tables: the slots, the ports, then one unit per mnemonic. */
+  /** Resource ids of the reservation tables: the slots, the ports, one unit per mnemonic, then the
+    * third read port (`Mii.readPortUsers`; only MAC and ST on a machine with three read ports).
+    */
   private final class Resources(g: LoopGraph) {
     private val mnemonics = g.machine.operations.keys.toVector.sorted
     private def op(m: String) = g.machine.operation(m)
     private def slotId(s: Slot) = if (s == Slot.Compute) 0 else 1
     private def portId(s: Slot) = if (s == Slot.Compute) 2 else 3
     private def unitId(m: String) = 4 + mnemonics.indexOf(m)
+    private val readPortId = 4 + mnemonics.size
+    private val readers = Mii.readPortUsers(g.machine)
 
     /** The (resource, cycle) pairs that an issue of `m` at `c` takes. */
     def uses(m: String, c: Int): Seq[(Int, Int)] =
       Seq((slotId(op(m).slot), c)) ++ (0 until op(m).ii).map(j => (unitId(m), c + j)) ++
-        op(m).writeback.map(p => (portId(p), c + op(m).latency))
+        op(m).writeback.map(p => (portId(p), c + op(m).latency)) ++
+        Option.when(readers(m))((readPortId, c))
 
     /** The kinds of the remaining operations of slot class `s`, and the rows already taken. */
     def kinds(s: Slot, left: Seq[String]): Vector[(String, RowFit.Kind)] =
@@ -127,25 +132,53 @@ object ModuloScheduler {
           m -> RowFit.Kind(op(m).latency, op(m).ii, op(m).writeback.isDefined, ms.size)
       }
 
+    /** Whether the remaining operations `left` of slot class `s` still get rows (`RowFit`), with
+      * the rows already `taken`. A MAC or a ST may not issue at a row whose third read port is
+      * taken. While both a MAC and a ST are left, the port couples the two slot classes: the
+      * remaining operations of both are decided together (`RowFit.fitsTogether`), after each class
+      * alone, which is quicker to rule them out. Without `useReadPort`, the third read port is left
+      * out.
+      */
     def fit(
         ii: Int,
         s: Slot,
         left: Seq[String],
         taken: collection.Set[(Int, Int)],
         usePorts: Boolean = true,
-        useUnits: Boolean = true
+        useUnits: Boolean = true,
+        useReadPort: Boolean = true
     ): Option[Boolean] = {
       def mask(id: Int) = taken.collect { case (`id`, r) => 1L << r }.foldLeft(0L)(_ | _)
-      val ks = kinds(s, left)
-      RowFit.fits(
-        ii,
-        ks.map(_._2),
-        mask(slotId(s)),
-        mask(portId(s)),
-        ks.map { case (m, _) => mask(unitId(m)) },
-        usePorts,
-        useUnits
-      )
+      def units(ks: Vector[(String, RowFit.Kind)]) = ks.map { case (m, _) => mask(unitId(m)) }
+      val reads = if (useReadPort) readers else Set.empty[String]
+      def alone(c: Slot) = {
+        val ks = kinds(c, left)
+        RowFit.fits(
+          ii,
+          ks.map(_._2),
+          mask(slotId(c)),
+          mask(portId(c)),
+          units(ks),
+          usePorts,
+          useUnits,
+          blocked = ks.map { case (m, _) => if (reads(m)) mask(readPortId) else 0L }
+        )
+      }
+      if (reads.isEmpty || !reads.forall(left.contains)) alone(s)
+      else if (Slot.all.exists(alone(_).contains(false))) Some(false)
+      else {
+        val classes = Slot.all.toVector.map { c =>
+          val ks = kinds(c, left)
+          RowFit.Class(
+            ks.map(_._2),
+            mask(slotId(c)),
+            mask(portId(c)),
+            units(ks),
+            ks.map(k => reads(k._1))
+          )
+        }
+        RowFit.fitsTogether(ii, classes, mask(readPortId), usePorts, useUnits)
+      }
     }
   }
 
@@ -172,8 +205,9 @@ object ModuloScheduler {
   /** Places the Each nodes in a reservation table of `ii` rows: in node order, each at the first
     * cycle from its earliest (dependences on the placed nodes) within `ii` cycles and before its
     * latest (dependences of placed nodes on it), whose rows are free; with `lookahead`, also only
-    * where the remaining nodes of its slot class can still get rows (once the look-ahead is not
-    * decided, the rest of the placement goes without it). No backtracking.
+    * where the remaining nodes of its slot class can still get rows (of both classes while a MAC
+    * and a ST are left on a machine with three read ports; once the look-ahead is not decided, the
+    * rest of the placement goes without it). No backtracking.
     */
   def place(g: LoopGraph, ii: Int, lookahead: Boolean): Either[Outcome.NoTime, Map[Int, Int]] = {
     val res = new Resources(g)
@@ -216,26 +250,31 @@ object ModuloScheduler {
   }
 
   /** Whether the Each nodes can get rows at all. Left (a): the resources that conflict, found by
-    * leaving out the ports and the units. Right(true): a table exists; Right(false): not decided.
+    * leaving out the ports and the units (and the third read port, named only when the rows fit
+    * without it). Right(true): a table exists; Right(false): not decided.
     */
-  private def table(g: LoopGraph, ii: Int): Either[Outcome.NoMrt, Boolean] = {
+  private[modulo] def table(g: LoopGraph, ii: Int): Either[Outcome.NoMrt, Boolean] = {
     val res = new Resources(g)
     val all = g.ids(Place.Each).map(g.nodes(_).mnemonic)
-    def fits(ports: Boolean, units: Boolean): Option[Boolean] =
-      Slot.all.map(s => res.fit(ii, s, all, Set.empty, ports, units)).foldLeft(Option(true)) {
-        case (Some(false), _) | (_, Some(false)) => Some(false)
-        case (Some(true), Some(true))            => Some(true)
-        case _                                   => None
-      }
+    def fits(ports: Boolean, units: Boolean, readPort: Boolean = true): Option[Boolean] =
+      Slot.all
+        .map(s => res.fit(ii, s, all, Set.empty, ports, units, readPort))
+        .foldLeft(Option(true)) {
+          case (Some(false), _) | (_, Some(false)) => Some(false)
+          case (Some(true), Some(true))            => Some(true)
+          case _                                   => None
+        }
     fits(ports = true, units = true) match {
       case Some(false) =>
-        def not(ports: Boolean, units: Boolean) = fits(ports, units).contains(false)
+        val readPort = !fits(ports = true, units = true, readPort = false).contains(false)
+        def not(ports: Boolean, units: Boolean) = fits(ports, units, readPort).contains(false)
+        val port = if (readPort) " + third read port (L11)" else ""
         Left(
           Outcome.NoMrt(
-            if (not(ports = false, units = false)) "slot"
-            else if (not(ports = true, units = false)) "slot + write-back port (L5)"
-            else if (not(ports = false, units = true)) "slot + unit (L9)"
-            else "slot + unit (L9) + write-back port (L5)"
+            (if (not(ports = false, units = false)) "slot"
+             else if (not(ports = true, units = false)) "slot + write-back port (L5)"
+             else if (not(ports = false, units = true)) "slot + unit (L9)"
+             else "slot + unit (L9) + write-back port (L5)") + port
           )
         )
       case decided => Right(decided.isDefined)
@@ -244,9 +283,9 @@ object ModuloScheduler {
 
   /** The fully unrolled loop: Each instances at `times(n) + k * ii`; Before nodes as late as their
     * consumers allow (in reverse node order) and After nodes as early as their producers allow,
-    * each at a cycle whose slot, unit (both ways, L9) and write-back port are free; then all
-    * shifted so that the first issue is cycle 0. Returns the issue of each instance, the start of
-    * iteration 0 and HALT.
+    * each at a cycle whose slot, unit (both ways, L9), write-back port and third read port (L11)
+    * are free; then all shifted so that the first issue is cycle 0. Returns the issue of each
+    * instance, the start of iteration 0 and HALT.
     */
   def expand(g: LoopGraph, ii: Int, times: Map[Int, Int]): (Vector[Int], Int, Int) = {
     val res = new Resources(g)

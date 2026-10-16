@@ -13,7 +13,7 @@
 
 Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節に（#76）、そのスケジューリングは「[Modulo Scheduling](#modulo-scheduling)」の節にある（#68）。
 
-ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約（規則 L11）は、直線のカーネルについて「[MAC への融合](#mac-への融合)」と「[list scheduling](#list-scheduling)」の節にある（#77）。規則は [ADR-0019](DECISIONS.md)（融合）と ADR-0018（L11）に書いた。ループ（ループ IR と Modulo Scheduling）での融合と L11 は #77 で加える。mvp-0 の machine では、どの段の結果も変わらない。
+ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約（規則 L11）は、直線のカーネルについて「[MAC への融合](#mac-への融合)」と「[list scheduling](#list-scheduling)」の節に、ループについて「[ループの MAC への融合](#ループの-mac-への融合)」と「[Modulo Scheduling](#modulo-scheduling)」の節にある（#77）。規則は [ADR-0019](DECISIONS.md)（融合）と ADR-0018（L11）に書いた。mvp-0 の machine では、どの段の結果も変わらない。
 
 ## DAG
 
@@ -451,6 +451,36 @@ LD の共有（ADR-0014）。本体が書かない語について、次のよう
 
 依存の cycles は生産者のレイテンシーで、machine description から取る（`slow_units` では `product8` の MUL → MUL が 3）。反復をまたぐ依存の閉路（RecMII > 0）を持つのは、`matmul3`（m）、`product8`、`dot8` である。#68 の受入テストのうち、RecMII が II を決めるループは `product`、MUL 1つ・ADD 1つの累算は `dot` で作れる。
 
+### ループの MAC への融合
+
+machine に MAC があるとき（ISA mvp-1）、`LoopFusion.fuse` は、ループのグラフの MUL と ADD を MAC（`LoopNode.Mac(a, b, c)`。値は `a × b + c` の下位32bit）にする（#77）。規則は直線の DAG の融合（上の「[MAC への融合](#mac-への融合)」）と同じで、全ての反復に同時に当てはめる（[ADR-0019](DECISIONS.md)）。ループを融合するかは、Modulo Scheduling が MII で決める（下の「[MAC への融合と MII](#mac-への融合と-mii)」）。
+
+| 形 | 扱い |
+|---|---|
+| MUL m の使用が、同じ場所の ADD a のオペランド（back = 0）の1つだけ | `Mac(m.a, m.b, a のもう1つのオペランド)` にする |
+| m に、ほかの使用がある | 融合しない |
+| `ADD(m, m)` | 融合しない（使用が2つ） |
+| `ADD(m1, m2)` で、両方を融合できる | 後の MUL（番号の大きい方）を融合する |
+| SUB | 融合しない |
+| Before の MUL を Each の ADD が読む | 融合しない（場所が違う） |
+
+- 使用は、全てのノードのオペランド（どの場所でも、どの back でも）、`Ref.initial`（反復 k < back の値）、状態の初期値と次の値（`LoopGraph.states`）で数える。次の反復が状態として読む MUL、ループの後の格納が読む MUL、どこからも読まれない状態の値の MUL は融合しない。状態は融合した後も、なくならないノードを指す
+- `LoopFusion.pairs` が融合する組（MUL, ADD）を返す。MAC は ADD の場所と番号に入り、MUL を除いた後の番号を1つずつ詰める。各場所の番号はプログラムの順のままである。融合したグラフに、融合できる組は残らない。MAC のない machine では、同じグラフを返す
+- `LoopGraph.expanded` は MAC を DAG の `Node.Mac` に展開し、データ依存の辺を3つのオペランドから作る。`LoopGraph.edges` もそこから作るので、MAC からの依存の cycles は MAC の L である
+
+記録の6つのループを融合して展開すると、展開したカーネルの Phase 2 の DAG を融合したもの（`Fusion.fuse`）と、ノードも辺も一致する（mvp-1 の3構成）。
+
+| ループ | 融合する組 | Before | Each（1反復） | After | 反復をまたぐ依存（cycles、反復距離） |
+|---|---|---|---|---|---|
+| `saxpy8`（i） | 1 | LD 1 | LD 2、MAC 1、ST 1 | - | なし |
+| `fir4x8`（i） | 3 | LD 7 | LD 1、MUL 1、MAC 3、ST 1 | - | `x(i+3)` の LD → MUL（2、3）、LD → MAC（2、2）（2、1） |
+| `matmul3`（i） | 6 | LD 9 | LD 3、MUL 3、MAC 6、ST 3 | - | なし |
+| `matmul3`（m） | 9 | LD 6、MUL 9 | LD 6、MAC 9 | ST 9 | 状態ごとに MAC → 自分の MAC（L_MAC、1）。9つ |
+| `product8`（i） | 0 | LD 1 | LD 1、MUL 1 | ST 1 | MUL → 自分の MUL（2、1） |
+| `dot8`（i） | 1 | LD 2、MUL 1 | LD 2、MAC 1 | ST 1 | MAC → 自分の MAC（L_MAC、1） |
+
+`fir4x8` と `matmul3`（i）は、各出力の和の最初の MUL を残す（直線の DAG と同じ）。累算の状態（`matmul3`（m）と `dot8`）は MAC になり、閉路が ADD の 1 から L_MAC に延びる。
+
 ### テスト
 
 - `compiler/.../loop/LoopKernelSpec`
@@ -467,13 +497,18 @@ LD の共有（ADR-0014）。本体が書かない語について、次のよう
   - 使われない値だけが読む定数（次の値と初期値）を、出力の後の語に置くこと
   - 読み書きする語が重なる、手作りの15のループ（3構成）。左へのずらし、メモリを通る漸化式、毎反復同じ語への ST、stride 0 で読んで書く語、本体が書く語を同じ stride で2回読む LD、同じ反復の ST の後の LD、ST をはさんだ同じ語の2つの LD、ループの前の LD・後の格納と本体の LD・ST、反復の開始時の状態を読む次の値と ST。Each どうしの依存（cycles は machine description から）と、Before・After のノードとのメモリの依存が期待どおりであること。展開した辺を守るどの順序（乱数で作る）で実行しても、`LoopLowering.evaluate` の結果と一致すること。`LoopLowering.evaluate` の値を、手で計算した値とも比べる
   - 不正な `Loop` を拒否すること
+- `compiler/.../loop/LoopFusionSpec`（#77）
+  - 融合した記録のループを展開すると、Phase 2 の DAG を融合したものとノードも辺も一致すること、組と MAC の数、上の表の値（mvp-1 の3構成）
+  - 手作りの13のループ。融合する形（MUL＋ADD、反復をまたぐオペランドを持つ MUL、`ADD(MUL, MUL)`、ループの前の初期値）の融合したグラフと、融合しない形（状態として次の反復が読む MUL、同じ反復と次の反復が読む MUL、読まれない状態の次の値、ループの後の格納が読む MUL、状態の初期値、ループの前の MUL、`ADD(m, m)`、SUB、ST も読む MUL）。展開した辺を守る乱数の順序で実行した結果が `LoopLowering.evaluate` と一致すること。MAC のない machine では融合しないこと
+  - 乱数で作った300のループ（`RandomLoops`。`LoopGraphSpec` と同じ）。組が、ノードから数えた規則と一致すること。融合しない展開で、融合する MUL の各インスタンスを読むのが同じ反復の ADD だけであること。展開した結果が `LoopLowering.evaluate` と一致すること
 
 ## Modulo Scheduling
 
-`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。
+`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。
 
 | 段 | 内容 | 実装 |
 |---|---|---|
+| MAC への融合 | machine に MAC があるとき、MII が大きくならないループだけ、MUL＋ADD を MAC にする | `FusionChoice`、`LoopFusion`（#77） |
 | MII | 1反復の資源（ResMII）と、反復をまたぐ依存の閉路（RecMII） | `Mii` |
 | II の探索 | II = MII から、1反復だけのスケジュールの長さまで順に試す | `ModuloScheduler.schedule` |
 | 予約表への配置 | Each のノードを、II 行の予約表（MRT）に置く | `ModuloScheduler.place`、`RowFit` |
@@ -482,18 +517,30 @@ LD の共有（ADR-0014）。本体が書かない語について、次のよう
 
 ### MII
 
-- **ResMII**: 1サイクルに1回だけ使える資源ごとの、1反復の使用数の最大。資源は、Compute スロット（ADD・SUB・MUL）、Memory スロット（LD・ST）、各演算の演算器（1回の発行が演算器の II だけ占める。L9。使用数は「演算の数 × II」）、Compute と Memory の書戻しポート（L5。ST は使わない）。`Mii.bounding` が最大の資源を挙げる
-- **RecMII**: `LoopGraph.edges` のどの閉路も `Σcycles − II × Σiterations ≤ 0` となる最小の II（Bellman-Ford で正の閉路を調べる）。閉路が無ければ 0
+- **ResMII**: 1サイクルに1回だけ使える資源ごとの、1反復の使用数の最大。資源は、Compute スロット（ADD・SUB・MUL、mvp-1 では MAC も）、Memory スロット（LD・ST）、各演算の演算器（1回の発行が演算器の II だけ占める。L9。使用数は「演算の数 × II」）、Compute と Memory の書戻しポート（L5。ST は使わない）、3本目の読出しポート（下記）。演算のスロットと書戻しポートは machine description から取る。`Mii.bounding` が最大の資源を挙げる
+- **3本目の読出しポート**（`third read port`、#77）: MAC があり `read_ports` が3の machine では、MAC と ST を同じ bundle に置けない（L11。MAC は3つ、ST は1つを読む）。これを、各 MAC と各 ST が発行サイクルに1回使う資源とする（ADR-0018 の「ポート3」）。`read_ports` が4の machine と mvp-0 には、この資源は無い。`Mii.withoutReadPort` は、この資源を除いた値である
+- **RecMII**: `LoopGraph.edges` のどの閉路も `Σcycles − II × Σiterations ≤ 0` となる最小の II（Bellman-Ford で正の閉路を調べる）。閉路が無ければ 0。MAC の L は、MAC からの辺の cycles として入る
 - **MII** = max(ResMII, RecMII, 1)
+
+### MAC への融合と MII
+
+machine に MAC があるとき、`ModuloCompiler` はループのグラフを融合したもの（「[ループの MAC への融合](#ループの-mac-への融合)」）と融合しないものの MII を比べ、融合した後の MII が大きくならないときだけ、融合したグラフをスケジュールする（ADR-0019）。
+
+- MII は3本目の読出しポートを除いて比べる。このため `read_ports` 3 と 4 は同じグラフをスケジュールし、cycles の差は L11 の制約だけから生じる
+- 判定は `ModuloCompiled.fusion`（`FusionChoice`）に残る。融合する組の数、融合しないときと融合したときの `Mii`（3本目の読出しポートを含む）、比べた2つの MII（`unfusedMII`、`fusedMII`）、融合したか（`fuses`）である。MAC のない machine では None で、グラフは変えない。`ModuloCompiler.prepare` は、スケジュールするグラフと判定を返す
+- 融合すると、累算の閉路は ADD の 1 から L_MAC に延びる。`dot8` は、L_MAC 2 では MII 2（融合しなくても 2）なので融合し、L_MAC 3 では RecMII 3 > 2 なので融合しない
+- 判定は MII だけで行う。配置やレジスタのために、融合した後の II が融合しない II より大きくなることはありうる
 
 ### 予約表への配置
 
-予約表は II 行で、反復 k の演算 n は `start + t(n) + k × II` に発行する。時刻 t の演算は、スロットを行 t mod II、演算器を行 t〜t + II_op − 1、書戻しポートを行 (t + L) mod II で使う。
+予約表は II 行で、反復 k の演算 n は `start + t(n) + k × II` に発行する。時刻 t の演算は、スロットを行 t mod II、演算器を行 t〜t + II_op − 1、書戻しポートを行 (t + L) mod II で使う。3本目の読出しポートのある machine では、MAC と ST はその資源も行 t mod II で使う。
 
 - Each のノードを番号の順に置く。ノード n の最早は、置いたノードからの辺 `t(from) + cycles − II × iterations` の最大（0 以上）、最遅は、n から置いたノードへの辺 `t(to) − cycles + II × iterations` の最小である
 - 最早から II サイクルの範囲（最遅まで）で、予約表の行が空いている最初の時刻に置く。後戻りはしない
 - これで置けないときは、もう一度、各時刻に「同じスロットの種類の残りのノードが、まだ予約表に収まる」条件を足して置き直す（先読み。`RowFit`）。先読みなしで置けたときは、先読みしても同じ結果になる
 - 予約表に収まるかは、`RowFit` が正確に判定する。行を順に、どの演算をそこに置くかを決める深さ優先探索で、失敗した状態を覚える（状態は、残りの演算の数と、まだ影響する行の使用だけ）。II が62を超えるとき、または探索が `RowFit.Budget`（10万手）を超えたときは打ち切り、「決まらない」とする。決まらないとき、その II を予約表なし（(a)）とは記録せず、先読みはその時刻を受け入れる（以降はその II の先読みをしない）
+- 判定はスロットの種類ごとに行う。3本目の読出しポートのある machine で、MAC と ST の両方が残っているときは、そのポートが2つの種類を結び付ける。このときは、まず種類ごとに判定し（どちらかが収まらなければ収まらない）、両方が収まれば、2つの種類を一緒に探索して判定する（`RowFit.fitsTogether`。行ごとに、各種類がそこに置く演算を決め、MAC と ST は同じ行に置かない）。この探索も正確で、打ち切りの条件は同じである。先読みも、このときは両方の種類の残りのノードを調べる。どちらかだけが残っているときは、置いた MAC と ST の行を、残りの ST と MAC が使えない行として種類ごとに判定する
+- ADR-0018 は、MAC と ST の両方があるループの予約表を「決まらない」とすると見込んだ。一緒に探索すると正確に判定できるので、そうした。「決まらない」とすると先読みが止まり、`read_ports` 3 で `fir4x8` は II 5、`matmul3`（i）は II 10 になった（一緒に探索すると、どちらも `read_ports` 4 と同じ II 4 と 9。下の「結果（mvp-1）」）
 
 ### II の探索と結果
 
@@ -501,7 +548,7 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 
 | 結果 | 意味 | #68 の原因 |
 |---|---|---|
-| 予約表なし（`NoMrt`） | 1反復の演算が II 行の予約表に収まらない（`RowFit` が依存を無視して判定する）。ポートと演算器を外して判定し直し、衝突する資源の組（スロット、スロット + 書戻しポート、スロット + 演算器、…）を挙げる | (a) |
+| 予約表なし（`NoMrt`） | 1反復の演算が II 行の予約表に収まらない（`RowFit` が依存を無視して判定する）。ポートと演算器を外して判定し直し、衝突する資源の組（スロット、スロット + 書戻しポート、スロット + 演算器、…）を挙げる。3本目の読出しポートを外すと収まるときだけ、組に「+ third read port (L11)」を足す | (a) |
 | 配置できない（`NoTime`） | 番号の順・後戻りなしの配置で、あるノードの範囲に置ける時刻が無い。ふつうは予約表があるときだが、配置の前の、1反復全体の予約表の判定を `RowFit` が打ち切ったときは、予約表があるかが決まっていない（理由に「whether a reservation table exists is not decided」と書く）。先読みでの打ち切りは先読みを止めるだけで、この注は付けない。最遅が無いときは範囲の上端を空けて書く | (a) と区別する |
 | レジスタ（`TooManyLive`） | 展開した命令列の、同時に生きる値がレジスタ数を超える | (b) |
 | 命令領域（`Overflow`） | 展開した命令列が `instruction_memory.bundles` を超える | - |
@@ -512,7 +559,7 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 ### 展開とレジスタ
 
 - Each の各反復を `t(n) + k × II` に置く
-- Before のノードは、番号の逆順に、使う側（置いたノード）の許す最も遅い時刻から前に、スロット・演算器・書戻しポートが空いている時刻に置く。After のノードは、番号の順に、作る側の許す最も早い時刻から後に置く。演算器は両側を調べる（前後どちらの発行とも II_op 以上離す。L9）
+- Before のノードは、番号の逆順に、使う側（置いたノード）の許す最も遅い時刻から前に、スロット・演算器・書戻しポート（と3本目の読出しポート）が空いている時刻に置く。After のノードは、番号の順に、作る側の許す最も早い時刻から後に置く。演算器は両側を調べる（前後どちらの発行とも II_op 以上離す。L9）
 - 全体を、最初の発行が 0 になるようにずらす。そのずれが反復 0 の開始 `start` である。HALT は、全演算の完了 `max(issue + L)` に置く（L6）
 - 依存は `LoopGraph.expanded` の辺（データ依存とメモリ順序）をすべて守る。展開した命令列は直線なので、各反復の値は別の仮想レジスタになる。レジスタは list scheduling と同じ `RegisterAllocator.allocate` で割り当てる
 - ループのカーネルの命令列は、`ModuloCompiler.compile` が `KernelCompiler.checked` で verifier の最終検査に通す。一般の `Loop` を `ModuloScheduler.schedule` で直接スケジュールしたときは検査しないので、呼び出し側が入力宣言を与えて `KernelCompiler.verified` を呼ぶ（テストはそうしている）
@@ -546,11 +593,40 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 - `matmul3` の2つのループ: 予約表のある II でも、同時に生きる値が16を超えるので II を上げる（(b)）。`matmul3`（i）は、II 20 で 87 cycles、II 21 なら 70 cycles で、cycles は II について単調でない
 - 6つのループ × 3構成（既定、`slow_units`、`ii_units`）と `regs3` の2つのループの値、list scheduling との比較、`saxpy(n)` の系列は [benchmarks/MODULO.md](../benchmarks/MODULO.md) にある。`slow_units` では `matmul3`（m）はどの II でも17の値が同時に生き、16 レジスタに収まらない（不成立）
 
+### 結果（mvp-1、#77）
+
+mvp-1 の3つの構成は、list scheduling の節と同じ `config/machine-mvp1.json`（`read_ports` 3、MAC の L 2）、`tests/machines/mvp1_rp4.json`（`read_ports` 4）、`tests/machines/mvp1_mac3.json`（MAC の L 3）である。融合の判定と MII は次のとおり。ResMII と RecMII は融合したグラフの値で、融合しない `product8` と、L 3 の `dot8` は融合しないグラフの値である。
+
+| ループ | 融合する組 | MII（融合なし → あり。L 2 / L 3） | ResMII（律速。3本目の読出しポートの使用） | RecMII（L 2 / L 3） |
+|---|---|---|---|---|
+| `saxpy8`（i） | 1 | 3 → 3 / 3 → 3 | 3（Memory スロット。2） | 0 / 0 |
+| `fir4x8`（i） | 3 | 7 → 4 / 7 → 4 | 4（Compute スロットと書戻しポート、3本目の読出しポート。4） | 0 / 0 |
+| `matmul3`（i） | 6 | 15 → 9 / 15 → 9 | 9（同上。9） | 0 / 0 |
+| `matmul3`（m） | 9 | 18 → 9 / 18 → 9 | 9（同上と MAC の演算器。9） | 2 / 3 |
+| `product8`（i） | 0 | 2 / 2 | 1 | 2 / 2 |
+| `dot8`（i） | 1 | 2 → 2 / 2 → 3（L 3 では融合しない） | 2（L 2 では Memory スロットと書戻しポート、LD の演算器。1） | 2 / 1 |
+
+II と cycles（II / cycles）。括弧の中は、II を MII より上げた理由である。
+
+| ループ | mvp-0（既定） | mvp-1 | `read_ports` 4 | MAC の L 3 |
+|---|---|---|---|---|
+| `saxpy8`（i） | 3 / 29 | 3 / 29 | 3 / 29 | 3 / 32 |
+| `fir4x8`（i） | 8 / 76 | 4 / 46 | 4 / 43 | 5 / 60（II 4: (a)） |
+| `matmul3`（i） | 20 / 87 | 9 / 38 | 9 / 45 | 10 / 39（II 9: (a)） |
+| `matmul3`（m） | 27 / 68 | 9 / 40 | 9 / 34 | 9 / 40 |
+| `product8`（i） | 2 / 19 | 2 / 19 | 2 / 19 | 2 / 19 |
+| `dot8`（i） | 3 / 28 | 2 / 21 | 2 / 21 | 3 / 28 |
+
+- ResMII は ADR-0018 の見積りどおり、`fir4x8`（i）で 7 → 4、`matmul3`（i）で 15 → 9、`matmul3`（m）で 18 → 9 になる。`matmul3`（m）の RecMII は L_MAC になるが、ResMII より小さい。3本目の読出しポートの使用は、`fir4x8`（i）で 4（MAC 3 + ST 1）、`matmul3`（i）で 9（MAC 6 + ST 3）で、Compute スロットの使用と等しい。このため、どのループでも、3本目の読出しポートを除いた ResMII は同じ値である
+- `read_ports` 3 と 4 は、どのループでも同じ II になる。3 では、予約表の ST の行が MAC の行と重ならない。`fir4x8`（i）の II 4 では、ST は MUL の行に置くしかない。番号の順に置くと LD と MUL が行 0 を取り、ST の行が無くなるので、先読みで置く（1反復の長さは 14 サイクル。4 では番号の順で置け、10 サイクル）。`matmul3`（m）は、ループの後の ST が MAC と同じ bundle に入れない（4 では6つの bundle で重なる）
+- `matmul3`（i）は、`read_ports` 4 の方が 7 cycles 多い。4 では番号の順の配置が II 9 で成功し、1反復が 23 サイクルになる。3 では番号の順の配置が失敗し、先読みのある配置が1反復を 15 サイクルに置く。制約の効果ではなく、配置の手順の効果である（配置も、cycles 最小を探さない。ADR-0015）
+- MAC の L 3 では、`fir4x8`（i）の II 4 と `matmul3`（i）の II 9 に予約表が無い（スロットと書戻しポート）。Compute の行を全て使うと、書戻しポートの行も全てを1回ずつ使うので、Compute の演算の L の和が II の倍数でなければならない。`fir4x8` は 2 + 3 × 3 = 11、`matmul3`（i）は 3 × 2 + 6 × 3 = 24 で、そうならない。`dot8` は融合しない
+
 ### テスト
 
 - `compiler/.../modulo/ModuloSchedulerSpec`
   - 6つのループ × 3構成（既定、`slow_units`、`ii_units`）の ResMII と律速の資源、RecMII、II、探索の上限、開始、cycles、II ごとの理由。`slow_units` の `matmul3`（m）は不成立なので、ResMII と律速の資源、RecMII、探索の上限と、II ごとの理由（エラー）
-  - 全スケジュールを、スケジューラと独立に確かめる。展開した辺、サイクルごとのスロット、演算器の II（L9）、書戻しポート（L5）、HALT（L6）、`start + t + k × II`、表
+  - 全スケジュールを、スケジューラと独立に確かめる。展開した辺、サイクルごとのスロット、演算器の II（L9）、書戻しポート（L5）、読出しポート（L11）、HALT（L6）、`start + t + k × II`、表
   - 手で計算した表: `product(4)`（3反復、II 2 = RecMII）と `dot(4)`（3反復、II 3 > MII 2）の、各演算の bundle とスロット
   - 先読みが要る配置（`fir4x8` の II 8）と、次の反復の書戻しポートによる移動。移動しないと verifier が L5 で拒否すること
   - 探索の上限で、1反復のスケジュールが modulo schedule であること。配置がすべての II で失敗すると、上限の II で1反復のスケジュールを使い、verifier に合格すること
@@ -559,7 +635,9 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
   - 命令領域: `saxpy(83)` は 254 bundle で収まり、`saxpy(84)` は 257 bundle で、カーネル名・反復回数・bundle 数・容量を含むエラーになる。`saxpy(n)`（n = 8〜64）は II 3、3n + 5 cycles。`dot(84)` はちょうど 256 bundle で収まり、`dot(85)` は 259 bundle で収まらない。命令領域を 80 bundle にすると、`matmul3`（i）は II 20 で 87 bundle になって収まらず、探索を続けて II 21（70 bundle）を使う
   - SUB が Compute スロットと書戻しポートと SUB の演算器を使うこと（ResMII 3）
   - 手作りの `Loop`。メモリを通る依存のある5つ（反復距離2の依存を含む）と、メモリを通る依存は無いが、ループの状態を後のノードが読む2つ（1つは、反復をまたぐ辺が、それが値を渡す反復の中の辺より後に並ぶ）。RecMII、`NoTime`、cycles、verifier
-- `compiler/.../modulo/RowFitSpec`: `RowFit` を、行への割り当てを全て試す方法と、すでに使われた行のある3000の乱数の表で比べる。使用済みのポートと演算器を数えること。62行を超えるときと、手数の上限を超えたときに `None`（決まらない）を返すこと
+  - mvp-1（#77）: 6つのループ × mvp-1 の3構成の値（上の表。3本目の読出しポートを除いた ResMII と、融合の判定を含む）。MAC のない machine では判定が無いこと。`dot8` の融合の判定（L 2 で融合して II 2、L 3 で融合しない）。3本目の読出しポートの使用（`read_ports` 4 と mvp-0 には無い）。`fir4x8` の II 4 で、番号の順の配置が ST の行で失敗し、先読みで置けること（`read_ports` 4 では番号の順で置ける）。3本目の読出しポートだけで予約表が無い II（MAC と ST が1つずつで II 1）と、その名前
+  - mvp-1: 命令列を ISA の意味論で実行した結果（テストの中の簡単な実行）が DSL の参照実装と一致すること。MAC のノードごとに `mac` があり、`read_ports` 3 では MAC と ST が同じ bundle に無いこと。対象は記録のループと、乱数で作った300のループ（3構成。mvp-0 でどの II にも収まらない4つは、mvp-1 でも収まらない）
+- `compiler/.../modulo/RowFitSpec`: `RowFit` を、行への割り当てを全て試す方法と、すでに使われた行のある3000の乱数の表で比べる。使用済みのポートと演算器を数えること。62行を超えるときと、手数の上限を超えたときに `None`（決まらない）を返すこと。種類ごとに発行できない行（3本目の読出しポート）。`fitsTogether` を、全て試す方法と1000の乱数の表（2つの種類と3本目の読出しポート）で比べること。種類ごとには収まるが一緒には収まらない例（#77）
 - `crosscheck/ModuloKernelSpec`
   - 参照モデル（3構成とレジスタ3本）: 結果が DSL の参照実装と、cycles が予測と一致し、トレースの照合で II が記録と一致すること。RTL（既定の構成）でも同じ。`slow_units` と `ii_units` は RTL の対応範囲外なので、理由を付けてスキップと表示する
   - 手で計算したトレース: `product(4)` と `dot(4)` の、各行の発行、書戻しのポート、メモリへの commit、cycles
