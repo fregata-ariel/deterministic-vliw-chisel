@@ -44,7 +44,7 @@ seconds=$((SECONDS - start))
   printf 'cpus: %s\n' "$(nproc)"
   printf 'g++: %s\n' "$(g++ --version | head -n 1)"
   printf 'compiler warnings: %s\n' "$(grep -c 'warning:' "$log" || true)"
-  printf 'configure: %s\n' "$(grep -m 1 -E '^ *Verilator [0-9]' "$log" 2>/dev/null || true)"
+  printf 'verilator: %s\n' "$("$prefix/bin/verilator" --version 2>/dev/null || echo n/a)"
 } >"$info"
 cat "$info"
 ((status == 0)) || { tail -n 40 "$log" >&2; exit 1; }

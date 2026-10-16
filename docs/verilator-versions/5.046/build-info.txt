@@ -4,4 +4,4 @@ seconds: 317
 cpus: 4
 g++: g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
 compiler warnings: 3
-configure: 
+configure:
