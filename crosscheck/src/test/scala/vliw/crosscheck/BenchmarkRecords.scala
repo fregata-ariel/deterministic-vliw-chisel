@@ -355,7 +355,7 @@ ${lines.mkString("\n")}"""
 | 項目 | 値 |
 |---|---|
 | machine | `${m.machineId}` revision ${m.revision}、`${m.hash}` |
-| ISA | `${vliw.isa.IsaVersion.Current}` |
+| ISA | `${m.isaVersion}` |
 | カーネル | `vliw.compiler.dsl.Benchmarks`（[docs/DSL.md](../docs/DSL.md)） |
 | 配置 | `MemoryLayout.fixedOrder` |
 | コンパイラの試行 | 優先度（critical-path、program-order）×（$limits）（[docs/COMPILER.md](../docs/COMPILER.md)） |

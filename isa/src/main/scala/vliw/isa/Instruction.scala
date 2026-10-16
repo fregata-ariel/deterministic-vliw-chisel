@@ -7,6 +7,9 @@ object ComputeOp {
   final case class Add(rd: Int, rs1: Int, rs2: Int) extends ComputeOp
   final case class Sub(rd: Int, rs1: Int, rs2: Int) extends ComputeOp
   final case class Mul(rd: Int, rs1: Int, rs2: Int) extends ComputeOp
+
+  /** rd = low32(rs1 * rs2 + rs3). ISA mvp-1 only (docs/ISA.md, "mvp-1: MAC"). */
+  final case class Mac(rd: Int, rs1: Int, rs2: Int, rs3: Int) extends ComputeOp
   case object Halt extends ComputeOp
 }
 

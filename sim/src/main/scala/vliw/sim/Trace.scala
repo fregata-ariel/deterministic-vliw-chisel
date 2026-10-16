@@ -1,6 +1,6 @@
 package vliw.sim
 
-import vliw.isa.{Disassembler, IsaVersion, MachineDescription}
+import vliw.isa.{Disassembler, MachineDescription}
 
 /** Per-cycle record of a run (format: docs/TRACE.md). */
 final case class Trace(machine: MachineDescription, cycles: Vector[Trace.Cycle]) {
@@ -8,7 +8,7 @@ final case class Trace(machine: MachineDescription, cycles: Vector[Trace.Cycle])
   /** Header line identifying the ISA and machine description. */
   def header: ujson.Obj = ujson.Obj(
     "trace" -> Trace.Format,
-    "isa" -> IsaVersion.Current,
+    "isa" -> machine.isaVersion,
     "machine" -> machine.machineId,
     "machine_revision" -> machine.revision,
     "machine_hash" -> machine.hash

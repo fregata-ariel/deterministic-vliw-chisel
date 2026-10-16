@@ -18,7 +18,7 @@ object Cli {
         MachineDescription.load(path).map { m =>
           s"""path:    $path
              |machine: ${m.machineId} revision ${m.revision} (${m.status})
-             |isa:     ${IsaVersion.Current}
+             |isa:     ${m.isaVersion}
              |hash:    ${m.hash}""".stripMargin
         }
       case List("asm", in, out) =>

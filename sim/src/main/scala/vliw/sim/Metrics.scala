@@ -71,7 +71,7 @@ object Metrics {
 
     ujson.Obj(
       "metrics" -> Format,
-      "isa" -> IsaVersion.Current,
+      "isa" -> machine.isaVersion,
       "machine" -> ujson
         .Obj("id" -> machine.machineId, "revision" -> machine.revision, "hash" -> machine.hash),
       "program" -> ujson.Obj(
