@@ -1,0 +1,7 @@
+cpu	jobs	shards	runs	pool aborts	other aborts	other errors
+AMD EPYC 7763 64-Core Processor	-j 0	8	24000	0	0	0
+AMD EPYC 9V45 96-Core Processor	-j 0	5	15000	0	0	0
+AMD EPYC 9V74 80-Core Processor	-j 0	3	9000	0	0	0
+INTEL(R) XEON(R) PLATINUM 8573C	-j 0	1	3000	0	0	0
+Intel(R) Xeon(R) 6973P-C	-j 0	1	3000	0	0	0
+Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz	-j 0	2	6000	0	0	0
