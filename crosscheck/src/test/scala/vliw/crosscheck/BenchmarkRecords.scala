@@ -36,9 +36,10 @@ object BenchmarkRecords {
       mode: Mode,
       compiled: CompiledKernel,
       testCase: ujson.Obj,
-      metrics: ujson.Obj
+      metrics: ujson.Obj,
+      suffix: String = ""
   ) {
-    def name: String = s"${kernel.name}_${mode.name}"
+    def name: String = s"${kernel.name}_${mode.name}$suffix"
   }
 
   /** A strategy of the compiler without the issue mode: what the fixed series holds constant. */
@@ -76,18 +77,39 @@ object BenchmarkRecords {
   def machine: MachineDescription =
     MachineDescription.load().fold(es => sys.error(es.mkString("\n")), identity)
 
-  def records(m: MachineDescription = machine): Seq[Record] =
+  /** The LDs of a program: more than its kernel's DAG has when the attempt copied LDs (#70). */
+  def loads(c: CompiledKernel): Int = c.allocated.dag.loads
+
+  /** The cycles of `c` (bold when chosen), with its LDs when the attempt copied LDs (#70). */
+  def cyclesCell(c: CompiledKernel, bold: Boolean = false): String = {
+    val cycles = if (bold) s"**${c.cycles}**" else c.cycles.toString
+    if (loads(c) > c.dag.loads) s"$cycles（LD ${loads(c)}）" else cycles
+  }
+
+  def noFit(f: NoFit): String = f match {
+    case NoFit.TooManyLive(live, registers) => s"不成立: 同時に生きる値 $live > $registers"
+    case NoFit.Stuck                        => "不成立: 上限の下で行き詰まる"
+  }
+
+  /** The fewest-cycles series on `m`. `machinePath` goes into the test cases (None for the default
+    * machine), and `suffix` ends the record names.
+    */
+  def records(
+      m: MachineDescription = machine,
+      machinePath: Option[String] = None,
+      suffix: String = ""
+  ): Seq[Record] =
     for (k <- Benchmarks.all; mode <- Mode.all) yield {
       val c = KernelCompiler.compile(k, m, singleIssue = mode.singleIssue).fold(sys.error, identity)
-      val name = s"${k.name}_${mode.name}"
+      val name = s"${k.name}_${mode.name}$suffix"
       val tc = KernelCompiler
-        .testCase(c, KernelCompiler.sampleInputs(k, Seed), None, Some(name))
+        .testCase(c, KernelCompiler.sampleInputs(k, Seed), machinePath, Some(name))
         .fold(sys.error, identity)
       val loaded =
         TestCase.parse(ujson.write(tc)).fold(es => sys.error(es.mkString("\n")), identity)
       val run =
         ReferenceModel.run(m, c.words, loaded.inputs).fold(v => sys.error(v.toString), identity)
-      Record(k, mode, c, tc, Metrics.of(m, c.words, run, name))
+      Record(k, mode, c, tc, Metrics.of(m, c.words, run, name), suffix)
     }
 
   /** The fixed-strategy series: every strategy for every kernel, in both modes. */
@@ -120,13 +142,8 @@ object BenchmarkRecords {
         }
         val lines = rows.map { case (s, both) =>
           def in(mode: Mode) = both.find(_.mode == mode).get.result
-          def cycles(mode: Mode) = in(mode).fold(
-            {
-              case NoFit.TooManyLive(live, registers) => s"不成立: 同時に生きる値 $live > $registers"
-              case NoFit.Stuck                        => "不成立: 上限の下で行き詰まる"
-            },
-            c => if (chosen(c.allocated.attempt)) s"**${c.cycles}**" else c.cycles.toString
-          )
+          def cycles(mode: Mode) =
+            in(mode).fold(noFit, c => cyclesCell(c, chosen(c.allocated.attempt)))
           val ratio = (in(Mode.Vliw), in(Mode.SingleIssue)) match {
             case (Right(v), Right(s1)) => f"${s1.cycles.toDouble / v.cycles}%.2f"
             case _                     => "-"
@@ -187,6 +204,7 @@ ${lines.mkString("\n")}"""
 | カーネル | `vliw.compiler.dsl.Benchmarks`（[docs/DSL.md](../docs/DSL.md)） |
 | 配置 | `MemoryLayout.fixedOrder` |
 | コンパイラの試行 | 優先度（critical-path、program-order）×（$limits）（[docs/COMPILER.md](../docs/COMPILER.md)） |
+| rematerialization | 上限付きの試行が、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数の LD を複製する（[ADR-0016](../docs/DECISIONS.md#adr-0016-rematerialization-は行き詰まる試行でだけ書込みのない語の-ld-をレジスタの詰まりで複製する)、#70）。複製した行は cycles に LD の数を添える |
 | 入力 | `KernelCompiler.sampleInputs(kernel, $Seed)`。結果と cycles は入力値によらない |
 | 実行 | 参照モデル（`vliw.sim.ReferenceModel`）。RTL でも同じ cycles と出力になることを `BenchmarkSpec` が確かめる |
 | 方式 | `vliw`: 1 bundle に Compute 1・Memory 1。`single`: 同じ machine・DAG・配置で、1サイクルに1操作だけ発行する（単一発行ベースライン） |
@@ -195,7 +213,7 @@ ${lines.mkString("\n")}"""
 
 | 系列 | 試行 | 何を比べられるか |
 |---|---|---|
-| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば、下の表の行の順で先の試行） | 各方式で今のコンパイラが出せる最良の cycles。選ばれた試行が方式ごとに違うことがあり、そのカーネルの比は発行幅だけの効果ではない |
+| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば LD の少ない方、それも同じならば下の表の行の順で先の試行） | 各方式で今のコンパイラが出せる最良の cycles。選ばれた試行が方式ごとに違うことがあり、そのカーネルの比は発行幅だけの効果ではない |
 | 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ行の比は、発行幅だけを変えた効果 |
 
 ## 方式ごとに cycles 最小の系列
@@ -219,27 +237,35 @@ ${rs.map { r =>
 
 ## 戦略を固定した系列
 
-各行は1つの試行（優先度、レジスタ上限、load reserve）で、両方の方式に同じ組を与えた cycles を並べる。行の順はコンパイラが試す順（`RegisterAllocator.attempts`）で、cycles が同じならば先の行の試行が選ばれる。**太字**は、上の「方式ごとに cycles 最小の系列」で選ばれた試行である。「不成立」は、その試行ではレジスタに収まらないことを示し、別の試行で置き換えない（spill はしない）。理由は2つある。「同時に生きる値 n > r」は、上限なしのスケジュールが同時に n 個の値を生かし、レジスタ r 本に割り当てられないこと。「上限の下で行き詰まる」は、上限付きのスケジューラが、残りのどの操作も上限を超えずに置けない状態になること。どの行の命令列も verifier が合法と判定し、参照モデルで同じ出力と cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、上の系列の記録だけ）。
+各行は1つの試行（優先度、レジスタ上限、load reserve）で、両方の方式に同じ組を与えた cycles を並べる。行の順はコンパイラが試す順（`RegisterAllocator.attempts`）で、cycles と LD の数が同じならば先の行の試行が選ばれる。**太字**は、上の「方式ごとに cycles 最小の系列」で選ばれた試行である。「（LD n）」は、その試行が LD を複製し、カーネルの DAG より多い n 個の LD を発行することを示す（#70）。「不成立」は、その試行ではレジスタに収まらないことを示し、別の試行で置き換えない（spill はしない）。理由は2つある。「同時に生きる値 n > r」は、上限なしのスケジュールが同時に n 個の値を生かし、レジスタ r 本に割り当てられないこと。「上限の下で行き詰まる」は、上限付きのスケジューラが、LD を複製しても、残りのどの操作も上限を超えずに置けない状態になること。どの行の命令列も verifier が合法と判定し、参照モデルで同じ出力と cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、上の系列の記録だけ）。
 
 ${fixedTables(rs, fs)}
 """
   }
 
-  /** Every file under benchmarks/ that this generates, with its content (with ModuloRecords). */
+  /** The test case and the metrics of each record. */
+  def recordFiles(rs: Seq[Record]): Seq[(Path, String)] = rs.flatMap { r =>
+    Seq(
+      Dir.resolve("cases").resolve(s"${r.name}.json") -> (ujson
+        .write(r.testCase, indent = 2) + "\n"),
+      Dir.resolve("metrics").resolve(s"${r.name}.json") -> (ujson
+        .write(r.metrics, indent = 2) + "\n")
+    )
+  }
+
+  /** Every file under benchmarks/ that this generates, with its content (with ModuloRecords and
+    * RegisterRecords).
+    */
   def files(
       rs: Seq[Record] = records(),
       fs: Seq[Fixed] = fixed(),
       m: MachineDescription = machine,
-      ms: Option[Seq[ModuloRecords.Compared]] = None
+      ms: Option[Seq[ModuloRecords.Compared]] = None,
+      regs: Option[Seq[RegisterRecords.Series]] = None
   ): Seq[(Path, String)] =
-    ModuloRecords.files(ms.getOrElse(ModuloRecords.records(m)), rs, fs, m) ++ rs.flatMap { r =>
-      Seq(
-        Dir.resolve("cases").resolve(s"${r.name}.json") -> (ujson
-          .write(r.testCase, indent = 2) + "\n"),
-        Dir.resolve("metrics").resolve(s"${r.name}.json") -> (ujson
-          .write(r.metrics, indent = 2) + "\n")
-      )
-    } :+ (Dir.resolve("RESULTS.md") -> results(rs, fs, m))
+    ModuloRecords.files(ms.getOrElse(ModuloRecords.records(m)), rs, fs, m) ++
+      RegisterRecords.files(regs.getOrElse(RegisterRecords.series(rs, fs, m))) ++
+      recordFiles(rs) :+ (Dir.resolve("RESULTS.md") -> results(rs, fs, m))
 
   def main(args: Array[String]): Unit =
     files().foreach { case (p, text) =>

@@ -32,13 +32,14 @@ class KernelCompilerSpec extends AnyFunSuite {
 
   test("a kernel that does not fit is an input error, reported with the reason") {
     val v = ujson.read(machine.canonicalJson)
-    v("register_file")("count") = 4
+    // 3 registers: matmul3 does not fit even with LDs issued again (#70; 4 registers fit).
+    v("register_file")("count") = 3
     val tiny = MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
     assert(
       KernelCompiler
         .compile(Benchmarks.matmul(3), tiny)
         .left
-        .exists(_.contains("no schedule fits 4 registers"))
+        .exists(_.contains("no schedule fits 3 registers"))
     )
     v("register_file")("count") = 16
     v("scratchpad")("words_per_bank") = 8

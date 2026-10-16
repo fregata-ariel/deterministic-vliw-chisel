@@ -51,7 +51,7 @@ Phase 2 の最初に、レビュー対応 P1 として合法性規則 L9（II）
 
 | 制約 | 影響 | 引き継ぎ先 |
 |---|---|---|
-| spill も rematerialization もしない | レジスタを減らすと割り当てに失敗する（12本で `matmul3`、8本で `fir4x8`・`matmul3`） | #70 |
+| spill も rematerialization もしない | レジスタを減らすと割り当てに失敗する（12本で `matmul3`、8本で `fir4x8`・`matmul3`） | #70（Phase 3 で、行き詰まる試行に rematerialization を加えた。8・12本でも3カーネルとも収まる。[benchmarks/REGISTERS.md](../benchmarks/REGISTERS.md)、ADR-0016） |
 | DSL の出力は書込み専用で、各要素に1回だけ代入する | 上書き（`y = a*x + y`）や中間配列は書けない。メモリ順序の辺は生じない（DAG は一般の形に対応し、手作りの例でテストしている） | 必要になったときに緩める |
 | スロットの下限は、開始・終了と書戻しポートの競合を数えない | 下限と実際の差（Compute 律速の2つで 8〜10 cycles）が残る | 必要になったときに改良する |
 | mutant はコンパイラの各段を対象にしていない | コンパイラの誤りは、verifier の最終検査と差分テスト（参照モデル・RTL）で検出する | — |

@@ -91,6 +91,52 @@ final case class Dag(machine: MachineDescription, nodes: Vector[Node], edges: Ve
     }
     (compute.size + 1).max(memory.size + 1)
   }
+
+  /** Number of LD nodes. */
+  def loads: Int = nodes.count(_.isInstanceOf[Node.Load])
+
+  /** The nodes that read each node's value (its data successors), in id order. */
+  lazy val readers: Vector[Vector[Int]] =
+    successors.map(_.filter(_.kind == EdgeKind.Data).map(_.to).distinct.sorted)
+
+  /** Addresses that some store of the DAG writes. */
+  lazy val written: Set[Int] = nodes.collect { case Node.Store(a, _) => a }.toSet
+
+  /** Whether node `n` is a LD that may be issued again for some of its readers (rematerialization,
+    * #70): a LD of a word that no store of the DAG writes (an input, a scalar or a constant), so
+    * that every LD of it reads the same value and needs no memory-order edge.
+    */
+  def rematerializable(n: Int): Boolean = nodes(n) match {
+    case Node.Load(addr) => !written(addr)
+    case _               => false
+  }
+
+  /** The DAG in which `moved`, a nonempty proper subset of the readers of the rematerializable LD
+    * `load`, read a copy of it: a new LD of the same word, with the data edges of `load` to them.
+    * The copy takes the id of the first of `moved`, and every id from there on grows by one, so
+    * that ids stay a topological order (`load` < copy < every node of `moved`).
+    */
+  def split(load: Int, moved: Set[Int]): Dag = {
+    require(rematerializable(load), s"node $load is not a LD of a word that no store writes")
+    require(
+      moved.nonEmpty && moved.subsetOf(readers(load).toSet) && moved.size < readers(load).size,
+      s"$moved is not a nonempty proper subset of the readers of $load"
+    )
+    val at = moved.min
+    def id(i: Int) = if (i < at) i else i + 1
+    def operand(reader: Int, o: Int) = if (o == load && moved(reader)) at else id(o)
+    val renamed = nodes.zipWithIndex.map {
+      case (Node.Compute(op, a, b), i) => Node.Compute(op, operand(i, a), operand(i, b))
+      case (Node.Store(addr, v), i)    => Node.Store(addr, operand(i, v))
+      case (l: Node.Load, _)           => l
+    }
+    val newEdges = edges.map { e =>
+      if (e.kind == EdgeKind.Data && e.from == load && moved(e.to)) e.copy(from = at, to = id(e.to))
+      else e.copy(from = id(e.from), to = id(e.to))
+    }
+    assert(newEdges.forall(e => e.from < e.to), "node ids are not a topological order")
+    Dag(machine, (renamed.take(at) :+ nodes(load)) ++ renamed.drop(at), newEdges)
+  }
 }
 
 object Dag {

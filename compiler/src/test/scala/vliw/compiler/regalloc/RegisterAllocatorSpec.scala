@@ -96,9 +96,10 @@ class RegisterAllocatorSpec extends AnyFunSuite {
   }
 
   test("too few registers are reported, not spilled") {
-    val tiny = withRegisters(machine, 4)
+    // With 3 registers, a MUL of two LDs leaves one for the sum: no attempt fits, even with copies.
+    val tiny = withRegisters(machine, 3)
     val (_, result) = compiled(Benchmarks.matmul(3), tiny)
-    assert(result.left.exists(_.contains("no schedule fits 4 registers")))
+    assert(result.left.exists(_.contains("no schedule fits 3 registers")))
     val one = RegisterAllocator.allocate(
       ListScheduler.schedule(compiled(Benchmarks.saxpy(8), machine)._2.toOption.get.schedule.dag)
     )
@@ -110,17 +111,22 @@ class RegisterAllocatorSpec extends AnyFunSuite {
       .fixedOrder(Benchmarks.fir(Seq(1L, 2L, 3L, 4L), 8), machine)
       .fold(e => fail(e), identity)
     val dag = Dag.of(Lowering.lower(layout), machine)
-    def run(p: Priority, limit: Option[ListScheduler.Limit]) =
-      RegisterAllocator.run(dag, Attempt(p, limit))
+    def run(p: Priority, limit: Option[ListScheduler.Limit], remat: Remat = Remat.WhenStuck) =
+      RegisterAllocator.run(dag, Attempt(p, limit), remat)
     // Without a limit, 33 values are live at once (docs/COMPILER.md); with 16 registers and any load
-    // reserve, critical-path gets stuck; program-order with reserve 4 is the compiler's choice.
+    // reserve, critical-path gets stuck while every word is read once. Issuing LDs again (#70), it
+    // fits with load reserve 1 to 5, in more cycles than program-order with reserve 4, which stays
+    // the compiler's choice.
     assert(run(Priority.CriticalPath, None) == Left(NoFit.TooManyLive(33, 16)))
-    (0 to 8).foreach { reserve =>
-      assert(
-        run(Priority.CriticalPath, Some(ListScheduler.Limit(16, reserve))) == Left(NoFit.Stuck),
-        reserve
-      )
+    val remat = (0 to 8).map { reserve =>
+      val limit = Some(ListScheduler.Limit(16, reserve))
+      assert(run(Priority.CriticalPath, limit, Remat.Never) == Left(NoFit.Stuck), reserve)
+      run(Priority.CriticalPath, limit).map(a => (a.schedule.cycles, a.dag.loads))
     }
+    assert(
+      remat == Seq(Left(NoFit.Stuck)) ++ Seq((75, 47), (84, 52), (84, 52), (83, 54), (87, 53))
+        .map(Right(_)) ++ Seq.fill(3)(Left(NoFit.Stuck))
+    )
     val chosen = run(Priority.ProgramOrder, Some(ListScheduler.Limit(16, 4)))
     assert(chosen.map(_.schedule.cycles) == Right(65))
     assert(chosen.map(_.attempt) == RegisterAllocator.scheduleAndAllocate(dag).map(_.attempt))
