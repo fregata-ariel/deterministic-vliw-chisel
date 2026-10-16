@@ -71,6 +71,7 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 | `tests/machines/slow_units.json` | MUL・LD のレイテンシー3、ST のレイテンシー2 | `slow_*` |
 | `tests/machines/ii_units.json` | ADD・SUB・MUL の II が2、LD の II が3 | `ii_*` |
 | `tests/machines/regs3.json` | レジスタ3本（ほかは既定の構成と同じ） | Modulo Scheduling のテスト（`compiler/.../modulo/ModuloSchedulerSpec`、#68） |
+| `tests/machines/regs8.json`、`tests/machines/regs12.json` | レジスタ8本、12本（ほかは既定の構成と同じ） | レジスタ数を変えたベンチマーク（rematerialization、#70）。`crosscheck/CompiledKernelSpec` が参照モデルと RTL で実行する |
 
 ## mutation チェック
 

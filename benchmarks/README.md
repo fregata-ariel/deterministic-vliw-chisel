@@ -23,16 +23,16 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 | `vliw` | 1 bundle に Compute 1・Memory 1 を発行する（mvp-0 の通常の命令列） |
 | `single` | **単一発行ベースライン**。同じ machine description・DAG・メモリ配置・レジスタ割り当ての方法で、1サイクルに1操作だけ発行する（`--single-issue`） |
 
-算術・入出力・データ配置・DAG は両方で同じで、どちらの命令列も mvp-0 の合法なプログラムとして同じ RTL で実行できる。
+算術・入出力・データ配置・カーネルの DAG は両方で同じで（LD の複製（#70）は方式ごとに違うことがある）、どちらの命令列も mvp-0 の合法なプログラムとして同じ RTL で実行できる。
 
 ## 系列
 
-コンパイラの試行は、優先度（critical-path、program-order）×（レジスタ上限なし、上限 = レジスタ数で `loadReserve` 0〜レジスタ数/2）の組である（[docs/COMPILER.md](../docs/COMPILER.md)）。コンパイラは、まず各優先度を上限なしで、次に各優先度を上限付きで `loadReserve` の小さい順に試す（`RegisterAllocator.attempts`）。記録は、この試行の選び方が違う2つの系列からなる（#79）。
+コンパイラの試行は、優先度（critical-path、program-order）×（レジスタ上限なし、上限 = レジスタ数で `loadReserve` 0〜レジスタ数/2）の組である（[docs/COMPILER.md](../docs/COMPILER.md)）。コンパイラは、まず各優先度を上限なしで、次に各優先度を上限付きで `loadReserve` の小さい順に試す（`RegisterAllocator.attempts`）。上限付きの試行は、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数の LD を複製する（rematerialization、#70）。記録は、この試行の選び方が違う2つの系列からなる（#79）。
 
 | 系列 | 試行の選び方 | 何を比べられるか |
 |---|---|---|
-| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば、試す順で先の試行） | 各方式で今のコンパイラが出せる最良の cycles。**選ばれた試行が方式ごとに違うことがあり**（今の記録では `fir4x8` と `matmul3`。`saxpy8` は両方式とも同じ試行）、そのカーネルの比は発行幅だけの効果ではない |
-| 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ行の比は、発行幅だけを変えた効果。ある方式で収まらない組は「不成立」と理由付きで記録し、別の試行で置き換えない |
+| 方式ごとに cycles 最小 | 方式ごとに、全ての試行のうち cycles 最小のもの（同じならば LD の少ない方、それも同じならば試す順で先の試行） | 各方式で今のコンパイラが出せる最良の cycles。**選ばれた試行が方式ごとに違うことがあり**（[RESULTS.md](RESULTS.md) の16本の記録では `fir4x8` と `matmul3`。`saxpy8` は両方式とも同じ試行。8・12本は [REGISTERS.md](REGISTERS.md)）、そのカーネルの比は発行幅だけの効果ではない |
+| 戦略を固定 | 全ての試行を、両方の方式に同じ組で与える | 同じ行の比は、両方の方式が LD を複製しない行では、発行幅だけを変えた効果。片方の方式だけが複製する行や、複製した LD の数が方式で違う行は、複製の違いの効果も含む（比を書くときは両方の LD の数も書く）。ある方式で収まらない組は「不成立」と理由付きで記録し、別の試行で置き換えない |
 
 方式ごとに cycles 最小の試行は、固定した系列の中で、その方式の cycles が最小の行と一致する（`BenchmarkSpec` が確かめる）。
 
@@ -45,6 +45,7 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 - 今後の比較（MAC のある・なし #77、Modulo Scheduling と list scheduling #68、レジスタ数 #70）も、同じ2つの系列で記録する
 - Modulo Scheduling と list scheduling の比較（[MODULO.md](MODULO.md)）では、list scheduling の側は戦略を固定した系列の各行で、Modulo Scheduling の側は1つの戦略（最初に命令列ができた II）である。比はその組合せの比で、Modulo Scheduling の cycles 最小ではない
 - レジスタ数を変える比較（#70）では、レジスタ上限はそれぞれのレジスタ数になる。戦略を固定した系列は、優先度と `loadReserve` が同じ行（上限なしの行は上限なしの行）どうしを比べる。片方にしかない行（`loadReserve` がもう一方のレジスタ数/2 を超える行）は、片方だけの行として記録し、比に含めない
+- 上限付きの試行は、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数を読み直す（rematerialization、[docs/DECISIONS.md](../docs/DECISIONS.md) ADR-0016）。記録では、読み直した行（LD がカーネルの DAG より多い行）の cycles に「（LD n）」を添える。添えていない行の LD の数は、カーネルの DAG の数（[REGISTERS.md](REGISTERS.md) の、方式ごとに cycles 最小の表の括弧の値）である。同じ行でも、片方の構成だけが読み直すことがある（レジスタの少ない方が速くなることもある）ので、比を書くときは両方の LD の数も書く
 
 ## 記録
 
@@ -54,6 +55,8 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 | `cases/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の命令列、入力宣言（入力値は `sampleInputs(kernel, 1)`）、期待値（出力と cycles）。`vliw-testcase/1`（[docs/TESTCASE.md](../docs/TESTCASE.md)） |
 | [MODULO.md](MODULO.md) | Modulo Scheduling（#68）の記録。比べる4つのループ（`saxpy8`、`fir4x8`、`matmul3` の行のループと累算のループ）の MII・II・II を上げた理由・cycles と、戦略を固定した系列の各行（vliw）との比。6つのループ × 3構成と `regs3` の値（#68 の受入テストのループを含む）と、`saxpy(n)` の系列 |
 | `cases/<kernel>_<loop>_modulo.json`、`metrics/<kernel>_<loop>_modulo.json` | Modulo Scheduling したループの命令列・入力・期待値と、実行の記録。`metrics` の `ii` は、トレースで確かめた II |
+| [REGISTERS.md](REGISTERS.md) | レジスタ数を変えた記録（#70）。8・12・16 本（`tests/machines/regs8.json`、`regs12.json`、既定の構成）の、方式ごとに cycles 最小の系列（cycles、16 本に対する比、LD の数、試行）と、戦略を固定した系列の同じ行どうしの比、片方だけの行と不成立の数 |
+| `cases/<kernel>_<mode>_r8.json`・`_r12.json`、`metrics/` の同じ名前 | 8・12 本の、方式ごとに cycles 最小の系列の命令列・入力・期待値と、実行の記録 |
 | `metrics/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の、参照モデルでの実行の記録。`vliw-metrics/1`（[docs/METRICS.md](../docs/METRICS.md)）。machine の revision と hash、命令列の hash を含む |
 
 記録は、すべてソースから生成する。手で編集しない。
@@ -69,6 +72,7 @@ CI の `crosscheck/BenchmarkSpec` は、次を確かめる。
 - コミットされた記録が、生成し直した内容と一致すること（`metrics` の `generator` 欄は実行環境に依存するので比べない）。コンパイラや machine description を変えて結果が変わったら、生成し直してコミットする
 - 記録したテストケースが、参照モデルでも RTL でも、期待した出力と cycles になること
 - 戦略を固定した系列が、コンパイラの全ての試行を、試す順に、両方の方式に与えていること。各行がその行の試行の結果であること（不成立を別の試行で置き換えないこと）。各行の命令列（成立したもの）が、verifier に合法と判定され、参照モデルで期待した出力と、スケジューラの予測どおりの cycles になること
-- 方式ごとに cycles 最小の系列が、固定した系列の中の、その方式で cycles 最小の最初の試行と一致すること
+- 方式ごとに cycles 最小の系列が、固定した系列の中の、その方式で cycles 最小（同じならば LD 最少）の最初の試行と一致すること
 - 単一発行の命令列は1 bundle に1操作だけで、vliw より速くならないこと
 - Modulo Scheduling のテストケースが、参照モデルでも RTL でも成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること
+- 8・12 本の machine description が、既定の構成とレジスタ数だけ違うこと。8・12 本のテストケースが、参照モデルでも RTL でも成り立つこと。戦略を固定した系列と、方式ごとに cycles 最小の系列についての上の確認を、8・12・16 本のそれぞれで行うこと

@@ -20,6 +20,7 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   private val records = BenchmarkRecords.records(machine)
   private val fixed = BenchmarkRecords.fixed(machine)
   private val modulo = ModuloRecords.records(machine)
+  private val registers = RegisterRecords.series(records, fixed, machine)
   private val regenerate = "sbt \"crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords\""
 
   /** The generator section depends on the JVM that ran it; everything else must match exactly. */
@@ -31,13 +32,14 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     } else text
 
   test("benchmarks/ holds exactly the generated records") {
-    BenchmarkRecords.files(records, fixed, machine, Some(modulo)).foreach { case (path, expected) =>
-      assert(Files.exists(path), s"$path is missing; run $regenerate")
-      val actual = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
-      assert(
-        comparable(path, actual) == comparable(path, expected),
-        s"$path is out of date; run $regenerate"
-      )
+    BenchmarkRecords.files(records, fixed, machine, Some(modulo), Some(registers)).foreach {
+      case (path, expected) =>
+        assert(Files.exists(path), s"$path is missing; run $regenerate")
+        val actual = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
+        assert(
+          comparable(path, actual) == comparable(path, expected),
+          s"$path is out of date; run $regenerate"
+        )
     }
   }
 
@@ -104,24 +106,27 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   }
 
   test("the fixed series gives every attempt of the compiler, in its order, to both modes") {
-    records.foreach { r =>
+    for (s <- registers; r <- s.records) {
       val attempts = RegisterAllocator.attempts(r.compiled.dag, Priority.all, r.mode.singleIssue)
-      val rows = fixed.filter(f => f.kernel == r.kernel && f.mode == r.mode)
+      val rows = s.fixed.filter(f => f.kernel == r.kernel && f.mode == r.mode)
       assert(rows.map(_.strategy.attempt(r.mode)) == attempts, r.name)
+      assert(r.compiled.machine == s.config.machine, r.name)
     }
     // A row holds the result of its own attempt: one that does not fit is never replaced.
-    fixed.foreach { f =>
+    for (s <- registers; f <- s.fixed) {
       assert(
         f.result.forall(_.allocated.attempt == f.strategy.attempt(f.mode)),
-        s"${f.kernel.name} ${f.mode.name} ${f.strategy}"
+        s"${f.kernel.name} ${f.mode.name} ${f.strategy} (${s.config.registers} registers)"
       )
     }
   }
 
   test("every program of the fixed series gives the expected outputs in its cycles") {
-    fixed.foreach { f =>
+    for (s <- registers; f <- s.fixed) {
+      val machine = s.config.machine
       f.result.foreach { c =>
-        val name = s"${f.kernel.name} ${f.mode.name} ${c.allocated.attempt}"
+        val name =
+          s"${f.kernel.name} ${f.mode.name} ${c.allocated.attempt} (${s.config.registers} registers)"
         val tc = KernelCompiler
           .testCase(c, KernelCompiler.sampleInputs(f.kernel, BenchmarkRecords.Seed), None)
           .fold(e => fail(s"$name: $e"), identity)
@@ -137,14 +142,17 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     }
   }
 
-  test("the fewest-cycles series is the fixed series' first attempt with the fewest cycles") {
-    records.foreach { r =>
+  test(
+    "the fewest-cycles series is the fixed series' first attempt with the fewest cycles and LDs"
+  ) {
+    for (s <- registers; r <- s.records) {
       val order = RegisterAllocator.attempts(r.compiled.dag, Priority.all, r.mode.singleIssue)
-      val fits = fixed
+      val fits = s.fixed
         .filter(f => f.kernel == r.kernel && f.mode == r.mode)
         .flatMap(_.result.toOption)
         .sortBy(c => order.indexOf(c.allocated.attempt))
-      val best = fits.minBy(_.cycles) // minBy keeps the first of equal values
+      // minBy keeps the first of equal values.
+      val best = fits.minBy(c => (c.cycles, BenchmarkRecords.loads(c)))
       assert(best.cycles == r.compiled.cycles, r.name)
       assert(best.allocated.attempt == r.compiled.allocated.attempt, r.name)
       assert(best.words == r.compiled.words, r.name)
@@ -152,14 +160,14 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   }
 
   test("the single-issue baseline issues one operation per bundle and is never faster") {
-    records.groupBy(_.kernel).foreach { case (k, rs) =>
+    registers.flatMap(_.records).groupBy(r => (r.kernel, r.suffix)).foreach { case ((k, _), rs) =>
       val vliw = rs.find(_.mode == BenchmarkRecords.Mode.Vliw).get
       val single = rs.find(_.mode == BenchmarkRecords.Mode.SingleIssue).get
       assert(
         single.compiled.bundles.forall(b => b.compute == ComputeOp.Nop || b.memory == MemoryOp.Nop),
         k.name
       )
-      val ops = single.compiled.dag.nodes.size
+      val ops = single.compiled.allocated.dag.nodes.size
       assert(
         single.compiled.cycles >= ops + 1 && single.compiled.cycles >= vliw.compiled.cycles,
         k.name
@@ -168,6 +176,46 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
       assert(
         single.compiled.dag.nodes == vliw.compiled.dag.nodes && single.compiled.layout == vliw.compiled.layout
       )
+    }
+  }
+
+  test("the register-count machines differ from the default one only in the register count") {
+    registers.filter(_.config.path.isDefined).foreach { s =>
+      val v = ujson.read(s.config.machine.canonicalJson)
+      val d = ujson.read(machine.canonicalJson)
+      assert(v("register_file")("count").num.toInt == s.config.registers)
+      Seq(v, d).foreach { x =>
+        x.obj.remove("machine_id"); x.obj.remove("revision"); x.obj.remove("status")
+        x("register_file").obj.remove("count")
+      }
+      assert(v == d, s.config.path)
+    }
+    assert(registers.map(_.config.registers) == RegisterRecords.Counts)
+  }
+
+  test("the register-count test cases hold on the reference model and the RTL") {
+    registers.filter(_.config.path.isDefined).foreach { s =>
+      val m = s.config.machine
+      val cases = s.records.map(r =>
+        r.name -> TestCase
+          .parse(ujson.write(r.testCase))
+          .fold(es => fail(es.mkString("\n")), identity)
+      )
+      cases.foreach { case (name, tc) =>
+        assert(tc.machine == m, name)
+        val run = ReferenceModel.run(m, tc.words, tc.inputs).fold(v => fail(s"$name: $v"), identity)
+        assert(tc.expect.cycles.contains(run.cycles), name)
+        tc.expect.memory.foreach { case (a, v) => assert(run.memory(a).contains(v), s"$name [$a]") }
+      }
+      simulate(new Core(CoreParams(m))) { dut =>
+        cases.foreach { case (name, tc) =>
+          val run = CoreDriver.run(dut, m, tc.words, tc.inputs, tc.expect.memory.keySet)
+          assert(run.violations.isEmpty && tc.expect.cycles.contains(run.cycles), name)
+          tc.expect.memory.foreach { case (a, v) =>
+            assert(run.memory(a) == BigInt(v), s"$name [$a]")
+          }
+        }
+      }
     }
   }
 }

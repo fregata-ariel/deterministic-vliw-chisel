@@ -18,6 +18,12 @@ private final case class Compiled(layout: MemoryLayout, words: Vector[Long], cyc
   */
 class CompiledKernelSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
+  private def machineFile(f: String) = MachineDescription
+    .load(java.nio.file.Paths.get("tests", "machines", f))
+    .fold(es => fail(es.mkString), identity)
+
+  /** 8 and 12 registers, the default latencies (#70): the RTL implements them. */
+  private val fewerRegisters = Seq("regs8.json", "regs12.json").map(machineFile)
 
   private def compile(k: Kernel, m: MachineDescription): Compiled = {
     val layout = MemoryLayout.fixedOrder(k, m).fold(e => fail(e), identity)
@@ -35,11 +41,8 @@ class CompiledKernelSpec extends AnyFunSuite with VliwChiselSim {
 
   test("on the reference model, compiled kernels compute the DSL results in the scheduled cycles") {
     val rng = new Random(50L)
-    val machines = Seq(machine) ++ Seq("slow_units.json", "ii_units.json").map { f =>
-      MachineDescription
-        .load(java.nio.file.Paths.get("tests", "machines", f))
-        .fold(es => fail(es.mkString), identity)
-    }
+    val machines =
+      Seq(machine) ++ Seq("slow_units.json", "ii_units.json").map(machineFile) ++ fewerRegisters
     for (m <- machines; k <- Benchmarks.all) {
       val c = compile(k, m)
       (0 until 10).foreach { _ =>
@@ -58,20 +61,25 @@ class CompiledKernelSpec extends AnyFunSuite with VliwChiselSim {
     }
   }
 
-  test("on the RTL, compiled kernels compute the DSL results in the scheduled cycles") {
-    val rng = new Random(5050L)
-    simulate(new Core(CoreParams(machine))) { dut =>
-      for (k <- Benchmarks.all) {
-        val c = compile(k, machine)
-        val outAddrs =
-          k.outputs.flatMap(o => (0 until o.length).map(c.layout.elem(o.name, _))).toSet
-        (0 until 5).foreach { _ =>
-          val in = values(k, rng)
-          val inputs = c.layout.inputs(in).fold(e => fail(e), identity)
-          val run = CoreDriver.run(dut, machine, c.words, inputs, outAddrs)
-          assert(run.violations.isEmpty && run.cycles == c.cycles, k.name)
-          val out = c.layout.outputs(a => run.memory(a).toLong)
-          assert(out == Interpreter.run(k, in).fold(e => fail(e), identity), k.name)
+  // One test per machine: each simulation builds its own core (as in RtlDifferentialSpec).
+  (machine +: fewerRegisters).zipWithIndex.foreach { case (m, i) =>
+    test(
+      s"on the RTL, compiled kernels compute the DSL results in the scheduled cycles: ${m.machineId}"
+    ) {
+      val rng = new Random(5050L + i)
+      simulate(new Core(CoreParams(m))) { dut =>
+        for (k <- Benchmarks.all) {
+          val c = compile(k, m)
+          val outAddrs =
+            k.outputs.flatMap(o => (0 until o.length).map(c.layout.elem(o.name, _))).toSet
+          (0 until 5).foreach { _ =>
+            val in = values(k, rng)
+            val inputs = c.layout.inputs(in).fold(e => fail(e), identity)
+            val run = CoreDriver.run(dut, m, c.words, inputs, outAddrs)
+            assert(run.violations.isEmpty && run.cycles == c.cycles, k.name)
+            val out = c.layout.outputs(a => run.memory(a).toLong)
+            assert(out == Interpreter.run(k, in).fold(e => fail(e), identity), k.name)
+          }
         }
       }
     }

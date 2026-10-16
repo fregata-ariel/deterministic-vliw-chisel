@@ -1,0 +1,71 @@
+{
+  "metrics": "vliw-metrics/1",
+  "isa": "mvp-0",
+  "machine": {
+    "id": "vliw2-i32-sp2-regs8",
+    "revision": 1,
+    "hash": "sha256:663c8469d133d76b8fe21a5cb3f9aeb2f8b167e7edc9a67899b4f00b1ab8a97e"
+  },
+  "program": {
+    "name": "fir4x8_vliw_r8",
+    "hash": "sha256:7905012502f127723e835d0c799b0d89034a4fad43fe40029c3104e625672c58",
+    "bundles": 70
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 70,
+  "issue": {
+    "compute": {
+      "operations": 56,
+      "nop": 13,
+      "nop_rate": 0.185714
+    },
+    "memory": {
+      "operations": 63,
+      "nop": 7,
+      "nop_rate": 0.1
+    },
+    "by_operation": {
+      "ADD": 24,
+      "SUB": 0,
+      "MUL": 32,
+      "LD": 55,
+      "ST": 8,
+      "HALT": 1
+    }
+  },
+  "writeback": {
+    "compute": {
+      "commits": 56,
+      "utilization": 0.8
+    },
+    "memory": {
+      "commits": 55,
+      "utilization": 0.785714
+    }
+  },
+  "scratchpad": {
+    "reads": 55,
+    "writes": 8,
+    "accesses_per_cycle": 0.9,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 28,
+        "writes": 4,
+        "accesses_per_cycle": 0.457143
+      },
+      {
+        "bank": 1,
+        "reads": 27,
+        "writes": 4,
+        "accesses_per_cycle": 0.442857
+      }
+    ]
+  },
+  "ii": null,
+  "rtl": null
+}

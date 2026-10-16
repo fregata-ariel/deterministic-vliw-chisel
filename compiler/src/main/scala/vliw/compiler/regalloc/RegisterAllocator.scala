@@ -62,7 +62,9 @@ object NoFit {
       s"$live values are live at once; the machine has $registers registers"
   }
 
-  /** Under the register limit, the scheduler reaches a point where no remaining operation fits. */
+  /** Under the register limit, the scheduler reaches a point where no remaining operation fits, and
+    * no copy of a LD (rematerialization, when it is on) gets it further.
+    */
   case object Stuck extends NoFit {
     override def toString: String = "no remaining operation fits under the register limit"
   }
@@ -70,6 +72,9 @@ object NoFit {
 
 final case class Allocated(attempt: Attempt, allocation: Allocation) {
   def schedule: Schedule = allocation.schedule
+
+  /** The DAG scheduled: the kernel's, or with the copies of LDs when the attempt rematerialized. */
+  def dag: Dag = schedule.dag
 }
 
 object RegisterAllocator {
@@ -120,32 +125,35 @@ object RegisterAllocator {
         yield Attempt(p, Some(ListScheduler.Limit(r, reserve)), singleIssue))
   }
 
-  /** One attempt: schedules with its priority, register limit and issue mode, then allocates. Left
+  /** One attempt: schedules with its priority, register limit and issue mode, then allocates. A
+    * limited attempt that gets stuck issues some LDs again (`Rematerialization`, `remat`). Left
     * gives why the attempt does not fit the machine.
     */
-  def run(dag: Dag, a: Attempt): Either[NoFit, Allocated] =
-    ListScheduler
-      .run(dag, a.priority, a.limit, a.singleIssue)
-      .toRight(NoFit.Stuck)
+  def run(dag: Dag, a: Attempt, remat: Remat = Remat.WhenStuck): Either[NoFit, Allocated] =
+    Rematerialization
+      .schedule(dag, a, remat)
       .flatMap(s =>
         allocate(s).left.map(_ => NoFit.TooManyLive(maxLive(s), dag.machine.registerCount))
       )
       .map(Allocated(a, _))
 
   /** Schedules and allocates, rescheduling under register limits when the registers do not suffice
-    * (no spilling). Of the attempts that succeed, the one with the fewest cycles is chosen; ties go
-    * to the earlier attempt.
+    * (no spilling; a limited attempt that gets stuck issues LDs of inputs, scalars and constants
+    * again). Of the attempts that succeed, the one with the fewest cycles is chosen, then the one
+    * with the fewest LDs (so that a copy never replaces an equal schedule without it), then the
+    * earlier attempt.
     */
   def scheduleAndAllocate(
       dag: Dag,
       priorities: Seq[Priority] = Priority.all,
-      singleIssue: Boolean = false
+      singleIssue: Boolean = false,
+      remat: Remat = Remat.WhenStuck
   ): Either[String, Allocated] = {
-    val done = attempts(dag, priorities, singleIssue).flatMap(run(dag, _).toOption)
+    val done = attempts(dag, priorities, singleIssue).flatMap(run(dag, _, remat).toOption)
     done
-      .minByOption(_.schedule.cycles)
+      .minByOption(a => (a.schedule.cycles, a.dag.loads))
       .toRight(
-        s"no schedule fits ${dag.machine.registerCount} registers (tried ${attempts(dag, priorities, singleIssue).size} attempts; spilling is not supported)"
+        s"no schedule fits ${dag.machine.registerCount} registers (tried ${attempts(dag, priorities, singleIssue).size} attempts${Rematerialization.describe(remat)}; spilling is not supported)"
       )
   }
 }

@@ -1,0 +1,72 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "saxpy8_vliw_r8",
+  "description": "generated from the DSL kernel saxpy8; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (program-order, no register limit)",
+  "program": [
+    "@0:  nop             | ld r0, [16]",
+    "@1:  nop             | ld r1, [0]",
+    "@2:  nop             | ld r2, [8]",
+    "@3:  mul r1, r0, r1  | ld r3, [1]",
+    "@4:  nop             | ld r4, [9]",
+    "@5:  add r1, r1, r2  | ld r2, [2]",
+    "@6:  mul r1, r0, r3  | st [17], r1",
+    "@7:  mul r2, r0, r2  | ld r3, [10]",
+    "@8:  nop             | ld r5, [3]",
+    "@9:  add r1, r1, r4  | ld r4, [11]",
+    "@10: add r1, r2, r3  | st [18], r1",
+    "@11: mul r1, r0, r5  | st [19], r1",
+    "@12: nop             | ld r2, [4]",
+    "@13: add r1, r1, r4  | ld r3, [12]",
+    "@14: mul r1, r0, r2  | st [20], r1",
+    "@15: nop             | ld r2, [5]",
+    "@16: add r1, r1, r3  | ld r3, [13]",
+    "@17: mul r1, r0, r2  | st [21], r1",
+    "@18: nop             | ld r2, [6]",
+    "@19: add r1, r1, r3  | ld r3, [14]",
+    "@20: mul r1, r0, r2  | st [22], r1",
+    "@21: nop             | ld r2, [7]",
+    "@22: add r1, r1, r3  | ld r3, [15]",
+    "@23: mul r0, r0, r2  | st [23], r1",
+    "@24: nop             | nop",
+    "@25: add r0, r0, r3  | nop",
+    "@26: nop             | st [24], r0",
+    "@27: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709,
+      "16": 181670012
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 28,
+    "memory": {
+      "17": 994936220,
+      "18": 1123534067,
+      "19": 1518996696,
+      "20": 289481026,
+      "21": 3067446782,
+      "22": 2351676203,
+      "23": 2780962004,
+      "24": 2173543421
+    }
+  },
+  "machine": "tests/machines/regs8.json"
+}

@@ -29,7 +29,7 @@
 
 ## list scheduling（戦略を固定した系列）との比較
 
-list scheduling の各行は、[RESULTS.md](RESULTS.md) の「戦略を固定した系列」の vliw の列で、同じ配置と入力である。Modulo Scheduling の側は1つの戦略なので、各行は「その試行の list scheduling」と「Modulo Scheduling」の比になる。
+list scheduling の各行は、[RESULTS.md](RESULTS.md) の「戦略を固定した系列」の vliw の列で、同じ配置と入力である。「（LD n）」の行は、その試行が LD を複製した行で（#70）、LD の数が Modulo Scheduling（上の表の LD の列）と違う。Modulo Scheduling の側は1つの戦略なので、各行は「その試行の list scheduling」と「Modulo Scheduling」の比になる。
 
 ### `saxpy8`
 
@@ -69,11 +69,11 @@ Modulo Scheduling: `fir4x8`（i） 76 cycles（II 8）。list scheduling の、�
 | critical-path | なし | - | 不成立: 同時に生きる値 33 > 16 | - |
 | program-order | なし | - | 不成立: 同時に生きる値 36 > 16 | - |
 | critical-path | 16 | 0 | 不成立: 上限の下で行き詰まる | - |
-| critical-path | 16 | 1 | 不成立: 上限の下で行き詰まる | - |
-| critical-path | 16 | 2 | 不成立: 上限の下で行き詰まる | - |
-| critical-path | 16 | 3 | 不成立: 上限の下で行き詰まる | - |
-| critical-path | 16 | 4 | 不成立: 上限の下で行き詰まる | - |
-| critical-path | 16 | 5 | 不成立: 上限の下で行き詰まる | - |
+| critical-path | 16 | 1 | 75（LD 47） | 1.01 |
+| critical-path | 16 | 2 | 84（LD 52） | 0.90 |
+| critical-path | 16 | 3 | 84（LD 52） | 0.90 |
+| critical-path | 16 | 4 | 83（LD 54） | 0.92 |
+| critical-path | 16 | 5 | 87（LD 53） | 0.87 |
 | critical-path | 16 | 6 | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 7 | 不成立: 上限の下で行き詰まる | - |
 | critical-path | 16 | 8 | 不成立: 上限の下で行き詰まる | - |
@@ -87,7 +87,7 @@ Modulo Scheduling: `fir4x8`（i） 76 cycles（II 8）。list scheduling の、�
 | program-order | 16 | 7 | 67 | 1.13 |
 | program-order | 16 | 8 | 76 | 1.00 |
 
-不成立の行は 11（同時に生きる値が多い 2、上限の下で行き詰まる 9）で、比に含めない。
+不成立の行は 6（同時に生きる値が多い 2、上限の下で行き詰まる 4）で、比に含めない。
 
 ### `matmul3`
 
@@ -97,12 +97,12 @@ Modulo Scheduling: `matmul3`（i） 87 cycles（II 20）、`matmul3`（m） 68 c
 |---|---|---|---|---|---|
 | critical-path | なし | - | 不成立: 同時に生きる値 28 > 16 | - | - |
 | program-order | なし | - | 不成立: 同時に生きる値 29 > 16 | - | - |
-| critical-path | 16 | 0 | 不成立: 上限の下で行き詰まる | - | - |
+| critical-path | 16 | 0 | 61（LD 37） | 1.43 | 1.11 |
 | critical-path | 16 | 1 | 56 | 1.55 | 1.21 |
 | critical-path | 16 | 2 | 57 | 1.53 | 1.19 |
 | critical-path | 16 | 3 | 62 | 1.40 | 1.10 |
-| critical-path | 16 | 4 | 不成立: 上限の下で行き詰まる | - | - |
-| critical-path | 16 | 5 | 不成立: 上限の下で行き詰まる | - | - |
+| critical-path | 16 | 4 | 67（LD 44） | 1.30 | 1.01 |
+| critical-path | 16 | 5 | 72（LD 46） | 1.21 | 0.94 |
 | critical-path | 16 | 6 | 不成立: 上限の下で行き詰まる | - | - |
 | critical-path | 16 | 7 | 不成立: 上限の下で行き詰まる | - | - |
 | critical-path | 16 | 8 | 不成立: 上限の下で行き詰まる | - | - |
@@ -110,13 +110,13 @@ Modulo Scheduling: `matmul3`（i） 87 cycles（II 20）、`matmul3`（m） 68 c
 | program-order | 16 | 1 | 56 | 1.55 | 1.21 |
 | program-order | 16 | 2 | 59 | 1.47 | 1.15 |
 | program-order | 16 | 3 | 63 | 1.38 | 1.08 |
-| program-order | 16 | 4 | 不成立: 上限の下で行き詰まる | - | - |
-| program-order | 16 | 5 | 不成立: 上限の下で行き詰まる | - | - |
-| program-order | 16 | 6 | 不成立: 上限の下で行き詰まる | - | - |
-| program-order | 16 | 7 | 不成立: 上限の下で行き詰まる | - | - |
-| program-order | 16 | 8 | 不成立: 上限の下で行き詰まる | - | - |
+| program-order | 16 | 4 | 56（LD 37） | 1.55 | 1.21 |
+| program-order | 16 | 5 | 56（LD 38） | 1.55 | 1.21 |
+| program-order | 16 | 6 | 57（LD 39） | 1.53 | 1.19 |
+| program-order | 16 | 7 | 58（LD 39） | 1.50 | 1.17 |
+| program-order | 16 | 8 | 59（LD 41） | 1.47 | 1.15 |
 
-不成立の行は 13（同時に生きる値が多い 2、上限の下で行き詰まる 11）で、比に含めない。
+不成立の行は 5（同時に生きる値が多い 2、上限の下で行き詰まる 3）で、比に含めない。
 
 ## 他のループと構成（#68 の受入テストを含む）
 

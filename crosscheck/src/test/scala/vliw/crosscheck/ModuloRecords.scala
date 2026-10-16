@@ -162,7 +162,7 @@ object ModuloRecords {
       val c = r.compiled
       val s = c.result
       val list = rs.find(x => x.kernel == r.kernel.unroll && x.mode == Mode.Vliw).get.compiled
-      val listLd = list.dag.nodes.count(_.isInstanceOf[vliw.compiler.dag.Node.Load])
+      val listLd = BenchmarkRecords.loads(list)
       Seq(
         label(r.kernel),
         r.kernel.trips.toString,
@@ -185,13 +185,7 @@ object ModuloRecords {
       val loops = cs.filter(_.kernel.unroll == kernel)
       val rows = fs.filter(f => f.kernel == kernel && f.mode == Mode.Vliw)
       val lines = rows.map { f =>
-        val list = f.result.fold(
-          {
-            case NoFit.TooManyLive(live, registers) => s"不成立: 同時に生きる値 $live > $registers"
-            case NoFit.Stuck                        => "不成立: 上限の下で行き詰まる"
-          },
-          _.cycles.toString
-        )
+        val list = f.result.fold(BenchmarkRecords.noFit, BenchmarkRecords.cyclesCell(_))
         val ratios = loops
           .map(l => f.result.fold(_ => "-", c => f"${l.compiled.cycles.toDouble / c.cycles}%.2f"))
         (Seq(
@@ -308,7 +302,7 @@ ${perLoop.mkString("\n")}
 
 ## list scheduling（戦略を固定した系列）との比較
 
-list scheduling の各行は、[RESULTS.md](RESULTS.md) の「戦略を固定した系列」の vliw の列で、同じ配置と入力である。Modulo Scheduling の側は1つの戦略なので、各行は「その試行の list scheduling」と「Modulo Scheduling」の比になる。
+list scheduling の各行は、[RESULTS.md](RESULTS.md) の「戦略を固定した系列」の vliw の列で、同じ配置と入力である。「（LD n）」の行は、その試行が LD を複製した行で（#70）、LD の数が Modulo Scheduling（上の表の LD の列）と違う。Modulo Scheduling の側は1つの戦略なので、各行は「その試行の list scheduling」と「Modulo Scheduling」の比になる。
 
 ${comparisons.mkString("\n\n")}
 

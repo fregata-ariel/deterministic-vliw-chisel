@@ -80,7 +80,27 @@ object ListScheduler {
       priority: Priority,
       limit: Option[Limit],
       singleIssue: Boolean = false
-  ): Option[Schedule] = {
+  ): Option[Schedule] = attempt(dag, priority, limit, singleIssue).toOption
+
+  /** Where a limited schedule stopped: the issue cycle of every node placed so far (-1 for the
+    * others) and the cycle it stopped at. `blocked` when it stopped at a block (see [[attempt]]);
+    * otherwise it got stuck: no node fitted for longer than any latency or II.
+    */
+  final case class Stopped(issue: Vector[Int], cycle: Int, blocked: Boolean) {
+    def placed(n: Int): Boolean = issue(n) >= 0
+  }
+
+  /** [[run]], with where it stopped instead of None. With `blockedAfter`, it also stops at the
+    * first cycle after that one at which the register limit blocks a slot: the slot stays empty
+    * although a ready node of it meets every other constraint (rematerialization, #70).
+    */
+  def attempt(
+      dag: Dag,
+      priority: Priority,
+      limit: Option[Limit],
+      singleIssue: Boolean = false,
+      blockedAfter: Option[Int] = None
+  ): Either[Stopped, Schedule] = {
     val n = dag.nodes.size
     val issue = Array.fill(n)(-1)
     val missing = Array.tabulate(n)(i => dag.predecessors(i).size) // unscheduled predecessors
@@ -102,9 +122,12 @@ object ListScheduler {
     def produces(i: Int) = !dag.nodes(i).isInstanceOf[Node.Store]
     def liveAfter(i: Int) = live - operands(i).count(readers(_) == 1) + (if (produces(i)) 1 else 0)
 
-    def fits(i: Int): Boolean =
+    // Every constraint but the register limit.
+    def free(i: Int): Boolean =
       readyAt(i) <= cycle && unitFree(mnemonic(i)) <= cycle &&
-        port(dag.nodes(i)).forall(p => !ports.contains((p, cycle + latency(i)))) &&
+        port(dag.nodes(i)).forall(p => !ports.contains((p, cycle + latency(i))))
+    def fits(i: Int): Boolean =
+      free(i) &&
         limit.forall { l =>
           val reserve = if (dag.nodes(i).isInstanceOf[Node.Load]) l.loadReserve else 0
           liveAfter(i) <= l.registers - reserve
@@ -131,25 +154,30 @@ object ListScheduler {
       case _                                  => (0, -priority.key(dag, i), i)
     }
 
-    while (left > 0 && idle <= stuck) {
+    var blocked = false
+    // Places the first node of `of` that fits, if any.
+    def fill(of: Int => Boolean): Unit = {
+      val candidates = ready.toSeq.filter(of)
+      candidates.filter(fits).sortBy(key).headOption match {
+        case Some(i) => place(i)
+        case None    => blocked ||= blockedAfter.exists(_ < cycle) && candidates.exists(free)
+      }
+    }
+    while (left > 0 && idle <= stuck && !blocked) {
       // A node made ready by a placement in this cycle has distance >= 1, except LD -> ST (0),
       // which shares the memory slot; so both slots can be filled in one pass.
       val before = left
-      if (singleIssue) ready.toSeq.filter(fits).sortBy(key).headOption.foreach(place)
-      else
-        Seq(Slot.Compute, Slot.Memory).foreach { s =>
-          ready.toSeq
-            .filter(i => slot(dag.nodes(i)) == s && fits(i))
-            .sortBy(key)
-            .headOption
-            .foreach(place)
-        }
+      if (singleIssue) fill(_ => true)
+      else Seq(Slot.Compute, Slot.Memory).foreach(s => fill(i => slot(dag.nodes(i)) == s))
       idle = if (left < before) 0 else idle + 1
       cycle += 1
     }
-    Option.when(left == 0) {
-      val halt = (0 until n).map(i => issue(i) + latency(i)).maxOption.getOrElse(0)
-      Schedule(dag, issue.toVector, halt)
-    }
+    Either.cond(
+      left == 0, {
+        val halt = (0 until n).map(i => issue(i) + latency(i)).maxOption.getOrElse(0)
+        Schedule(dag, issue.toVector, halt)
+      },
+      Stopped(issue.toVector, cycle - 1, blocked)
+    )
   }
 }
