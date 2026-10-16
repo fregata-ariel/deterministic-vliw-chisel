@@ -1,0 +1,16 @@
+12:16:44 built 5.024: result: success
+12:21:57 built 5.026: result: success
+12:27:16 built 5.030: result: success
+12:33:57 built 5.052: result: success
+12:33:57 race 5.020 start (7000 runs)
+12:52:08 race 5.020 done: -j 0	7000	11	0	0
+12:52:08 race 5.024 start (10000 runs)
+13:21:23 race 5.024 done: -j 0	10000	0	0	0
+13:21:23 race 5.026 start (10000 runs)
+22:42:14 race 5.026 start (10000 runs)
+23:07:14 race 5.026 done: -j 0	10000	0	0	0
+23:07:14 race 5.030 start (10000 runs)
+23:41:06 race 5.030 done: -j 0	10000	0	0	0
+23:41:06 race 5.052 start (10000 runs)
+00:07:08 race 5.052 done: -j 0	10000	0	0	0
+00:07:08 all done

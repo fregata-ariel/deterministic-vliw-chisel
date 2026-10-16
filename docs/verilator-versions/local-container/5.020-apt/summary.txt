@@ -1,0 +1,5 @@
+env	Verilator 5.020 2024-01-01 rev (Debian 5.020-1)
+sbt	0 of 1 runs failed, 297 s per run, 53 builds in the last run, warnings: 
+nofix	0 of 2 runs failed, 292 s per run, 52 builds in the last run, warnings: 
+seed	without a seed: the same values in every run, seed 1: the same values in every run
+race	[-j 0]: 6 of 3000 pool aborts, 0 other aborts, 0 other errors, 0.145 s/run, p=0.971; [--build-jobs 0 --verilate-jobs 1]: 0 of 3000 pool aborts, 0 other aborts, 0 other errors, 0.143 s/run, p=0.115

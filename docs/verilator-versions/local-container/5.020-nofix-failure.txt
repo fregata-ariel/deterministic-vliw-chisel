@@ -1,0 +1,8 @@
+[info] WriteReservationsSpec:
+[info] - a claim with latency L marks the register in cycles s+1 .. s+L-1 only *** FAILED ***
+[info] %Error: Internal Error: attempted to destroy locked Thread Pool
+[info] %Error: Verilator aborted. Suggest trying --debug --gdbbt
+[info] %Error: Command Failed ulimit -s unlimited 2>/dev/null; exec /opt/verilator/5.020/bin/verilator_bin --cc --exe --build -o ../simulation --top-module svsimTestbench --Mdir verilated-sources --assert -j 0 +incdir+build/chiselsim/WriteReservationsSpec/a-claim-with-latency-L-marks-the-register-in
+[info] make: *** [Makefile:12: simulation] Error 255
+[info] *** 1 TEST FAILED ***
+[error] Failed tests:
