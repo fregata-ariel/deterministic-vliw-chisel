@@ -15,3 +15,8 @@ verifier-l10-ignored	compiler/src/main/scala/vliw/compiler/Verifier.scala	st.cyc
 model-l9-unit-free	sim/src/main/scala/vliw/sim/ReferenceModel.scala	state.unitFreeAt(m) = s + machine.operation(m).ii	state.unitFreeAt(m) = s + 1	the model ignores the II
 model-l10-ignored	sim/src/main/scala/vliw/sim/ReferenceModel.scala	op.target == Right(addr) && op.issue < s	op.target == Right(addr) && op.issue < s - 1	the model lets a load read a word being stored
 hw-decoder-swap-sources	hw/src/main/scala/vliw/hw/Decoder.scala	  io.out.rs1 := rs1\n  io.out.rs2 := rs2	  io.out.rs1 := rs2\n  io.out.rs2 := rs1	the RTL decoder swaps rs1 and rs2 (ADD and MUL results unchanged)
+fixed-done-early	hw/src/main/scala/vliw/hw/FixedPipeline.scala	when(cycle === p.completion.U) {	when(cycle === (p.completion - 1).U) {	the fixed pipeline raises done one cycle early (#75)
+fixed-commit-late	hw/src/main/scala/vliw/hw/FixedPlan.scala	op.issue + machine.operation(op.mnemonic).latency - 1	op.issue + machine.operation(op.mnemonic).latency	the fixed pipeline captures every value one cycle late
+fixed-b-reads-a	hw/src/main/scala/vliw/hw/FixedPipeline.scala	compute.io.b := operand(computes.map(c => c.issue -> c.b))	compute.io.b := operand(computes.map(c => c.issue -> c.a))	the fixed pipeline reads the first operand as the second
+fixed-plan-l5-missed	hw/src/main/scala/vliw/hw/FixedPlan.scala	case ((p, b), ws) if ws.size > 1 =>	case ((p, b), ws) if ws.size > 2 =>	the plan check accepts two writes on one write-back port at one boundary
+fixed-sub-as-add	hw/src/main/scala/vliw/hw/FixedPipeline.scala	Mux(kindIn("SUB"), ComputeKind.Sub, ComputeKind.Add)	Mux(false.B, ComputeKind.Sub, ComputeKind.Add)	the fixed pipeline computes SUB as ADD

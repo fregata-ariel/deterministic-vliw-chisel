@@ -90,4 +90,17 @@ expect 0 '^m-first +killed' '^killed: 1, survived: 0, error: 0, stale: 0'
 run 'pass pass' "$work/logs4" m-first
 expect 1 '^m-first +SURVIVED' '^killed: 0, survived: 1, error: 0, stale: 0'
 
+# MUTATION_SHARD k/n runs the mutant rows k, k+n, ...; with mutant ids, both selections apply.
+MUTATION_SHARD=1/2 run 'pass kill' "$work/logs5"
+expect 1 '^m-first +killed' '^m-stale +STALE' '^killed: 1, survived: 0, error: 0, stale: 1'
+grep -q m-second <<<"$out" && die "shard 1/2 ran m-second:"$'\n'"$out"
+MUTATION_SHARD=2/2 run 'pass kill' "$work/logs6"
+expect 0 '^m-second +killed' '^killed: 1, survived: 0, error: 0, stale: 0'
+MUTATION_SHARD=3/3 run 'pass' "$work/logs7" m-first m-second
+expect 0 '^killed: 0, survived: 0, error: 0, stale: 0'
+for bad in 0/2 3/2 1/0 x 1/2/3; do
+  MUTATION_SHARD="$bad" run '' "$work/logs8"
+  expect 2 'MUTATION_SHARD must be k/n'
+done
+
 echo 'mutation-check.sh self-test passed'

@@ -57,6 +57,7 @@
 | `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL） |
 | `crosscheck/BenchmarkSpec` | `benchmarks/` の記録がソースから生成し直した内容と一致し、記録した命令列が参照モデルと RTL で期待どおりになること |
 | `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと |
+| `crosscheck/FixedPipelineKernelSpec` | ベンチマークの固定パイプライン（#75）を ChiselSim で実行し、乱数・全0・全1の入力で DSL の参照実装と同じ出力を、計画どおりの cycles と発行・書戻しの cycle で出すこと。FIR の係数を変えても同じ回路で正しいこと（係数可変） |
 | `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成）。RTL のタイミングが入力値に依存しないこと |
 
 RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
@@ -75,7 +76,7 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 
 ## mutation チェック
 
-`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**テストの失敗として**失敗することを確かめる。mutant ごとに全テストを実行するため時間がかかる（15 mutant と、最初の mutant なしの1回で、CI 上約50分）。1回の `sbt test` は `MUTATION_TIMEOUT`（既定 1200 秒）で打ち切る。CI では、ジョブの timeout が120分、mutation のステップの timeout が110分である（打ち切られてもログを残せるようにするため）。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義・スクリプトを変えたPRでだけ実行し、required にはしない。
+`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**テストの失敗として**失敗することを確かめる。mutant ごとに全テストを実行するため時間がかかる（CI 上、1回の `sbt test` が約5.5分、最初の mutant なしの1回がコンパイルを含めて約10分）。1回の `sbt test` は `MUTATION_TIMEOUT`（既定 1200 秒）で打ち切る。`MUTATION_SHARD=k/n` を与えると、`mutants.tsv` の mutant の行のうち k, k+n, k+2n, … 番目（1 から数える）だけを実行する。CI では mutant を3つの shard に分けて並列に実行し、shard ごとに最初の mutant なしの1回を行う（20 mutant で shard 当たり約50分）。shard ごとに、ジョブの timeout が120分、mutation のステップの timeout が110分である（打ち切られてもログを残せるようにするため）。ログは shard ごとの artifact（`mutation-logs-shard<k>-attempt<n>`）に残る。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義・スクリプトを変えたPRでだけ実行し、required にはしない。
 
 `sbt test` が 0 以外で終わることだけでは、mutant を検出したとは言えない。Verilator・make のビルドの失敗も、ChiselSim ではそのテストの `*** FAILED ***` として表示されるからである（#74）。そこで、各実行の JUnit レポート（`*/target/test-reports`）と sbt のログを `scripts/mutation-classify.py` が読み、失敗したテストごとに原因を分類して、mutant を次のどれかと判定する。
 

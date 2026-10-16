@@ -17,6 +17,12 @@ jobs:
   mutation:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    # One full test run takes about 5.5 minutes on CI, so the mutants are split into shards that run
+    # in parallel, each with its own unmutated run first (MUTATION_SHARD in scripts/mutation-check.sh).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -33,13 +39,14 @@ jobs:
         timeout-minutes: 110
         env:
           MUTATION_LOG_DIR: build/mutation-logs
+          MUTATION_SHARD: ${{ matrix.shard }}/3
       # Always: results.tsv and, per mutant, the sbt log, the JUnit reports, the classification and
       # the ChiselSim logs of failed builds.
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutation-logs-attempt${{ github.run_attempt }}
+          name: mutation-logs-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
           path: build/mutation-logs/
           if-no-files-found: ignore
           retention-days: 14
