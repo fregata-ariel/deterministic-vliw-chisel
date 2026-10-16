@@ -13,12 +13,16 @@ object Metrics {
   private def rate(n: Long, d: Long): ujson.Value =
     if (d == 0) ujson.Null else ujson.Num(math.round(n.toDouble / d * 1e6) / 1e6)
 
-  /** Builds the record for a completed run of `words` on `machine`. */
+  /** Builds the record for a completed run of `words` on `machine`. `ii` is the steady-state
+    * initiation interval of a modulo-scheduled loop, as the caller has confirmed it (#68); None for
+    * straight-line code.
+    */
   def of(
       machine: MachineDescription,
       words: Vector[Long],
       run: Execution,
-      name: String
+      name: String,
+      ii: Option[Int] = None
   ): ujson.Obj = {
     val bundles = new BundleCodec(machine).decodeAll(words).fold(e => sys.error(e), identity)
     val n = bundles.size.toLong
@@ -93,7 +97,7 @@ object Metrics {
         "accesses_per_cycle" -> rate((loads.size + stores.size).toLong, cycles),
         "banks" -> ujson.Arr.from(banks)
       ),
-      "ii" -> ujson.Null,
+      "ii" -> ii.fold[ujson.Value](ujson.Null)(ujson.Num(_)),
       "rtl" -> ujson.Null
     )
   }

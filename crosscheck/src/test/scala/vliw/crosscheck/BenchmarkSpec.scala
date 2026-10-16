@@ -19,6 +19,7 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = BenchmarkRecords.machine
   private val records = BenchmarkRecords.records(machine)
   private val fixed = BenchmarkRecords.fixed(machine)
+  private val modulo = ModuloRecords.records(machine)
   private val regenerate = "sbt \"crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords\""
 
   /** The generator section depends on the JVM that ran it; everything else must match exactly. */
@@ -30,7 +31,7 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     } else text
 
   test("benchmarks/ holds exactly the generated records") {
-    BenchmarkRecords.files(records, fixed, machine).foreach { case (path, expected) =>
+    BenchmarkRecords.files(records, fixed, machine, Some(modulo)).foreach { case (path, expected) =>
       assert(Files.exists(path), s"$path is missing; run $regenerate")
       val actual = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
       assert(
@@ -49,6 +50,40 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
       assert(tc.expect.cycles.contains(run.cycles), r.name)
       tc.expect.memory.foreach { case (a, v) =>
         assert(run.memory(a).contains(v), s"${r.name} [$a]")
+      }
+    }
+  }
+
+  test("the Modulo Scheduling records use the list-scheduling layout and inputs, and the II") {
+    modulo.foreach { r =>
+      val list =
+        records.find(x => x.kernel == r.kernel.unroll && x.mode == BenchmarkRecords.Mode.Vliw).get
+      assert(r.compiled.layout == list.compiled.layout, r.name)
+      assert(r.testCase("inputs") == list.testCase("inputs"), r.name)
+      assert(r.metrics("ii").num.toInt == r.compiled.ii, r.name)
+    }
+    assert(records.forall(_.metrics("ii").isNull))
+  }
+
+  test("the Modulo Scheduling test cases hold on the reference model and the RTL") {
+    val cases = modulo.map(r =>
+      r.name -> TestCase
+        .parse(ujson.write(r.testCase))
+        .fold(es => fail(es.mkString("\n")), identity)
+    )
+    cases.foreach { case (name, tc) =>
+      val run =
+        ReferenceModel.run(tc.machine, tc.words, tc.inputs).fold(v => fail(s"$name: $v"), identity)
+      assert(tc.expect.cycles.contains(run.cycles), name)
+      tc.expect.memory.foreach { case (a, v) => assert(run.memory(a).contains(v), s"$name [$a]") }
+    }
+    simulate(new Core(CoreParams(machine))) { dut =>
+      cases.foreach { case (name, tc) =>
+        val run = CoreDriver.run(dut, machine, tc.words, tc.inputs, tc.expect.memory.keySet)
+        assert(run.violations.isEmpty && tc.expect.cycles.contains(run.cycles), name)
+        tc.expect.memory.foreach { case (a, v) =>
+          assert(run.memory(a) == BigInt(v), s"$name [$a]")
+        }
       }
     }
   }

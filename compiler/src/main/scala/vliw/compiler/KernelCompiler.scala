@@ -76,16 +76,25 @@ object KernelCompiler {
       layout: MemoryLayout,
       bundles: Vector[Bundle]
   ): Either[String, Vector[Long]] =
+    verified(machine, layout.kernel.name, declaration(layout), bundles)
+
+  /** [[checked]] with the declaration given: for code whose inputs are not a kernel's layout. */
+  def verified(
+      machine: MachineDescription,
+      name: String,
+      declaration: Verifier.Declaration,
+      bundles: Vector[Bundle]
+  ): Either[String, Vector[Long]] =
     new BundleCodec(machine)
       .encodeAll(bundles)
       .left
-      .map(e => s"compiler error: ${layout.kernel.name} does not encode: $e")
+      .map(e => s"compiler error: $name does not encode: $e")
       .flatMap { words =>
-        val findings = Verifier.verify(machine, words, declaration(layout))
+        val findings = Verifier.verify(machine, words, declaration)
         Either.cond(
           findings.isEmpty,
           words,
-          (s"compiler error: the verifier rejects the code generated for ${layout.kernel.name}" +:
+          (s"compiler error: the verifier rejects the code generated for $name" +:
             findings.map(f => s"  $f")).mkString("\n")
         )
       }
@@ -110,20 +119,44 @@ object KernelCompiler {
       machinePath: Option[String],
       name: Option[String] = None
   ): Either[String, ujson.Obj] =
+    testCaseOf(
+      c.kernel,
+      c.layout,
+      c.bundles,
+      c.cycles,
+      s"generated from the DSL kernel ${c.kernel.name}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (${c.allocated.attempt})",
+      in,
+      machinePath,
+      name.getOrElse(c.kernel.name)
+    )
+
+  /** The test case of a program for `kernel` in `layout` that the scheduler predicts to take
+    * `cycles`; the expected outputs come from the DSL reference implementation.
+    */
+  def testCaseOf(
+      kernel: Kernel,
+      layout: MemoryLayout,
+      bundles: Vector[Bundle],
+      cycles: Int,
+      description: String,
+      in: Values,
+      machinePath: Option[String],
+      name: String
+  ): Either[String, ujson.Obj] =
     for {
-      image <- c.layout.memoryImage(in)
-      out <- Interpreter.run(c.kernel, in)
+      image <- layout.memoryImage(in)
+      out <- Interpreter.run(kernel, in)
     } yield {
       val expectedMemory = for {
-        o <- c.kernel.outputs
+        o <- kernel.outputs
         i <- 0 until o.length
-      } yield c.layout.elem(o.name, i).toString -> ujson.Num(out.arrays(o.name)(i).toDouble)
+      } yield layout.elem(o.name, i).toString -> ujson.Num(out.arrays(o.name)(i).toDouble)
       val doc = ujson.Obj(
         "format" -> TestCase.Format,
-        "name" -> ujson.Str(name.getOrElse(c.kernel.name)),
-        "description" -> s"generated from the DSL kernel ${c.kernel.name}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (${c.allocated.attempt})",
+        "name" -> ujson.Str(name),
+        "description" -> description,
         "program" -> ujson.Arr.from(
-          Disassembler.program(c.bundles).linesIterator.map(ujson.Str(_))
+          Disassembler.program(bundles).linesIterator.map(ujson.Str(_))
         ),
         "inputs" -> ujson.Obj(
           "registers" -> ujson.Obj(),
@@ -133,7 +166,7 @@ object KernelCompiler {
         ),
         "expect" -> ujson.Obj(
           "verdict" -> "legal",
-          "cycles" -> c.cycles,
+          "cycles" -> cycles,
           "memory" -> ujson.Obj.from(expectedMemory)
         )
       )
