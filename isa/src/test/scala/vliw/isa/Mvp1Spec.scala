@@ -37,7 +37,7 @@ class Mvp1Spec extends AnyFunSuite {
       (machine.machineId, machine.revision, machine.status) == ((
         "vliw2-i32-sp2-mac",
         1,
-        "proposed"
+        "frozen"
       ))
     )
     assert(machine.hasMac && !mvp0.hasMac)
@@ -65,10 +65,18 @@ class Mvp1Spec extends AnyFunSuite {
   }
 
   test("the mvp-1 variants differ from the default only in read ports or MAC latency") {
+    // The variants are test machines and stay proposed; config/machine-mvp1.json is frozen.
     val rp4 = loadOk(read("tests/machines/mvp1_rp4.json"))
     val mac3 = loadOk(read("tests/machines/mvp1_mac3.json"))
+    assert(rp4.status == "proposed" && mac3.status == "proposed")
     assert(
-      rp4.copy(machineId = machine.machineId, readPorts = 3, canonicalJson = "", hash = "") ==
+      rp4.copy(
+        machineId = machine.machineId,
+        status = machine.status,
+        readPorts = 3,
+        canonicalJson = "",
+        hash = ""
+      ) ==
         machine.copy(canonicalJson = "", hash = "")
     )
     assert(rp4.readPorts == 4)
@@ -76,6 +84,7 @@ class Mvp1Spec extends AnyFunSuite {
     assert(
       mac3.copy(
         machineId = machine.machineId,
+        status = machine.status,
         operations = mac3.operations.updated("MAC", mac),
         canonicalJson = "",
         hash = ""

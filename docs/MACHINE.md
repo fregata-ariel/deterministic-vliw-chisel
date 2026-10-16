@@ -90,7 +90,7 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 
 | ファイル | 内容 |
 |---|---|
-| `config/machine-mvp1.json` | `vliw2-i32-sp2-mac`、revision 1、`proposed`。`read_ports` 3、MAC は opcode 4・latency 2・ii 1、ほかは `config/machine.json` と同じ。#77 Phase A の後で `frozen` にする（#57 で方式を変えるときは revision を上げる） |
+| `config/machine-mvp1.json` | `vliw2-i32-sp2-mac`、revision 1、`frozen`（#77 Phase A で凍結した）。`read_ports` 3、MAC は opcode 4・latency 2・ii 1、ほかは `config/machine.json` と同じ。#57 で方式を変えるときは revision を上げる（ADR-0018） |
 | `tests/machines/` の mvp-1 の変種 | `read_ports` だけ4にしたもの（制約なしの比較用。verifier と参照モデルだけで動かす）と、MAC の latency だけ3にしたもの（感度の確認）（#77） |
 
 ## 実装ごとの対応範囲
