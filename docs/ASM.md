@@ -1,6 +1,6 @@
-# アセンブリ構文（mvp-0）
+# アセンブリ構文（mvp-0、mvp-1）
 
-実装は `vliw.isa.Assembler` / `vliw.isa.Disassembler`。この構文は命令の表記だけを定め、合法性（[ISA.md](ISA.md) の規則 L2〜L8）は判定しない。それは verifier と参照モデルの役割である。
+実装は `vliw.isa.Assembler` / `vliw.isa.Disassembler`。この構文は命令の表記だけを定め、合法性（[ISA.md](ISA.md) の規則 L2〜L11）は判定しない。それは verifier と参照モデルの役割である。
 
 ## 行
 
@@ -57,5 +57,11 @@
 ```sh
 sbt "isa/run asm prog.asm prog.hex"    # .hex / .bin は拡張子で選ぶ
 sbt "isa/run disasm prog.hex"
+sbt "isa/run asm mac.asm mac.hex --machine config/machine-mvp1.json"  # mvp-1（mac を書く）
+sbt "isa/run disasm mac.hex --machine config/machine-mvp1.json"
 sbt "isa/run case tests/cases/isa_example.json"
 ```
+
+- `asm` と `disasm` は、既定で `config/machine.json`（mvp-0）を使う。mvp-0 では `mac` はエラーになり、MAC の命令語は「unknown opcode 4」で読めない。
+- `--machine <machine.json>` で別の machine description を使う。`compiler/run compile` と同じオプションで、オペランドの前にも後にも書ける。
+- `case` は、テストケースの `machine`（[TESTCASE.md](TESTCASE.md)）を使う。

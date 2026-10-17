@@ -65,6 +65,7 @@ sbt test                  # テストだけを実行
 sbt "isa/run machine"                                   # machine description の検証とhash
 sbt "isa/run asm prog.asm prog.hex"                     # アセンブル（.hex / .bin）
 sbt "isa/run disasm prog.hex"                           # 逆アセンブル
+sbt "isa/run asm mac.asm mac.hex --machine config/machine-mvp1.json"  # mvp-1（MAC）は --machine で指定（disasm も同じ）
 sbt "compiler/run verify tests/cases/isa_example.json"  # 合法性の静的検査
 sbt "compiler/run compile saxpy8 fir4x8 matmul3"       # DSL のカーネルを命令列にする（generated/kernels/）
 sbt "sim/run tests/cases/isa_example.json --trace out.jsonl --metrics out.json"  # 参照モデルで実行
