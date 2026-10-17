@@ -32,10 +32,19 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
     k.scalars.map(_ -> word(rng)).toMap
   )
 
+  /** The `saxpy(n)` rows of MODULO.md's series that have a program on the default machine and are
+    * not in `LoopBenchmarks.all` (#119): the values of those rows are checked here.
+    */
+  private val series: Seq[LoopKernel] = ModuloRecords.series
+    .map(LoopBenchmarks.saxpy)
+    .filterNot(k => LoopBenchmarks.all.exists(_.name == k.name))
+    .filter(ModuloCompiler.compile(_, machine).isRight)
+
   /** The compiled loops of a machine; matmul3 over m does not fit slow_units (ModuloSchedulerSpec).
+    * The default machine also compiles `series`.
     */
   private def compiled(m: MachineDescription): Seq[ModuloCompiled] =
-    LoopBenchmarks.all.flatMap { k =>
+    (LoopBenchmarks.all ++ (if (m == machine) series else Nil)).flatMap { k =>
       ModuloCompiler.compile(k, m) match {
         case Right(c)                                                  => Some(c)
         case Left(e) if m.machineId.endsWith("slow") && k.index == "m" => None
@@ -47,6 +56,7 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
 
   test("on the reference model: DSL results, the scheduled cycles, and the II in the trace") {
     val rng = new Random(68)
+    assert(series.map(_.trips) == Seq(16, 32, 64), "the series rows of MODULO.md with a program")
     // With three registers only saxpy8 (at II 6) and product8 fit (ModuloSchedulerSpec).
     val regs3 = machineFile("regs3.json")
     val few = Seq(LoopBenchmarks.saxpy(8), LoopBenchmarks.product(8))
