@@ -106,6 +106,18 @@ object MacRecords {
   /** The bundles with a MAC and a ST. */
   def macWithSt(bundles: Seq[Bundle]): Int = bundles.count(hasMacAndSt)
 
+  /** Whether rule L11 can hold back an ST on `m`: a bundle reads at most four registers with MAC (a
+    * MAC and a ST) and three without, and `m` has fewer read ports.
+    */
+  def readPortsBind(m: MachineDescription): Boolean = m.readPorts < (if (m.hasMac) 4 else 3)
+
+  /** Whether `m` allows a MAC and a ST in one bundle. */
+  def allowsMacWithSt(m: MachineDescription): Boolean = m.hasMac && !readPortsBind(m)
+
+  /** The bundles by register reads, 0 to 4, counted from the program. */
+  def bundlesByReads(bundles: Seq[Bundle]): Vector[Int] =
+    (0 to 4).map(k => bundles.count(reads(_) == k)).toVector
+
   /** The bundles by register reads, 0 to 4: from the vliw-metrics/2 record, or counted from the
     * program for mvp-0, whose vliw-metrics/1 record has no such field.
     */
@@ -113,7 +125,7 @@ object MacRecords {
     metrics("issue").obj.get("register_reads") match {
       case Some(r) =>
         (0 to 4).map(k => r("bundles_by_reads").obj.get(k.toString).fold(0)(_.num.toInt)).toVector
-      case None => (0 to 4).map(k => bundles.count(reads(_) == k)).toVector
+      case None => bundlesByReads(bundles)
     }
 
   /** The L11 findings, and the other findings, of the verifier on `on` for `words` (a program of
@@ -154,6 +166,10 @@ object MacRecords {
   private def op(r: Record, mnemonic: String): Int =
     r.metrics("issue")("by_operation").obj.get(mnemonic).fold(0)(_.num.toInt)
   private def row(cells: Seq[String]) = cells.mkString("| ", " | ", " |")
+
+  /** The bundles by reads as `0 / 1 / 2 / 3 / 4`, "-" for more reads than `limit` read ports. */
+  private def byReadsCell(by: Vector[Int], limit: Int) =
+    by.indices.map(i => if (i > limit) "-" else by(i).toString).mkString(" / ")
   private def head(cells: Seq[String]) =
     s"${row(cells)}\n|${cells.map(_ => "---|").mkString}"
 
@@ -252,7 +268,6 @@ MAC の latency と II は、machine description の `operations.MAC` の契約�
       val r = record(s, k, mode)
       val c = r.compiled
       val by = byReads(r.metrics, c.bundles)
-      val limit = s.config.machine.readPorts
       row(
         Seq(
           s"`${k.name}`",
@@ -265,7 +280,7 @@ MAC の latency と II は、machine description の `operations.MAC` の契約�
           if (s.config.machine.hasMac) r.metrics("issue")("mac_with_st").num.toInt.toString
           else "-",
           c.bundles.map(reads).sum.toString,
-          by.indices.map(i => if (i > limit) "-" else by(i).toString).mkString(" / ")
+          byReadsCell(by, s.config.machine.readPorts)
         )
       )
     }
@@ -321,13 +336,49 @@ ${ports.mkString("\n")}
 - 読出しはオペランドの欄の数（ADD/SUB/MUL は2、MAC は3、ST は1）の合計で、読出しの数ごとの bundle（HALT の bundle を含む）とともに、MAC のある構成は `vliw-metrics/2` の `issue.register_reads`、mvp-0 は命令列から同じ数え方で数えた値である（`vliw-metrics/1` に、この欄は無い）。「-」は `read_ports` を超える数である"""
   }
 
-  /** The fixed series: every strategy in every configuration, a table per kernel and mode. */
+  /** The fixed series: every strategy in every configuration, two tables per kernel and mode (the
+    * cycles, then the write-back conflicts and the read-port use of the same rows).
+    */
   private def fixedSeries(ss: Seq[Series]): String = {
     val base = ss.head
     val others = ss.tail
+    // The configurations on which L11 can hold back an ST, and those that allow a MAC and a ST.
+    val bound = ss.filter(s => readPortsBind(s.config.machine))
+    val allowing = ss.filter(s => allowsMacWithSt(s.config.machine))
+    def names(of: Seq[Series], sep: String) = of.map(_.config.name).mkString(sep)
+    def attemptCells(st: BenchmarkRecords.Strategy) = Seq(
+      st.priority.name,
+      st.limit.fold("なし")(_.registers.toString),
+      st.limit.fold("-")(_.loadReserve.toString)
+    )
     val tables = for (k <- Benchmarks.all; mode <- Mode.all) yield {
       val chosen = ss.map(s => s.config.name -> record(s, k, mode).compiled.allocated.attempt).toMap
       val strategies = BenchmarkRecords.strategies(base.config.machine)
+      // One cell per configuration of `of`, "-" where the row does not fit.
+      def each(of: Seq[Series], st: BenchmarkRecords.Strategy)(cell: CompiledKernel => String) =
+        of.map(s => result(s, k, mode, st).fold(_ => "-", cell))
+      // The rows of each configuration of `of` where `count` is not 0, and its total.
+      def nonZero(of: Seq[Series])(count: CompiledKernel => Int) = of
+        .map { s =>
+          val ns = strategies.flatMap(st => result(s, k, mode, st).toOption).map(count)
+          s"${s.config.name} ${ns.count(_ > 0)}（合計 ${ns.sum}）"
+        }
+        .mkString("、")
+      val portLines = strategies.map { st =>
+        row(
+          attemptCells(st) ++ Seq(
+            each(ss, st)(_.allocated.schedule.heldByWritePort.toString).mkString(" / "),
+            each(bound, st)(_.allocated.schedule.heldByReadPorts.toString).mkString(" / "),
+            each(allowing, st)(c => macWithSt(c.bundles).toString).mkString(" / ")
+          ) ++ ss.map(s =>
+            result(s, k, mode, st)
+              .fold(
+                _ => "-",
+                c => byReadsCell(bundlesByReads(c.bundles), s.config.machine.readPorts)
+              )
+          )
+        )
+      }
       val lines = strategies.map { st =>
         val cells = ss.map { s =>
           result(s, k, mode, st)
@@ -339,13 +390,7 @@ ${ports.mkString("\n")}
             case _                    => "-"
           }
         }
-        row(
-          Seq(
-            st.priority.name,
-            st.limit.fold("なし")(_.registers.toString),
-            st.limit.fold("-")(_.loadReserve.toString)
-          ) ++ cells ++ ratios
-        )
+        row(attemptCells(st) ++ cells ++ ratios)
       }
       val pairs = others.map { s =>
         val both = strategies.flatMap { st =>
@@ -369,6 +414,9 @@ ${ports.mkString("\n")}
           .count(c => loads(c) > c.dag.loads)
         s"${s.config.name} $n"
       }
+      val writeHeld = nonZero(ss)(_.allocated.schedule.heldByWritePort)
+      val readHeld = nonZero(bound)(_.allocated.schedule.heldByReadPorts)
+      val macSt = nonZero(allowing)(c => macWithSt(c.bundles))
       s"""### `${k.name}`（${mode.name}）
 
 ${head(
@@ -378,11 +426,41 @@ ${head(
 ${lines.mkString("\n")}
 
 - ${pairs.mkString("\n- ")}
-- 不成立の行は ${failed.mkString("、")}。LD を複製した行は ${copied.mkString("、")}"""
+- 不成立の行は ${failed.mkString("、")}。LD を複製した行は ${copied.mkString("、")}
+
+同じ行の書戻しの衝突と読出しポート:
+
+${head(
+          Seq(
+            "優先度",
+            "レジスタ上限",
+            "load reserve",
+            s"`heldByWritePort`（${names(ss, " / ")}）",
+            s"`heldByReadPorts`（${names(bound, " / ")}）",
+            s"MAC と ST の bundle（${names(allowing, " / ")}）"
+          ) ++ ss.map(s => s"読出しの数ごとの bundle（${s.config.name}）")
+        )}
+${portLines.mkString("\n")}
+
+- `heldByWritePort` が0でない行: $writeHeld
+- `heldByReadPorts` が0でない行: $readHeld。MAC と ST の bundle がある行: $macSt"""
     }
+    val boundNames = names(bound, "、")
+    val freeNames = names(ss.diff(bound), "、")
+    val allowingNames = names(allowing, "、")
+    val freeAnd = names(ss.diff(bound), " と ")
     s"""## list scheduling: 戦略を固定した系列
 
 各行は1つの試行（優先度、レジスタ上限、load reserve）で、${ss.size}つの構成に同じ組を与えた cycles を並べる。どの構成もレジスタは同じ数なので、行は同じである。行の順はコンパイラが試す順（`RegisterAllocator.attempts`）である。**太字**は、その構成の「方式ごとに cycles 最小の系列」で選ばれた試行、「（LD n）」は、その試行が LD を複製し、カーネルの DAG より多い n 個の LD を発行することを示す（#70）。比は、両方の行が成立するときだけ書く。片方の構成だけが LD を複製する行や、複製した LD の数が違う行の比は、複製の違いの効果も含む。「不成立」の理由は [RESULTS.md](RESULTS.md) と同じで、別の試行で置き換えない。どの行の命令列も verifier が合法と判定し、参照モデルで期待した出力と、スケジューラの予測どおりの cycles になることを `BenchmarkSpec` が確かめる（RTL での確認は、方式ごとに cycles 最小の系列の記録だけ）。
+
+カーネルと方式ごとに表は2つある。2つ目の表は、1つ目と同じ行を同じ順に並べ、各行の書戻しの衝突と読出しポートの使い方を書く。欄の定義は「スロットとポート」と同じで、行が成立しない構成は「-」である。
+
+- `heldByWritePort` は、準備のできた Compute のノードが、書戻しポート（L5）以外の制約を全て満たすのに、その境界の Compute の書戻しポートが予約済みなので置けなかったサイクルの数である（書戻しの衝突）
+- `heldByReadPorts` は、準備のできた ST が、読出しポート（L11）以外の制約を全て満たすのに、その bundle の読出しが `read_ports` を超えるので置けなかったサイクルの数である。MAC があり、`read_ports` が MAC と ST の読出し4より少ない構成（$boundNames）だけに書く。ほかの構成（$freeNames）では、bundle の読出しが `read_ports` を超えないので、常に0である
+- MAC と ST の bundle は、MAC と ST を同じ bundle に置ける構成（$allowingNames）だけに書く。`read_ports` 3 の構成では常に0である。$allowingNames では、読出し4の bundle の数と同じである
+- 読出しの数ごとの bundle（0 / 1 / 2 / 3 / 4）は、その行の命令列から数えた値である。HALT の bundle を含み、合計は cycles である。「-」は `read_ports` を超える数である。読出しの合計は、その構成のカーネルの DAG で決まり、行によらない（LD は読まない。「スロットとポート」の読出しの値）
+- 各構成の選ばれた試行（1つ目の表の太字）の行の値は、「スロットとポート」の値と同じである
+- 読出しの数ごとの bundle の合計と読出しの合計、$freeAnd の `heldByReadPorts`、選ばれた試行の行の値は、`BenchmarkSpec` が確かめる
 
 ${tables.mkString("\n\n")}"""
   }
@@ -473,9 +551,25 @@ ${lines.mkString("\n")}
       }
       s"`${k.name}` ${strategies.size} 行のうち $same 行"
     }
+    val differ = for {
+      k <- Benchmarks.all
+      mode <- Mode.all
+      a = record(rp3, k, mode).compiled
+      b = record(rp4, k, mode).compiled
+      if attemptOf(a) != attemptOf(b)
+    } yield (s"`${k.name}`（${mode.name}）", a, b)
+    val differNote =
+      if (differ.isEmpty) "どのカーネルと方式でも、mvp-1 と rp4 で同じ試行が選ばれた。"
+      else {
+        val copies = differ.collect {
+          case (w, a, b) if loads(a) != loads(b) =>
+            s"${w}は LD の数も違い（mvp-1 ${loads(a)}、rp4 ${loads(b)}）、LD の複製の違いの効果も含む。"
+        }
+        s"試行が「（違う）」の行（${differ.map(_._1).mkString("、")}）の差は、L11 の制約の効果だけでなく、試行の違いの効果も含む。${copies.mkString}同じ試行どうしの差は、下の「戦略を固定した系列」にある。"
+      }
     s"""## 読出しポートの制約（mvp-1 と rp4）
 
-mvp-1 と rp4 は `read_ports` だけが違い、同じカーネル・入力・配置・DAG・試行で比べる（融合は読出しポートによらない）。差は L11 の制約（MAC と ST を同じ bundle に置けない）と、それによるスケジュールの違いの効果である。制約が当たった bundle の数は2通りに数える。mvp-1 の `heldByReadPorts`（ST が読出しポートだけで待ったサイクル）と、rp4 の命令列の MAC と ST の bundle（3本では置けない bundle）である。rp4 の命令列を mvp-1 の machine で verifier にかけると、MAC と ST の bundle ごとにちょうど1つ L11 の違反になり、ほかの違反は無い（`BenchmarkSpec` が全ての rp4 の命令列で確かめる）。
+mvp-1 と rp4 は `read_ports` だけが違い、同じカーネル・入力・配置・DAG で比べる（融合は読出しポートによらない）。戦略を固定した系列は同じ試行どうしの比較で、差は L11 の制約（MAC と ST を同じ bundle に置けない）と、それによるスケジュールの違いの効果である。方式ごとに cycles 最小の系列では、選ばれた試行が mvp-1 と rp4 で違うことがある。制約が当たった bundle の数は2通りに数える。mvp-1 の `heldByReadPorts`（ST が読出しポートだけで待ったサイクル）と、rp4 の命令列の MAC と ST の bundle（3本では置けない bundle）である。rp4 の命令列を mvp-1 の machine で verifier にかけると、MAC と ST の bundle ごとにちょうど1つ L11 の違反になり、ほかの違反は無い（`BenchmarkSpec` が全ての rp4 の命令列で確かめる）。
 
 ### 方式ごとに cycles 最小の系列
 
@@ -493,6 +587,8 @@ ${head(
         )
       )}
 ${fewestRows.mkString("\n")}
+
+$differNote
 
 ### 戦略を固定した系列
 
@@ -647,7 +743,8 @@ mvp-1 と rp4 は同じグラフをスケジュールする。$constrainedNote$s
 
   /** The estimates of the proposal that ADR-0018 rests on (#69, a throwaway port of `Dag.build` and
     * `ListScheduler`, 16 registers, no rematerialization): the fewest cycles in vliw by kernel and
-    * configuration.
+    * configuration. ADR-0018 states those of mvp-0, mvp-1 and rp4; mac3's, and the rows of
+    * `RowEstimates`, are in the proposal's comment only.
     */
   val Estimates: Map[(String, String), Int] = Map(
     ("saxpy8", "mvp-0") -> 26,
@@ -742,7 +839,7 @@ mvp-1 と rp4 は同じグラフをスケジュールする。$constrainedNote$s
 
 ### ADR-0018 の見積りと測定
 
-ADR-0018 の見積りは、#69 の提案のときに、使い捨ての実装（`Dag.build` と `ListScheduler` を移したもの）で求めた値である。条件は16レジスタで、rematerialization を入れていない。ADR-0018 は、このうち `fir4x8` と `matmul3` の mvp-1 と rp4 の値を書いた。見積りと比べるのは、LD を複製しない行の最小である。$agree
+見積りは、ADR-0018 のもとになった #69 の提案のときに、使い捨ての実装（`Dag.build` と `ListScheduler` を移したもの）で求めた値である。条件は16レジスタで、rematerialization を入れていない。ADR-0018 の理由は、このうち `saxpy8`、`fir4x8`、`matmul3` の方式ごとに cycles 最小の値（mvp-0 → mvp-1・rp4）と、ループの ResMII を書いている。mac3 の値と、戦略を固定した系列の2行の値は、#69 の提案のコメントにだけある。見積りと比べるのは、LD を複製しない行の最小である。$agree
 
 方式ごとに cycles 最小（vliw）:
 

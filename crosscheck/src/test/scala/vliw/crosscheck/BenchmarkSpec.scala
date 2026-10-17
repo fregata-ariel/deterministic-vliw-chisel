@@ -352,6 +352,33 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     }
   }
 
+  test("the fixed series' write-back and read-port columns agree with the fewest-cycles records") {
+    for (s <- mac; f <- s.fixed; c <- f.result.toOption) {
+      val name = s"${f.kernel.name} ${f.mode.name} ${f.strategy} (${s.config.name})"
+      val r = s.records.find(x => x.kernel == f.kernel && x.mode == f.mode).get
+      val by = MacRecords.bundlesByReads(c.bundles)
+      // One bundle per cycle, HALT's included; the reads are the DAG's, whatever the row.
+      assert(by.sum == c.cycles, name)
+      assert(
+        c.bundles.map(MacRecords.reads).sum == r.compiled.bundles.map(MacRecords.reads).sum,
+        name
+      )
+      // Without MAC, or with four read ports, no bundle reads more than the read ports.
+      if (!MacRecords.readPortsBind(s.config.machine))
+        assert(c.allocated.schedule.heldByReadPorts == 0, name)
+      // The row of the chosen attempt has the record's counts and its vliw-metrics/2 reads.
+      if (c.allocated.attempt == r.compiled.allocated.attempt) {
+        val (a, b) = (c.allocated.schedule, r.compiled.allocated.schedule)
+        assert(a.heldByWritePort == b.heldByWritePort, name)
+        assert(a.heldByReadPorts == b.heldByReadPorts, name)
+        assert(by == MacRecords.byReads(r.metrics, r.compiled.bundles), name)
+      }
+    }
+    // The checks are not vacuous.
+    assert(mac.exists(s => !MacRecords.readPortsBind(s.config.machine) && s.config.machine.hasMac))
+    assert(mac.exists(_.fixed.exists(_.result.exists(_.allocated.schedule.heldByReadPorts > 0))))
+  }
+
   /** The recorded programs of a configuration: name, metrics and bundles. */
   private def programs(s: MacRecords.Series) =
     s.records.map(r => (r.name, r.metrics, r.compiled.bundles)) ++
