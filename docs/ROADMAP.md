@@ -7,8 +7,8 @@
 | 0 | machine schema、encoder/decoder、assembler、独立verifier、参照モデル | 命令のround-trip、ISA例の28/7cycles一致、不正スケジュール拒否（**完了**: [PHASE0.md](PHASE0.md)） |
 | 1 | Chisel RF、ALU/MUL、Scratchpad、PC、start/done、ChiselSim | RTLと参照モデルのRF/memory/commit traceが一致（**完了**: [PHASE1.md](PHASE1.md)） |
 | 2 | 小さなDSL、DAG、list scheduling、register allocation | SAXPY/FIR/行列積が自動命令生成で機能・サイクル一致（**完了**: [PHASE2.md](PHASE2.md)） |
-| 3 | Modulo Scheduling、MAC（SIMD は MAC の評価の後。ADR-0012） | プロローグ・定常・エピローグを検証しIIを測定（#66） |
-| 4 | DMA、Double Buffer、bank最適化 | 転送と演算を重畳し、開始条件・容量・帯域を契約化 |
+| 3 | Modulo Scheduling、MAC（SIMD は MAC の評価の後。ADR-0012） | プロローグ・定常・エピローグを検証しIIを測定（**完了**: [PHASE3.md](PHASE3.md)） |
+| 4 | DMA、Double Buffer、bank最適化（その前に、SIMD または複数 Compute スロットを MAC 単独と分けて比べる。#78、ADR-0012） | 転送と演算を重畳し、開始条件・容量・帯域を契約化（#109） |
 | 5 | 複数タイル、静的通信 | 通信遅延・経路・バッファ競合を共有モデルで検証 |
 
 ## Phase 0の最初の作業
