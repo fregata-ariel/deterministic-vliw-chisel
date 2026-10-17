@@ -286,7 +286,7 @@ vliw の、方式ごとに cycles 最小の値である。複製なしでは、1
 | MAC の L 3 | critical-path、上限なし | critical-path、上限16、reserve 1（複製あり） | critical-path、上限16、reserve 0 |
 
 - 16本では、ADR-0018 の見積り（`fir4x8` 65 → 40、`matmul3` 56 → 39（`read_ports` 3）・33（4）、`saxpy8` 26 → 27（3）・26（4））と一致する。ただし `read_ports` 4 の `fir4x8` は、複製（rematerialization）のある試行が 38 cycles になる。複製なしでは 40 cycles である（MAC の L 3 では 44 と 46）
-- MAC で同時に生きる値が減る。上限なしの `fir4x8` は、critical-path で20、program-order で13（mvp-0 では33）。mvp-1 の `fir4x8` は program-order の上限なしで16本に収まり、8本でも 40 cycles である
+- MAC で同時に生きる値が減る。上限なしの `fir4x8` は、critical-path で20、program-order で13（mvp-0 では critical-path で33、program-order で36）。mvp-1 の `fir4x8` は program-order の上限なしで16本に収まり、8本でも 40 cycles である
 - 選ばれた試行の `heldByReadPorts` は、mvp-1 の16本で `saxpy8` 7、`fir4x8` と `matmul3` 0 である。`read_ports` 3 の損失は、選ばれた試行の cycles では `saxpy8` 1、`fir4x8` 2、`matmul3` 6 サイクルになる
 
 ### 制約
@@ -519,7 +519,7 @@ machine に MAC があるとき（ISA mvp-1）、`LoopFusion.fuse` は、ルー�
 ### MII
 
 - **ResMII**: 1サイクルに1回だけ使える資源ごとの、1反復の使用数の最大。資源は、Compute スロット（ADD・SUB・MUL、mvp-1 では MAC も）、Memory スロット（LD・ST）、各演算の演算器（1回の発行が演算器の II だけ占める。L9。使用数は「演算の数 × II」）、Compute と Memory の書戻しポート（L5。ST は使わない）、3本目の読出しポート（下記）。演算のスロットと書戻しポートは machine description から取る。`Mii.bounding` が最大の資源を挙げる
-- **3本目の読出しポート**（`third read port`、#77）: MAC があり `read_ports` が3の machine では、MAC と ST を同じ bundle に置けない（L11。MAC は3つ、ST は1つを読む）。これを、各 MAC と各 ST が発行サイクルに1回使う資源とする（ADR-0018 の「ポート3」）。`read_ports` が4の machine と mvp-0 には、この資源は無い。`Mii.withoutReadPort` は、この資源を除いた値である
+- **3本目の読出しポート**（`third read port`、#77）: MAC があり `read_ports` が3の machine では、MAC と ST を同じ bundle に置けない（L11。MAC は3つ、ST は1つを読む）。これを、各 MAC と各 ST が発行サイクルに1回使う資源とする（ADR-0018 の「3本目の読出しポート（RTL のポート2）」）。`read_ports` が4の machine と mvp-0 には、この資源は無い。`Mii.withoutReadPort` は、この資源を除いた値である
 - **RecMII**: `LoopGraph.edges` のどの閉路も `Σcycles − II × Σiterations ≤ 0` となる最小の II（Bellman-Ford で正の閉路を調べる）。閉路が無ければ 0。MAC の L は、MAC からの辺の cycles として入る
 - **MII** = max(ResMII, RecMII, 1)
 
@@ -541,7 +541,7 @@ machine に MAC があるとき、`ModuloCompiler` はループのグラフを�
 - これで置けないときは、もう一度、各時刻に「同じスロットの種類の残りのノードが、まだ予約表に収まる」条件を足して置き直す（先読み。`RowFit`）。先読みなしで置けたときは、先読みしても同じ結果になる
 - 予約表に収まるかは、`RowFit` が正確に判定する。行を順に、どの演算をそこに置くかを決める深さ優先探索で、失敗した状態を覚える（状態は、残りの演算の数と、まだ影響する行の使用だけ）。II が62を超えるとき、または探索が `RowFit.Budget`（10万手）を超えたときは打ち切り、「決まらない」とする。決まらないとき、その II を予約表なし（(a)）とは記録せず、先読みはその時刻を受け入れる（以降はその II の先読みをしない）
 - 判定はスロットの種類ごとに行う。3本目の読出しポートのある machine で、MAC と ST の両方が残っているときは、そのポートが2つの種類を結び付ける。このときは、まず種類ごとに判定し（どちらかが収まらなければ収まらない）、両方が収まれば、2つの種類を一緒に探索して判定する（`RowFit.fitsTogether`。行ごとに、各種類がそこに置く演算を決め、MAC と ST は同じ行に置かない）。この探索も正確で、打ち切りの条件は同じである。先読みも、このときは両方の種類の残りのノードを調べる。どちらかだけが残っているときは、置いた MAC と ST の行を、残りの ST と MAC が使えない行として種類ごとに判定する。MAC か ST を置くときの先読みは、もう一方の種類の残りのノードも調べる（最後の MAC の行が、残りの ST の行を奪わないように。#77）
-- ADR-0018 は、MAC と ST の両方があるループの予約表を「決まらない」とすると見込んだ。一緒に探索すると正確に判定できるので、そうした。「決まらない」とすると先読みが止まり、`read_ports` 3 で `fir4x8` は II 5、`matmul3`（i）は II 10 になった（一緒に探索すると、どちらも `read_ports` 4 と同じ II 4 と 9。下の「結果（mvp-1）」）
+- ADR-0018 のとおり、3本目の読出しポートのある machine で MAC と ST の両方があり、どの種類にも予約表があるときは、2つの種類を一緒に探索して判定する（`RowFit.fitsTogether`）。仮にこの場合を「決まらない」とすると先読みが止まり、`read_ports` 3 で `fir4x8`（i）は II 5、`matmul3`（i）は II 10 になる（一緒に探索すると、どちらも `read_ports` 4 と同じ II 4 と 9。下の「結果（mvp-1、#77）」）
 
 ### II の探索と結果
 
