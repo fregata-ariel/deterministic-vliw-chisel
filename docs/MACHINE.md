@@ -1,6 +1,6 @@
 # Machine description（config/machine.json）
 
-状態：`schema_version` 1（ISA `mvp-0`）。ISA `mvp-1`（MAC）のための `schema_version` 2 は、下の「[mvp-1（schema_version 2）](#mvp-1schema_version-2)」で定める（#69、ADR-0018。ローダの実装は #77）。ローダは `vliw.isa.MachineDescription`（sbtプロジェクト `isa`）。
+状態：`schema_version` 1（ISA `mvp-0`）。ISA `mvp-1`（MAC）のための `schema_version` 2 は、下の「[mvp-1（schema_version 2）](#mvp-1schema_version-2)」で定める（#69、ADR-0018。ローダは #77 で実装した）。ローダは `vliw.isa.MachineDescription`（sbtプロジェクト `isa`）。
 
 RTL・命令列・verifier・参照モデルは、このファイルをローダ経由でのみ参照する。値の意味は [ISA.md](ISA.md) が定める。
 
@@ -90,7 +90,7 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 
 | ファイル | 内容 |
 |---|---|
-| `config/machine-mvp1.json` | `vliw2-i32-sp2-mac`、revision 1、`proposed`。`read_ports` 3、MAC は opcode 4・latency 2・ii 1、ほかは `config/machine.json` と同じ。#77 Phase A の後で `frozen` にする（#57 で方式を変えるときは revision を上げる） |
+| `config/machine-mvp1.json` | `vliw2-i32-sp2-mac`、revision 1、`frozen`（#77 Phase A で凍結した）。`read_ports` 3、MAC は opcode 4・latency 2・ii 1、ほかは `config/machine.json` と同じ。#57 で方式を変えるときは revision を上げる（ADR-0018） |
 | `tests/machines/` の mvp-1 の変種 | `read_ports` だけ4にしたもの（制約なしの比較用。verifier と参照モデルだけで動かす）と、MAC の latency だけ3にしたもの（感度の確認）（#77） |
 
 ## 実装ごとの対応範囲
@@ -100,7 +100,7 @@ machine description の契約は3段に分かれる。ローダが受け付け�
 | 段 | 判定する場所 | 範囲 |
 |---|---|---|
 | 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
-| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77 で実装する） |
+| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77） |
 | RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体。mvp-1 では、加えて `read_ports` が3（読出し4本の RTL は #57 で足す。ADR-0018） |
 | 固定パイプライン（#75） | `FixedParams`（`hw`） | RTL と同じ。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017） |
 
@@ -111,6 +111,7 @@ RTL が対応しない理由は次のとおり。
 | ii が1 | 全演算器を毎サイクル発行できるパイプラインにしている。II が2以上の演算器の予約は実装していない |
 | LD の latency が2以上 | Scratchpad は同期読出しメモリで、発行の次のサイクルに値が出る |
 | ST の latency が1 | 書込みを発行の境界で行う。2以上にすると、STの書込みと後続のLDの読出しが同じ bank で同じ境界に重なり得る。1RW の bank でこれを扱う設計は未定 |
+| `read_ports` が3（mvp-1） | RF は 3R/2W のまま。ポート2のアドレスを MAC の rs3 と ST のソースで切り替える（MAC と ST が同じ bundle にあると L11）。読出し4本の RTL は #57（ADR-0018） |
 
 `CoreParams.check` は、範囲外の設定を理由付きですべて返す。`sbt "hw/run [dir] [machine.json]"` は理由を表示して終了し、`CoreParams` を直接作ると組み立て時に例外になる。
 

@@ -224,4 +224,150 @@ class ReferenceModelSpec extends AnyFunSuite {
     )
     assert(r.registers(2).contains(4L) && r.registers(3).contains(9L))
   }
+
+  private val mvp1 = MachineDescription
+    .load(MachineDescription.Mvp1Path)
+    .fold(es => fail(es.mkString), identity)
+  private val rp4 = machineFile("mvp1_rp4.json") // mvp-1 with 4 read ports
+
+  private def runOn(
+      m: MachineDescription,
+      src: String,
+      regs: Map[Int, Long],
+      mem: Map[Int, Long] = Map.empty
+  ) = ReferenceModel.run(m, words(src, m), Inputs(regs, mem))
+
+  private def okOn(
+      m: MachineDescription,
+      src: String,
+      regs: Map[Int, Long],
+      mem: Map[Int, Long] = Map.empty
+  ) = runOn(m, src, regs, mem).fold(v => fail(v.toString), identity)
+
+  private def violationOn(m: MachineDescription, src: String, regs: Map[Int, Long]) =
+    runOn(m, src, regs).left.getOrElse(fail(s"expected a violation:\n$src"))
+
+  test("MAC is modulo 2^32 and commits at s + L through the compute port") {
+    val r = okOn(mvp1, "mac r2, r1, r1, r1\nnop\nhalt", Map(1 -> 0xffffffffL))
+    // (2^32 - 1) * (2^32 - 1) + (2^32 - 1) = 2^32 * (2^32 - 1), which is 0 modulo 2^32.
+    assert(r.registers(2).contains(0L))
+    assert(r.trace.cycles(1).commits.isEmpty)
+    assert(r.trace.cycles(2).commits == Vector(Commit.Register(2, 0, Slot.Compute)))
+    assert(r.cycles == 3)
+  }
+
+  test("MAC reads rs3 in the issue cycle: with rd = rs3 it reads the old value") {
+    val in = Map(1 -> 1L, 2 -> 4L, 3 -> 5L)
+    val acc = okOn(mvp1, "mac r1, r2, r3, r1\nnop\nmac r1, r2, r3, r1\nnop\nhalt", in)
+    assert(acc.registers(1).contains(41L)) // 1 + 4 * 5 = 21, then 21 + 4 * 5
+    // A ST in the same bundle (4 read ports) also reads the old r1.
+    val same = okOn(rp4, "mac r1, r2, r3, r1 | st [0], r1\nnop\nhalt", in)
+    assert(same.registers(1).contains(21L) && same.memory(0).contains(1L))
+    // In the next cycle r1 is being written.
+    val v = violationOn(mvp1, "mac r1, r2, r3, r1\nnop | st [0], r1\nhalt", in)
+    assert(v.rule == Rule.InFlightRead && v.cycle.contains(1))
+  }
+
+  test("MAC latency 3: results from s + 3, and MAC(s) clashes with MUL(s + 1) at E_(s+3) (L5)") {
+    val mac3 = machineFile("mvp1_mac3.json")
+    val in = Map(1 -> 2L, 2 -> 3L, 3 -> 4L)
+    // MAC(0) commits at E_3 and ADD(1) at E_2, so they do not clash as they do with latency 2.
+    val r = okOn(mac3, "mac r4, r1, r2, r3\nadd r5, r1, r2\nnop\nhalt", in)
+    assert(r.trace.cycles(2).commits == Vector(Commit.Register(5, 5, Slot.Compute)))
+    assert(r.trace.cycles(3).commits == Vector(Commit.Register(4, 10, Slot.Compute)))
+    assert(
+      violationOn(mvp1, "mac r4, r1, r2, r3\nadd r5, r1, r2\nnop\nhalt", in).rule ==
+        Rule.WritebackPort
+    )
+    // s + 2 is inside the write interval [0, 3).
+    val early = violationOn(mac3, "mac r4, r1, r2, r3\nnop\nadd r5, r4, r1\nnop\nhalt", in)
+    assert(early.rule == Rule.InFlightRead && early.cycle.contains(2))
+    val clash = violationOn(mac3, "mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nnop\nhalt", in)
+    assert(clash.rule == Rule.WritebackPort && clash.cycle.contains(1))
+    assert(okOn(mvp1, "mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nhalt", in).cycles == 4)
+    assert(violationOn(mac3, "mac r4, r1, r2, r3\nnop\nhalt", in).rule == Rule.HaltCompletion)
+  }
+
+  test("L4: MAC's rd overlaps a LD of the same bundle and a MAC in flight") {
+    val in = Map(1 -> 2L, 2 -> 3L, 3 -> 4L)
+    // MAC and LD both commit r4 at E_2, through different write-back ports.
+    val same = runOn(mvp1, "mac r4, r1, r2, r3 | ld r4, [0]\nnop\nhalt", in, Map(0 -> 0L))
+    assert(
+      same.left.toOption.map(v => (v.rule, v.cycle)) == Some((Rule.OverlappingWrites, Some(0)))
+    )
+    // [0, 2) and [1, 3).
+    val next = violationOn(mvp1, "mac r4, r1, r2, r3\nmac r4, r1, r2, r3\nnop\nhalt", in)
+    assert((next.rule, next.cycle) == ((Rule.OverlappingWrites, Some(1))))
+    // [0, 2) and [2, 4) do not overlap: 2 * 3 + 4 = 10, then 2 * 3 + 10.
+    val after = okOn(mvp1, "mac r4, r1, r2, r3\nnop\nmac r4, r1, r2, r4\nnop\nhalt", in)
+    assert(after.registers(4).contains(16L))
+  }
+
+  test("L9: MAC has its own unit with operations.MAC.ii, independent of MUL") {
+    val v = ujson.read(mvp1.canonicalJson)
+    v("operations")("MAC")("ii") = 2
+    val ii = MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
+    val in = Map(1 -> 2L, 2 -> 3L, 3 -> 4L)
+    val back = violationOn(ii, "mac r4, r1, r2, r3\nmac r5, r1, r2, r3\nnop\nhalt", in)
+    assert(back.rule == Rule.IssueInterval && back.cycle.contains(1))
+    // MUL right after MAC, and the next MAC exactly II after the first.
+    val r = okOn(
+      ii,
+      "mac r4, r1, r2, r3\nmul r5, r1, r2\nmac r6, r1, r2, r3\nmul r7, r1, r2\nnop\nhalt",
+      in
+    )
+    assert(r.registers.slice(4, 8) == Vector(Some(10L), Some(6L), Some(10L), Some(6L)))
+  }
+
+  test("L11: MAC and ST in one bundle stop the run with 3 read ports, not with 4") {
+    val in = Map(1 -> 2L, 2 -> 3L, 3 -> 4L, 5 -> 9L)
+    val src = "add r6, r1, r2 | st [1], r5\nmac r4, r1, r2, r3 | st [0], r5\nnop\nhalt"
+    val v = violationOn(mvp1, src, in)
+    assert(v.rule == Rule.ReadPorts && v.cycle.contains(1))
+    val r = okOn(rp4, src, in)
+    assert(r.registers(4).contains(10L) && r.memory(0).contains(9L) && r.memory(1).contains(9L))
+    // L11 is checked before the bundle's reads: r9 is also undefined (L8).
+    val first = violationOn(mvp1, "mac r4, r1, r2, r9 | st [0], r9\nnop\nhalt", in)
+    assert(first.rule == Rule.ReadPorts)
+  }
+
+  test("L11 counts reads by operand field, so one register in four fields is 4 reads") {
+    val in = Map(2 -> 3L)
+    val src = "mac r1, r2, r2, r2 | st [0], r2\nnop\nhalt"
+    val v = violationOn(mvp1, src, in)
+    assert(v.rule == Rule.ReadPorts && v.cycle.contains(0))
+    val r = okOn(rp4, src, in)
+    assert(r.registers(1).contains(12L) && r.memory(0).contains(3L)) // 3 * 3 + 3
+    assert(okOn(mvp1, "mul r1, r2, r2 | st [0], r2\nnop\nhalt", in).registers(1).contains(9L))
+  }
+
+  test("MAC is an encoding error (L1) on an mvp-0 machine") {
+    // mac r5, r1, r2, r3 with a NOP memory word (docs/ISA.md, "mvp-1: MAC"), NOP, HALT.
+    val program = Vector(0x0000000045123000L, 0L, 0x00000000f0000000L)
+    val in = Inputs(Map(1 -> 2L, 2 -> 3L, 3 -> 4L), Map.empty)
+    assert(ReferenceModel.run(machine, program, in).left.map(_.rule) == Left(Rule.Encoding))
+    val r = ReferenceModel.run(mvp1, program, in).fold(v => fail(v.toString), identity)
+    assert(r.registers(5).contains(10L))
+  }
+
+  test("MAC in the trace: its issue text, and its commit through the compute port") {
+    val r = okOn(
+      mvp1,
+      "mac r4, r1, r2, r3 | ld r5, [0]\nnop\nmac r6, r4, r5, r4\nnop | st [1], r4\nhalt",
+      Map(1 -> 2L, 2 -> 3L, 3 -> 4L),
+      Map(0 -> 7L)
+    )
+    // Derived by hand: 2 * 3 + 4 = 10 and [0] = 7 at E_2, 10 * 7 + 10 = 80 and [1] = 10 at E_4.
+    val expected =
+      """{"cycle":0,"pc":0,"issue":{"compute":"mac r4, r1, r2, r3","memory":"ld r5, [0]"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":1,"pc":1,"issue":{"compute":"nop","memory":"nop"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":2,"pc":2,"issue":{"compute":"mac r6, r4, r5, r4","memory":"nop"},"rf_commit":[{"reg":4,"value":10,"port":"compute"},{"reg":5,"value":7,"port":"memory"}],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":3,"pc":3,"issue":{"compute":"nop","memory":"st [1], r4"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":4,"pc":4,"issue":{"compute":"halt","memory":"nop"},"rf_commit":[{"reg":6,"value":80,"port":"compute"}],"mem_commit":[{"addr":1,"value":10}],"busy":true,"done":false}
+        |{"cycle":5,"pc":null,"issue":null,"rf_commit":[],"mem_commit":[],"busy":false,"done":true}""".stripMargin
+    assert(canonicalLines(r.trace.bodyLines.mkString("\n")) == canonicalLines(expected))
+    val header = r.trace.header
+    assert(header("isa").str == "mvp-1" && header("machine").str == "vliw2-i32-sp2-mac")
+    assert(header("machine_hash").str == mvp1.hash)
+  }
 }

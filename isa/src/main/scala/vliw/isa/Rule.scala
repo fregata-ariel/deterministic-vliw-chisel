@@ -15,6 +15,7 @@ object Rule {
   case object UndefinedRead extends Rule("L8", "read of an undefined value")
   case object IssueInterval extends Rule("L9", "operation issued within its II")
   case object InFlightStoreRead extends Rule("L10", "load of a word being stored")
+  case object ReadPorts extends Rule("L11", "more register reads than read ports")
 
   val all: Seq[Rule] = Seq(
     Encoding,
@@ -26,7 +27,8 @@ object Rule {
     AddressRange,
     UndefinedRead,
     IssueInterval,
-    InFlightStoreRead
+    InFlightStoreRead,
+    ReadPorts
   )
   val byId: Map[String, Rule] = all.map(r => r.id -> r).toMap
 }

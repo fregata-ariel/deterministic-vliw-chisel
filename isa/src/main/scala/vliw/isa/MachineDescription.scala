@@ -27,15 +27,17 @@ final case class OperationSpec(
 
 /** Validated contents of config/machine.json (format: docs/MACHINE.md).
   *
-  * Fields fixed by the mvp-0 ISA are checked by the loader but not stored. `canonicalJson` and
+  * Fields fixed by the ISA version are checked by the loader but not stored. `canonicalJson` and
   * `hash` identify the exact document and are recorded in traces and evaluation results.
   */
 final case class MachineDescription(
     schemaVersion: Int,
+    isaVersion: String,
     revision: Int,
     status: String,
     machineId: String,
     registerCount: Int,
+    readPorts: Int,
     banks: Int,
     wordsPerBank: Int,
     operations: Map[String, OperationSpec],
@@ -47,11 +49,19 @@ final case class MachineDescription(
 ) {
   def scratchpadWords: Int = banks * wordsPerBank
   def operation(mnemonic: String): OperationSpec = operations(mnemonic)
+
+  /** True for ISA mvp-1, whose Compute slot also issues MAC (docs/ISA.md, "mvp-1: MAC"). */
+  def hasMac: Boolean = operations.contains("MAC")
 }
 
 object MachineDescription {
-  val SchemaVersion: Int = 1
+
+  /** Schema 1 is for ISA mvp-0 and schema 2 for mvp-1 ([[IsaVersion.ofSchema]]). */
+  val SchemaVersions: Range = 1 to 2
   val DefaultPath: Path = Paths.get("config", "machine.json")
+
+  /** The default machine description of ISA mvp-1 (docs/MACHINE.md, ADR-0018). */
+  val Mvp1Path: Path = Paths.get("config", "machine-mvp1.json")
 
   /** Mnemonics of fixed-latency operations, with their slot and write-back port in mvp-0. */
   val FixedLatencyOperations: Seq[(String, Slot, Option[Slot])] = Seq(
@@ -61,6 +71,12 @@ object MachineDescription {
     ("LD", Slot.Memory, Some(Slot.Memory)),
     ("ST", Slot.Memory, None)
   )
+
+  /** The fixed-latency operations of an ISA version: mvp-1 adds MAC to the Compute slot. */
+  def fixedLatencyOperations(isaVersion: String): Seq[(String, Slot, Option[Slot])] =
+    if (isaVersion == IsaVersion.Mvp1)
+      FixedLatencyOperations :+ (("MAC", Slot.Compute, Some(Slot.Compute)))
+    else FixedLatencyOperations
 
   /** Width of the memory word's immediate address field (docs/ISA.md). */
   val AddressBits: Int = 9
@@ -105,10 +121,21 @@ object MachineDescription {
       canonical: String,
       errors: Errors
   ): Option[MachineDescription] = {
-    val schemaVersion = root.int("schema_version", SchemaVersion, SchemaVersion)
+    val schemaVersion = root.int("schema_version", SchemaVersions.min, SchemaVersions.max)
     val revision = root.int("revision", 1, Int.MaxValue)
     val status = root.oneOf("status", Seq("proposed", "frozen"))
-    root.const("isa_version", ujson.Str(IsaVersion.Current))
+    val isaVersion = root.oneOf("isa_version", IsaVersion.all).filter { v =>
+      val expected = schemaVersion.map(IsaVersion.ofSchema)
+      val ok = expected.forall(_ == v)
+      expected.filterNot(_ => ok).foreach { e =>
+        errors.add("$.isa_version", s"schema_version ${schemaVersion.get} is for $e, got $v")
+      }
+      ok
+    }
+    // The keys below are read by the rules of this version; a wrong or missing version is already
+    // an error, and the schema version decides.
+    val isa = isaVersion.orElse(schemaVersion.map(IsaVersion.ofSchema)).getOrElse(IsaVersion.Mvp0)
+    val operationTable = fixedLatencyOperations(isa)
     val machineId = root.str("machine_id").filter { id =>
       val ok = id.matches("[a-z0-9][a-z0-9-]*")
       if (!ok) errors.add("$.machine_id", "must match [a-z0-9][a-z0-9-]*")
@@ -123,17 +150,21 @@ object MachineDescription {
       o.const("memory", ujson.Num(1))
     }
 
-    val registerCount = root
+    val registerFile = root
       .obj("register_file") { o =>
         val count = o.int("count", 1, 1 << RegisterFieldBits)
         o.const("zero_register", ujson.Null)
-        o.const("read_ports", ujson.Num(3))
+        // Rule L11: mvp-0 reads at most 3 registers per bundle; mvp-1 accepts 4 for the
+        // comparison without the constraint (ADR-0018).
+        val readPorts =
+          if (isa == IsaVersion.Mvp1) o.int("read_ports", 3, 4)
+          else { o.const("read_ports", ujson.Num(3)); Some(3) }
         o.obj("write_ports") { w =>
           w.const("compute", ujson.Num(1))
           w.const("memory", ujson.Num(1))
         }
         o.const("same_cycle_same_destination_write", ujson.Str("forbidden"))
-        count
+        for (c <- count; r <- readPorts) yield (c, r)
       }
       .flatten
 
@@ -164,7 +195,7 @@ object MachineDescription {
     val nopOpcode = root.int("nop_opcode", 0, 0)
 
     val operations = root.obj("operations") { o =>
-      val fixed = FixedLatencyOperations.flatMap { case (mnemonic, slot, writeback) =>
+      val fixed = operationTable.flatMap { case (mnemonic, slot, writeback) =>
         o.obj(mnemonic) { op =>
           op.const("slot", ujson.Str(slot.name))
           op.const("writeback", writeback.fold[ujson.Value](ujson.Null)(s => ujson.Str(s.name)))
@@ -221,22 +252,25 @@ object MachineDescription {
 
     for {
       schema <- schemaVersion
+      version <- isaVersion
       rev <- revision
       st <- status
       id <- machineId
-      regs <- registerCount
+      (regs, readPorts) <- registerFile
       (banks, words) <- scratchpad
       nop <- nopOpcode
       (fixed, haltOpt) <- operations
       halt <- haltOpt
-      if fixed.size == FixedLatencyOperations.size
+      if fixed.size == operationTable.size
       imem <- bundles
     } yield MachineDescription(
       schemaVersion = schema,
+      isaVersion = version,
       revision = rev,
       status = st,
       machineId = id,
       registerCount = regs,
+      readPorts = readPorts,
       banks = banks,
       wordsPerBank = words,
       operations = fixed.map(op => op.mnemonic -> op).toMap,

@@ -24,14 +24,28 @@ sealed trait LoopNode extends Product with Serializable {
 
   /** ISA mnemonic, which selects the latency and II in the machine description. */
   def mnemonic: String
+
+  /** The operands, one per operand field of the instruction. */
+  def operands: Vector[Ref]
 }
 object LoopNode {
-  final case class Load(addr: Address) extends LoopNode { def mnemonic: String = "LD" }
+  final case class Load(addr: Address) extends LoopNode {
+    def mnemonic: String = "LD"
+    def operands: Vector[Ref] = Vector.empty
+  }
   final case class Compute(op: Op, a: Ref, b: Ref) extends LoopNode {
     def mnemonic: String = op.mnemonic
+    def operands: Vector[Ref] = Vector(a, b)
+  }
+
+  /** `a * b + c` (ISA mvp-1). Only fusing a MUL and an ADD makes it (`LoopFusion`). */
+  final case class Mac(a: Ref, b: Ref, c: Ref) extends LoopNode {
+    def mnemonic: String = "MAC"
+    def operands: Vector[Ref] = Vector(a, b, c)
   }
   final case class Store(addr: Address, value: Ref) extends LoopNode {
     def mnemonic: String = "ST"
+    def operands: Vector[Ref] = Vector(value)
   }
 }
 
@@ -110,6 +124,10 @@ final case class LoopGraph(
           dagNodes += Node.Compute(op, x, y)
           data(x, id)
           if (y != x) data(y, id)
+        case LoopNode.Mac(a, b, c) =>
+          val (x, y, z) = (resolve(a, k), resolve(b, k), resolve(c, k))
+          dagNodes += Node.Mac(x, y, z)
+          Seq(x, y, z).distinct.foreach(data(_, id))
         case LoopNode.Store(a, v) =>
           val w = a.at(at)
           val x = resolve(v, k)

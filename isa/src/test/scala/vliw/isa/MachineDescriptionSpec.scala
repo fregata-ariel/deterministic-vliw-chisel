@@ -30,7 +30,7 @@ class MachineDescriptionSpec extends AnyFunSuite {
 
   test("config/machine.json is a valid mvp-0 machine description") {
     val m = loadOk(text)
-    assert(m.schemaVersion == MachineDescription.SchemaVersion)
+    assert(m.schemaVersion == 1)
     assert(m.machineId == "vliw2-i32-sp2")
     assert(m.registerCount == 16)
     assert((m.banks, m.wordsPerBank, m.scratchpadWords) == ((2, 256, 512)))

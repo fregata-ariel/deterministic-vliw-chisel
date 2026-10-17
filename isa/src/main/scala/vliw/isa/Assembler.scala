@@ -99,11 +99,24 @@ object Assembler {
           rs2 <- register(ops(2), machine)
         } yield build(rd, rs1, rs2)
       mnemonic match {
-        case "nop"       => arity(mnemonic, ops, 0).map(_ => ComputeOp.Nop)
-        case "halt"      => arity(mnemonic, ops, 0).map(_ => ComputeOp.Halt)
-        case "add"       => rrr(ComputeOp.Add.apply)
-        case "sub"       => rrr(ComputeOp.Sub.apply)
-        case "mul"       => rrr(ComputeOp.Mul.apply)
+        case "nop"  => arity(mnemonic, ops, 0).map(_ => ComputeOp.Nop)
+        case "halt" => arity(mnemonic, ops, 0).map(_ => ComputeOp.Halt)
+        case "add"  => rrr(ComputeOp.Add.apply)
+        case "sub"  => rrr(ComputeOp.Sub.apply)
+        case "mul"  => rrr(ComputeOp.Mul.apply)
+        case "mac"  =>
+          for {
+            _ <- Either.cond(
+              machine.hasMac,
+              (),
+              s"mac is not an operation of ${machine.machineId} (ISA ${machine.isaVersion})"
+            )
+            _ <- arity(mnemonic, ops, 4)
+            rd <- register(ops(0), machine)
+            rs1 <- register(ops(1), machine)
+            rs2 <- register(ops(2), machine)
+            rs3 <- register(ops(3), machine)
+          } yield ComputeOp.Mac(rd, rs1, rs2, rs3)
         case "ld" | "st" => Left(s"$mnemonic is a memory operation; write it after '|'")
         case _           => Left(s"unknown compute operation \"$text\"")
       }
@@ -127,7 +140,7 @@ object Assembler {
             addr <- address(ops(0))
             rs <- register(ops(1), machine)
           } yield MemoryOp.St(addr, rs)
-        case "add" | "sub" | "mul" | "halt" =>
+        case "add" | "sub" | "mul" | "mac" | "halt" =>
           Left(s"$mnemonic is a compute operation; write it before '|'")
         case _ => Left(s"unknown memory operation \"$text\"")
       }
@@ -137,11 +150,12 @@ object Assembler {
 /** Canonical text form of bundles, accepted by [[Assembler]]. */
 object Disassembler {
   def compute(op: ComputeOp): String = op match {
-    case ComputeOp.Nop          => "nop"
-    case ComputeOp.Halt         => "halt"
-    case ComputeOp.Add(d, a, b) => s"add r$d, r$a, r$b"
-    case ComputeOp.Sub(d, a, b) => s"sub r$d, r$a, r$b"
-    case ComputeOp.Mul(d, a, b) => s"mul r$d, r$a, r$b"
+    case ComputeOp.Nop             => "nop"
+    case ComputeOp.Halt            => "halt"
+    case ComputeOp.Add(d, a, b)    => s"add r$d, r$a, r$b"
+    case ComputeOp.Sub(d, a, b)    => s"sub r$d, r$a, r$b"
+    case ComputeOp.Mul(d, a, b)    => s"mul r$d, r$a, r$b"
+    case ComputeOp.Mac(d, a, b, c) => s"mac r$d, r$a, r$b, r$c"
   }
 
   def memory(op: MemoryOp): String = op match {

@@ -25,7 +25,7 @@ final case class Execution(
     memory: Vector[Option[Long]]
 )
 
-/** Cycle-accurate reference model of mvp-0 (docs/ISA.md, "実行意味論").
+/** Cycle-accurate reference model of mvp-0 and mvp-1 (docs/ISA.md, "実行意味論" and "mvp-1: MAC").
   *
   * State is the architectural RF and scratchpad, a queue of issued operations carrying their
   * computed values and commit boundaries, and for each operation the cycle from which its unit
@@ -43,6 +43,24 @@ object ReferenceModel {
       port: Option[Slot],
       value: Long
   )
+
+  /** Registers that bundle `b` reads in its issue cycle, one entry per operand field: ADD, SUB and
+    * MUL read 2, MAC 3, ST 1. Rule L11 limits their number to the read ports.
+    */
+  private[sim] def sourceRegisters(b: Bundle): Vector[Int] = {
+    val compute = b.compute match {
+      case ComputeOp.Add(_, x, y)         => Vector(x, y)
+      case ComputeOp.Sub(_, x, y)         => Vector(x, y)
+      case ComputeOp.Mul(_, x, y)         => Vector(x, y)
+      case ComputeOp.Mac(_, x, y, z)      => Vector(x, y, z)
+      case ComputeOp.Nop | ComputeOp.Halt => Vector.empty
+    }
+    val memory = b.memory match {
+      case MemoryOp.St(_, r)                => Vector(r)
+      case MemoryOp.Ld(_, _) | MemoryOp.Nop => Vector.empty
+    }
+    compute ++ memory
+  }
 
   def run(
       machine: MachineDescription,
@@ -183,12 +201,22 @@ object ReferenceModel {
 
     val bundle = bundles(s)
 
+    // The bundle reads no more registers than there are read ports (L11).
+    val reads = sourceRegisters(bundle).size
+    val ports: Either[Violation, Unit] =
+      if (reads <= machine.readPorts) Right(())
+      else fail(Rule.ReadPorts, s"$reads register reads exceed the ${machine.readPorts} read ports")
+
     // 1. Read sources and compute results from the state visible in cycle s.
     val computeOp: Either[Violation, Option[InFlight]] = bundle.compute match {
       case ComputeOp.Nop | ComputeOp.Halt => Right(None)
       case ComputeOp.Add(d, a, b)         => binary(d, a, b, "ADD")(_ + _)
       case ComputeOp.Sub(d, a, b)         => binary(d, a, b, "SUB")(_ - _)
       case ComputeOp.Mul(d, a, b)         => binary(d, a, b, "MUL")(_ * _)
+      case ComputeOp.Mac(d, a, b, c)      =>
+        for { _ <- unit("MAC"); x <- readReg(a); y <- readReg(b); z <- readReg(c) } yield Some(
+          InFlight(s, s + latency("MAC"), Left(d), Some(Slot.Compute), (x * y + z) & Mask)
+        )
     }
     val memoryOp: Either[Violation, Option[InFlight]] = bundle.memory match {
       case MemoryOp.Nop      => Right(None)
@@ -258,6 +286,7 @@ object ReferenceModel {
         }
 
     for {
+      _ <- ports
       c <- computeOp
       m <- memoryOp
       ops = c.toVector ++ m.toVector
@@ -270,6 +299,7 @@ object ReferenceModel {
         case ComputeOp.Add(_, _, _)         => occupy("ADD")
         case ComputeOp.Sub(_, _, _)         => occupy("SUB")
         case ComputeOp.Mul(_, _, _)         => occupy("MUL")
+        case ComputeOp.Mac(_, _, _, _)      => occupy("MAC")
         case ComputeOp.Nop | ComputeOp.Halt => ()
       }
       bundle.memory match {

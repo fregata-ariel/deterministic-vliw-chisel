@@ -1,0 +1,28 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_accumulate",
+  "description": "rd = rs3 の累算。発行サイクルの rs3 は旧値を読む",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r1, r2, r3, r1   ; 4 * 5 + 1 = 21",
+    "@1: nop",
+    "@2: mac r1, r2, r3, r1   ; 4 * 5 + 21 = 41",
+    "@3: nop",
+    "@4: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 4,
+      "r3": 5
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 5,
+    "registers": {
+      "r1": 41
+    }
+  }
+}

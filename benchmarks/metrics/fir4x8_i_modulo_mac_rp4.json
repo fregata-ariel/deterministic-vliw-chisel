@@ -1,0 +1,84 @@
+{
+  "metrics": "vliw-metrics/2",
+  "isa": "mvp-1",
+  "machine": {
+    "id": "vliw2-i32-sp2-mac-rp4",
+    "revision": 1,
+    "hash": "sha256:600710348640442ebaba9d0df2dbef62949eab15f948d42ca899924051f4226b"
+  },
+  "program": {
+    "name": "fir4x8_i_modulo_mac_rp4",
+    "hash": "sha256:ae1e6f38f84be1c686b05edb20b796fb633e99f682cd2203437f8f825fb939e9",
+    "bundles": 43
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 43,
+  "issue": {
+    "compute": {
+      "operations": 32,
+      "nop": 10,
+      "nop_rate": 0.232558
+    },
+    "memory": {
+      "operations": 23,
+      "nop": 20,
+      "nop_rate": 0.465116
+    },
+    "by_operation": {
+      "ADD": 0,
+      "SUB": 0,
+      "MUL": 8,
+      "MAC": 24,
+      "LD": 15,
+      "ST": 8,
+      "HALT": 1
+    },
+    "register_reads": {
+      "read_ports": 4,
+      "reads": 96,
+      "bundles_by_reads": {
+        "0": 10,
+        "1": 1,
+        "2": 8,
+        "3": 17,
+        "4": 7
+      }
+    },
+    "mac_with_st": 7
+  },
+  "writeback": {
+    "compute": {
+      "commits": 32,
+      "utilization": 0.744186
+    },
+    "memory": {
+      "commits": 15,
+      "utilization": 0.348837
+    }
+  },
+  "scratchpad": {
+    "reads": 15,
+    "writes": 8,
+    "accesses_per_cycle": 0.534884,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 8,
+        "writes": 4,
+        "accesses_per_cycle": 0.27907
+      },
+      {
+        "bank": 1,
+        "reads": 7,
+        "writes": 4,
+        "accesses_per_cycle": 0.255814
+      }
+    ]
+  },
+  "ii": 4,
+  "rtl": null
+}

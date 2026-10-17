@@ -5,7 +5,8 @@ package vliw.isa
   * The compute word is bits 31:0 and the memory word bits 63:32. Opcodes come from the machine
   * description. Decoding rejects unknown opcodes, non-zero reserved bits, non-zero operand bits of
   * NOP/HALT, register indices outside the register file and HALT with a non-NOP memory word
-  * (legality rule L1).
+  * (legality rule L1). MAC exists only in ISA mvp-1 and puts rs3 in bits 15:12; on an mvp-0 machine
+  * its opcode is unknown.
   */
 final class BundleCodec(machine: MachineDescription) {
   import BundleCodec._
@@ -13,6 +14,7 @@ final class BundleCodec(machine: MachineDescription) {
   private val opAdd = machine.operation("ADD").opcode
   private val opSub = machine.operation("SUB").opcode
   private val opMul = machine.operation("MUL").opcode
+  private val opMac = machine.operations.get("MAC").map(_.opcode)
   private val opLd = machine.operation("LD").opcode
   private val opSt = machine.operation("ST").opcode
   private val opHalt = machine.haltOpcode
@@ -61,11 +63,19 @@ final class BundleCodec(machine: MachineDescription) {
         d <- reg("rd", rd); a <- reg("rs1", rs1); b <- reg("rs2", rs2)
       } yield (opcode << 28) | (d << 24) | (a << 20) | (b << 16)
     op match {
-      case ComputeOp.Nop               => Right(opNop << 28)
-      case ComputeOp.Halt              => Right(opHalt << 28)
-      case ComputeOp.Add(rd, rs1, rs2) => rrr(opAdd, rd, rs1, rs2)
-      case ComputeOp.Sub(rd, rs1, rs2) => rrr(opSub, rd, rs1, rs2)
-      case ComputeOp.Mul(rd, rs1, rs2) => rrr(opMul, rd, rs1, rs2)
+      case ComputeOp.Nop                    => Right(opNop << 28)
+      case ComputeOp.Halt                   => Right(opHalt << 28)
+      case ComputeOp.Add(rd, rs1, rs2)      => rrr(opAdd, rd, rs1, rs2)
+      case ComputeOp.Sub(rd, rs1, rs2)      => rrr(opSub, rd, rs1, rs2)
+      case ComputeOp.Mul(rd, rs1, rs2)      => rrr(opMul, rd, rs1, rs2)
+      case ComputeOp.Mac(rd, rs1, rs2, rs3) =>
+        for {
+          opcode <- opMac.toRight(
+            s"MAC is not an operation of ${machine.machineId} (ISA ${machine.isaVersion})"
+          )
+          word <- rrr(opcode, rd, rs1, rs2)
+          c <- reg("rs3", rs3)
+        } yield word | (c << 12)
     }
   }
 
@@ -96,12 +106,19 @@ final class BundleCodec(machine: MachineDescription) {
         Left(
           f"compute word 0x$w%08x: ${if (opcode == opNop) "NOP" else "HALT"} must have all operand bits zero"
         )
-      case `opNop`  => Right(ComputeOp.Nop)
-      case `opHalt` => Right(ComputeOp.Halt)
-      case `opAdd`  => rrr(ComputeOp.Add.apply)
-      case `opSub`  => rrr(ComputeOp.Sub.apply)
-      case `opMul`  => rrr(ComputeOp.Mul.apply)
-      case _        => Left(f"compute word 0x$w%08x: unknown opcode $opcode")
+      case `opNop`                  => Right(ComputeOp.Nop)
+      case `opHalt`                 => Right(ComputeOp.Halt)
+      case `opAdd`                  => rrr(ComputeOp.Add.apply)
+      case `opSub`                  => rrr(ComputeOp.Sub.apply)
+      case `opMul`                  => rrr(ComputeOp.Mul.apply)
+      case op if opMac.contains(op) =>
+        if ((w & 0xfff) != 0) Left(f"compute word 0x$w%08x: reserved bits 11:0 are not zero")
+        else
+          for {
+            d <- reg("rd", rd); a <- reg("rs1", rs1); b <- reg("rs2", rs2)
+            c <- reg("rs3", (w >>> 12) & 0xf)
+          } yield ComputeOp.Mac(d, a, b, c)
+      case _ => Left(f"compute word 0x$w%08x: unknown opcode $opcode")
     }
   }
 

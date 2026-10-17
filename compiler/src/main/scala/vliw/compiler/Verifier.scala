@@ -8,7 +8,7 @@ final case class Finding(rule: Rule, cycle: Option[Int], message: String) {
     s"${rule.id} (${rule.title})${cycle.fold("")(c => s" at cycle $c")}: $message"
 }
 
-/** Static schedule verifier for the MVP legality rules L1-L10 (docs/VERIFIER.md).
+/** Static schedule verifier for the legality rules L1-L11 (docs/VERIFIER.md).
   *
   * It never computes values. The program is summarised as register write intervals `[s, s+L)`,
   * write-back port reservations per commit boundary, register and memory reads with their cycles,
@@ -45,7 +45,7 @@ object Verifier {
         ) ++
         undefinedReads(summary, declared) ++ issueIntervals(machine, summary) ++ inFlightStoreReads(
           summary
-        )).sortBy(f => (f.cycle.getOrElse(-1), f.rule.id))
+        ) ++ readPorts(machine, summary)).sortBy(f => (f.cycle.getOrElse(-1), f.rule.id))
     }
   }
 
@@ -88,6 +88,7 @@ object Verifier {
           case ComputeOp.Add(d, x, y)         => rrr(d, x, y, "ADD")
           case ComputeOp.Sub(d, x, y)         => rrr(d, x, y, "SUB")
           case ComputeOp.Mul(d, x, y)         => rrr(d, x, y, "MUL")
+          case ComputeOp.Mac(d, x, y, z)      => rrr(d, x, y, "MAC"); reads += Read(z, s, text)
           case ComputeOp.Nop | ComputeOp.Halt => ()
         }
         val mtext = Disassembler.memory(b.memory)
@@ -244,6 +245,19 @@ object Verifier {
             s"`${b.what}` is issued ${b.cycle - a.cycle} cycle(s) after `${a.what}` (cycle ${a.cycle}); $m has II $ii"
           )
       }
+    }
+
+  // L11: the operand fields of a bundle read at most `read_ports` registers. Reads are counted per
+  // field, so one register read by two fields counts twice.
+  private def readPorts(machine: MachineDescription, sum: Summary): Vector[Finding] =
+    sum.reads.groupBy(_.cycle).toVector.sortBy(_._1).collect {
+      case (cycle, rs) if rs.size > machine.readPorts =>
+        Finding(
+          Rule.ReadPorts,
+          Some(cycle),
+          s"the bundle reads ${rs.size} registers (${rs.map(r => s"r${r.reg}").mkString(", ")}); " +
+            s"the register file has ${machine.readPorts} read ports"
+        )
     }
 
   // L10: no load of a word strictly inside the interval [s, s+L) of a store to it.

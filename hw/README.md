@@ -33,28 +33,39 @@ Verilator 5.020 は、`+verilator+seed+` がないと毎回同じ状態から乱
 | モジュール | 役割 |
 |---|---|
 | `Core` | トップ。Instruction memory（`Mem`、組合せ読出し）、PC、start/busy/done、ホストポート、観測ポート（PC、Decoder の出力、commit）、違反信号と assertion（[docs/VERIFIER.md](../docs/VERIFIER.md)） |
-| `Decoder` | 64bit bundle のデコードと、規則 L1 の検出（`vliw.isa.BundleCodec` とは独立に実装） |
-| `RegisterFile` | 3R/2W のレジスタファイル |
+| `Decoder` | 64bit bundle のデコードと、規則 L1 の検出（`vliw.isa.BundleCodec` とは独立に実装）。mvp-1 では MAC も |
+| `RegisterFile` | 3R/2W のレジスタファイル。ポート2は ST のソース、mvp-1 の MAC では rs3 を読む |
 | `WriteReservations` | レジスタごとの書込み区間（L3・L4・L6 の検出用） |
-| `ComputeSlot` | ADD/SUB/MUL と、Compute書戻しポートの予約表 |
+| `ComputeSlot` | ADD/SUB/MUL（mvp-1 では MAC も）と、Compute書戻しポートの予約表 |
 | `MemorySlot` | bank分割した Scratchpad、LD/ST と、Memory書戻しポートの予約表 |
 | `WritebackSchedule` | 1つの書戻しポートの予約表。E_(s+L) での書込みと、L5 の検出 |
-| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1）を検査し、`CoreParams.check` で範囲外の理由をすべて返す（[docs/MACHINE.md](../docs/MACHINE.md)「実装ごとの対応範囲」） |
+| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1、読出しポート3本）を検査し、`CoreParams.check` で範囲外の理由をすべて返す（[docs/MACHINE.md](../docs/MACHINE.md)「実装ごとの対応範囲」） |
 | `FixedPipeline` | 資源条件を揃えた固定パイプライン（#75、[ADR-0017](../docs/DECISIONS.md)）。命令メモリ・命令制御・RF を持たず、静的なスケジュール（`FixedPlan`）をサイクルカウンタで実行する。`ComputeSlot` と `MemorySlot` をそのまま使う。値は32bit のレジスタ（`StoragePolicy`）。start/done と cycles の数え方は `Core` と同じ（E_T の cycle T を HALT とみなし、T+1 cycles） |
 | `FixedPlan` | 固定パイプラインの計画（各操作の発行サイクルと読む値）と、組み立て時の検査（スロット、L3、L5、L7、L9。verifier とは独立）。値のレジスタの割り当てと、その寿命の検査 |
 | `FixedParams` | 固定パイプラインのパラメータ。対応する machine は `Core` と同じで、`CoreParams.unsupported` と同じ理由で拒否する |
 
 ホストは停止中に、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける。実行中は内部状態を変更しない。
 
+## ISA mvp-1（MAC、#77）
+
+machine description に MAC があれば（`config/machine-mvp1.json` など）、RTL は MAC を実装する（[docs/ISA.md](../docs/ISA.md)「mvp-1: MAC」、[ADR-0018](../docs/DECISIONS.md)）。MAC がない mvp-0 の machine では、MAC の論理を一切作らない。`config/machine.json` から出力する SystemVerilog は、#77 の前と同じである。
+
+- `Decoder`: opcode は machine description から取る。rs3 は bits 15:12 で、bits 11:0 は予約。ADD/SUB/MUL の bits 15:0 は予約のまま。mvp-0 では opcode 4 は未知の opcode（L1）のまま
+- `ComputeSlot`: MAC は発行サイクルに読んだ値で `low32(rs1 × rs2 + rs3)` を計算し、ほかの演算と同じ予約表で E_(s+L_MAC) に Compute の書戻しポートから書く。L5 の衝突も同じく検出する。積は MUL と同じ式なので、出力する SystemVerilog では乗算器を MUL と共有する（Compute スロットは1サイクルに1つしか発行しないので、II 1 では外から区別できない）
+- `Core`: RF の読出しポートは3本のまま。ポート2のアドレスは、Compute の演算が MAC なら rs3、それ以外なら ST のソースにする。L3 の検査に MAC の rs3 を足す。MAC と ST を同じ bundle に置くと読出しが4つになり、違反信号 `readPorts` と L11 の assertion を出す（ポート2は rs3 を読むので、ST は正しい値を書かない）
+- `CoreParams`: `read_ports` 4 は範囲外（読出し4本の RTL は #57）。MAC の ii は1だけ。MAC の latency は、MUL と同じくローダの範囲全体（1〜8）
+- `FixedPipeline` は MAC を使わない。mvp-1 の machine では、`ComputeSlot` の3つ目のオペランドを0に固定する
+
 ## テスト
 
 | テスト | 内容 |
 |---|---|
 | 単体（`RegisterFileSpec` ほか） | 各モジュールのタイミングと違反信号 |
-| `CoreSpec` | ISA例、HALT のみ、再スタート |
+| `DecoderSpec` | MAC の欄、予約 bit、レジスタ数を超える rs3、mvp-0 に MAC がないこと |
+| `CoreSpec` | ISA例、HALT のみ、再スタート。mvp-1: ポート2の読出し、MAC と ST の L11、MUL・LD・MAC・ST・ADD の命令列（MAC の latency 2 と 3） |
 | `CaseSpec` | `tests/cases` の全ての合法ケース（cycles、最終状態、golden trace） |
 | `AssertionSpec` | `tests/cases` の全ての不正ケース（期待した規則の assertion） |
-| `EmitSpec` | SystemVerilog の生成と、対応しない構成の拒否 |
+| `EmitSpec` | SystemVerilog の生成（mvp-0 と mvp-1）と、対応しない構成の拒否 |
 | `FixedPipelineSpec` | 固定パイプライン: 計画の検査の各規則、値のレジスタの共有と寿命、Core と同じ範囲の拒否、SystemVerilog（Decoder と RegisterFile がない）、手で計算した例の発行・書戻し・done の cycle（`FixedDriver` は `CoreDriver` と同じ数え方） |
 
 RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。

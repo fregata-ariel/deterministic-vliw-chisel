@@ -2,7 +2,7 @@ package vliw.compiler
 
 import scala.util.Random
 
-import vliw.compiler.dag.Dag
+import vliw.compiler.dag.{Dag, Fusion}
 import vliw.compiler.dsl._
 import vliw.compiler.regalloc.{Allocated, RegisterAllocator}
 import vliw.compiler.schedule.Priority
@@ -31,7 +31,9 @@ object KernelCompiler {
   def declaration(layout: MemoryLayout): Verifier.Declaration =
     Verifier.Declaration(Set.empty, layout.initialized)
 
-  /** The input of scheduling: the layout of `kernel` and its DAG. */
+  /** The input of scheduling: the layout of `kernel` and its DAG, with MUL + ADD fused into MAC
+    * when the machine has MAC (`dag.macs` pairs).
+    */
   final case class Prepared(
       kernel: Kernel,
       machine: MachineDescription,
@@ -42,7 +44,9 @@ object KernelCompiler {
   def prepare(kernel: Kernel, machine: MachineDescription): Either[String, Prepared] =
     MemoryLayout
       .fixedOrder(kernel, machine)
-      .map(layout => Prepared(kernel, machine, layout, Dag.of(Lowering.lower(layout), machine)))
+      .map(layout =>
+        Prepared(kernel, machine, layout, Fusion.fuse(Dag.of(Lowering.lower(layout), machine)))
+      )
 
   /** Encodes and verifies the code of `allocated` (`checked`). */
   def finish(p: Prepared, allocated: Allocated): Either[String, CompiledKernel] = {

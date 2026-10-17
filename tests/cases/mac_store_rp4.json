@@ -1,0 +1,30 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_store_rp4",
+  "description": "読出しポートが4本の構成では、MAC と ST を同じ bundle に置ける（読出し4）",
+  "machine": "tests/machines/mvp1_rp4.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3 | st [0], r5   ; 2 * 3 + 4 = 10; memory[0] = 9",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4,
+      "r5": 9
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 3,
+    "registers": {
+      "r4": 10
+    },
+    "memory": {
+      "0": 9
+    }
+  }
+}

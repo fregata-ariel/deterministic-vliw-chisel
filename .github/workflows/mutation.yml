@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -39,7 +39,7 @@ jobs:
         timeout-minutes: 110
         env:
           MUTATION_LOG_DIR: build/mutation-logs
-          MUTATION_SHARD: ${{ matrix.shard }}/3
+          MUTATION_SHARD: ${{ matrix.shard }}/8
       # Always: results.tsv and, per mutant, the sbt log, the JUnit reports, the classification and
       # the ChiselSim logs of failed builds.
       - name: Upload logs

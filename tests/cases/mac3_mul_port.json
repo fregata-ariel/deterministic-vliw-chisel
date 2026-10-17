@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac3_mul_port",
+  "description": "MAC のレイテンシーが3の構成では、MAC(s) と MUL(s+1) が E_(s+3) で衝突する（L5）",
+  "machine": "tests/machines/mvp1_mac3.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3",
+    "@1: mul r5, r1, r2",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L5"
+      ]
+    }
+  }
+}

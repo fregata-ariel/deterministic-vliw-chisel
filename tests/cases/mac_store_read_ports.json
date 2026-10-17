@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_store_read_ports",
+  "description": "読出しポートが3本の構成（既定）では、MAC と ST を同じ bundle に置けない（読出し4、L11）",
+  "machine": "config/machine-mvp1.json",
+  "program": [
+    "@0: mac r4, r1, r2, r3 | st [0], r5",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4,
+      "r5": 9
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L11"
+      ]
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "dot8_i_modulo_mac_rp4",
+  "description": "generated from the loop of dot8 over i by Modulo Scheduling at II 2; expected outputs from the DSL reference implementation, cycles predicted by the scheduler",
+  "program": [
+    "@0:  nop             | ld r0, [0]",
+    "@1:  nop             | ld r1, [8]",
+    "@2:  nop             | ld r2, [1]",
+    "@3:  mul r0, r0, r1  | ld r1, [9]",
+    "@4:  nop             | ld r3, [2]",
+    "@5:  mac r0, r2, r1, r0 | ld r1, [10]",
+    "@6:  nop             | ld r2, [3]",
+    "@7:  mac r0, r3, r1, r0 | ld r1, [11]",
+    "@8:  nop             | ld r3, [4]",
+    "@9:  mac r0, r2, r1, r0 | ld r1, [12]",
+    "@10: nop             | ld r2, [5]",
+    "@11: mac r0, r3, r1, r0 | ld r1, [13]",
+    "@12: nop             | ld r3, [6]",
+    "@13: mac r0, r2, r1, r0 | ld r1, [14]",
+    "@14: nop             | ld r2, [7]",
+    "@15: mac r0, r3, r1, r0 | ld r1, [15]",
+    "@16: nop             | nop",
+    "@17: mac r0, r2, r1, r0 | nop",
+    "@18: nop             | nop",
+    "@19: nop             | st [16], r0",
+    "@20: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 21,
+    "memory": {
+      "16": 2446925990
+    }
+  },
+  "machine": "tests/machines/mvp1_rp4.json"
+}

@@ -8,7 +8,7 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 
 ## 実装（Phase 0）
 
-- `Verifier`: 合法性規則 L1〜L10 の静的verifier（[docs/VERIFIER.md](../docs/VERIFIER.md)）。値を持たず、書込み区間・読出し・メモリアクセスの表で判定し、全違反を報告する。
+- `Verifier`: 合法性規則 L1〜L11 の静的verifier（[docs/VERIFIER.md](../docs/VERIFIER.md)）。値を持たず、書込み区間・読出し・メモリアクセスの表で判定し、全違反を報告する。
 - CLI: `sbt "compiler/run verify <case.json>..."`
 
 ## 実装（Phase 2）

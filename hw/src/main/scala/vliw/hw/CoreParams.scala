@@ -9,7 +9,8 @@ import vliw.isa.MachineDescription
   * The RTL implements a subset of what the loader accepts (docs/MACHINE.md, "実装ごとの対応範囲"):
   *   - every II is 1 (fully pipelined units; issue every cycle);
   *   - LD latency >= 2, because the scratchpad is a synchronous-read memory;
-  *   - ST latency 1, so that a load and a store never meet at the same clock edge.
+  *   - ST latency 1, so that a load and a store never meet at the same clock edge;
+  *   - 3 register read ports: on ISA mvp-1, port 2 reads MAC's rs3 or the ST source (ADR-0018).
   *
   * Use [[CoreParams.check]] to get every reason a machine is outside that subset.
   */
@@ -25,7 +26,14 @@ final case class CoreParams(machine: MachineDescription) {
   def latency(mnemonic: String): Int = machine.operation(mnemonic).latency
   def opcode(mnemonic: String): Int = machine.operation(mnemonic).opcode
 
-  val computeLatencies: Seq[Int] = Seq("ADD", "SUB", "MUL").map(latency)
+  /** ISA mvp-1: the compute slot also issues MAC (docs/ISA.md, "mvp-1: MAC"). On mvp-0 the RTL has
+    * no MAC logic at all.
+    */
+  val hasMac: Boolean = machine.hasMac
+  val macOpcode: Option[Int] = Option.when(hasMac)(opcode("MAC"))
+  val macLatency: Option[Int] = Option.when(hasMac)(latency("MAC"))
+
+  val computeLatencies: Seq[Int] = Seq("ADD", "SUB", "MUL").map(latency) ++ macLatency
   val maxComputeLatency: Int = computeLatencies.max
   val maxLatency: Int = (computeLatencies :+ latency("LD") :+ latency("ST")).max
 
@@ -40,7 +48,8 @@ object CoreParams {
   /** Why the RTL cannot implement `machine`, one reason per setting; empty when it can. */
   def unsupported(machine: MachineDescription): Seq[String] = {
     def op(m: String) = machine.operation(m)
-    val ii = Seq("ADD", "SUB", "MUL", "LD", "ST").filter(op(_).ii != 1).map { m =>
+    val units = Seq("ADD", "SUB", "MUL", "MAC", "LD", "ST").filter(machine.operations.contains)
+    val ii = units.filter(op(_).ii != 1).map { m =>
       s"$m has II ${op(m).ii}; the RTL issues every unit every cycle and supports only II 1"
     }
     val ld = Option.when(op("LD").latency < 2)(
@@ -49,7 +58,10 @@ object CoreParams {
     val st = Option.when(op("ST").latency != 1)(
       s"ST has latency ${op("ST").latency}; the RTL supports only 1 (stores write at the issue edge)"
     )
-    ii ++ ld ++ st
+    val readPorts = Option.when(machine.readPorts != 3)(
+      s"read_ports is ${machine.readPorts}; the RTL has 3 register read ports, port 2 shared by MAC's rs3 and the ST source (4 read ports come in #57)"
+    )
+    ii ++ ld ++ st ++ readPorts
   }
 
   /** The parameters for `machine`, or every reason the RTL cannot implement it. */

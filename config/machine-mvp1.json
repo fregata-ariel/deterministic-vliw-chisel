@@ -1,0 +1,48 @@
+{
+  "schema_version": 2,
+  "revision": 1,
+  "status": "frozen",
+  "isa_version": "mvp-1",
+  "machine_id": "vliw2-i32-sp2-mac",
+  "word_bits": 32,
+  "bundle_bits": 64,
+  "binary_endianness": "little",
+  "arithmetic": "modulo_2_pow_32",
+  "slots": {"compute": 1, "memory": 1},
+  "register_file": {
+    "count": 16,
+    "zero_register": null,
+    "read_ports": 3,
+    "write_ports": {"compute": 1, "memory": 1},
+    "same_cycle_same_destination_write": "forbidden"
+  },
+  "scratchpad": {
+    "banks": 2,
+    "words_per_bank": 256,
+    "ports_per_bank": "1RW",
+    "global_issue_per_cycle": 1,
+    "address_unit": "word",
+    "bank_mapping": "word_address_mod_2",
+    "row_mapping": "word_address_div_2",
+    "read_during_write": "forbidden"
+  },
+  "operations": {
+    "ADD": {"slot": "compute", "opcode": 1, "latency": 1, "ii": 1, "writeback": "compute"},
+    "SUB": {"slot": "compute", "opcode": 2, "latency": 1, "ii": 1, "writeback": "compute"},
+    "MUL": {"slot": "compute", "opcode": 3, "latency": 2, "ii": 1, "writeback": "compute"},
+    "MAC": {"slot": "compute", "opcode": 4, "latency": 2, "ii": 1, "writeback": "compute"},
+    "LD": {"slot": "memory", "opcode": 1, "latency": 2, "ii": 1, "writeback": "memory"},
+    "ST": {"slot": "memory", "opcode": 2, "latency": 1, "ii": 1, "writeback": null},
+    "HALT": {"slot": "compute", "opcode": 15, "requires_no_pending_operations": true, "requires_memory_nop": true, "done_after_cycles": 1}
+  },
+  "nop_opcode": 0,
+  "instruction_memory": {"bundles": 256},
+  "control": {"branches": false, "loops": "unrolled", "internal_stalls": false},
+  "timing": {
+    "source_read": "issue_cycle",
+    "availability": "issue_cycle_plus_latency",
+    "dependency_constraint": "consumer_issue_gte_producer_issue_plus_latency",
+    "writeback_cycle_reservation": true,
+    "kernel_cycles": "halt_issue_cycle_plus_1"
+  }
+}

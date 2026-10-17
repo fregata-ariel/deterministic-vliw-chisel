@@ -10,13 +10,33 @@ sealed trait Node extends Product with Serializable {
 
   /** ISA mnemonic, which selects the latency and II in the machine description. */
   def mnemonic: String
+
+  /** The operands, one per operand field of the instruction: a node read by two fields appears
+    * twice (rule L11 counts the fields).
+    */
+  def operands: Vector[Int]
 }
 object Node {
-  final case class Load(addr: Int) extends Node { def mnemonic: String = "LD" }
+  final case class Load(addr: Int) extends Node {
+    def mnemonic: String = "LD"
+    def operands: Vector[Int] = Vector.empty
+  }
   final case class Compute(op: Op, a: Int, b: Int) extends Node {
     def mnemonic: String = op.mnemonic
+    def operands: Vector[Int] = Vector(a, b)
   }
-  final case class Store(addr: Int, value: Int) extends Node { def mnemonic: String = "ST" }
+
+  /** `a * b + c` (ISA mvp-1). The kernel language has no MAC: it comes only from fusing a MUL and
+    * an ADD (`Fusion`).
+    */
+  final case class Mac(a: Int, b: Int, c: Int) extends Node {
+    def mnemonic: String = "MAC"
+    def operands: Vector[Int] = Vector(a, b, c)
+  }
+  final case class Store(addr: Int, value: Int) extends Node {
+    def mnemonic: String = "ST"
+    def operands: Vector[Int] = Vector(value)
+  }
 }
 
 sealed abstract class EdgeKind(val name: String) extends Product with Serializable
@@ -95,6 +115,9 @@ final case class Dag(machine: MachineDescription, nodes: Vector[Node], edges: Ve
   /** Number of LD nodes. */
   def loads: Int = nodes.count(_.isInstanceOf[Node.Load])
 
+  /** Number of MAC nodes: in a kernel's DAG, the MUL + ADD pairs fused (`Fusion`). */
+  def macs: Int = nodes.count(_.isInstanceOf[Node.Mac])
+
   /** The nodes that read each node's value (its data successors), in id order. */
   lazy val readers: Vector[Vector[Int]] =
     successors.map(_.filter(_.kind == EdgeKind.Data).map(_.to).distinct.sorted)
@@ -127,6 +150,7 @@ final case class Dag(machine: MachineDescription, nodes: Vector[Node], edges: Ve
     def operand(reader: Int, o: Int) = if (o == load && moved(reader)) at else id(o)
     val renamed = nodes.zipWithIndex.map {
       case (Node.Compute(op, a, b), i) => Node.Compute(op, operand(i, a), operand(i, b))
+      case (Node.Mac(a, b, c), i)      => Node.Mac(operand(i, a), operand(i, b), operand(i, c))
       case (Node.Store(addr, v), i)    => Node.Store(addr, operand(i, v))
       case (l: Node.Load, _)           => l
     }

@@ -18,7 +18,7 @@ class RfReadPort(val regBits: Int) extends Bundle {
 class RegisterFileIO(val count: Int) extends Bundle {
   val regBits: Int = log2Ceil(count).max(1)
 
-  /** Read ports: compute rs1, compute rs2, store source (docs/ISA.md). */
+  /** Read ports: compute rs1, compute rs2, store source or MAC's rs3 on mvp-1 (docs/ISA.md). */
   val read = Vec(3, new RfReadPort(regBits))
 
   /** Write ports: index 0 is the compute port, index 1 the memory port. */

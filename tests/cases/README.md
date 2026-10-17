@@ -13,6 +13,12 @@
 | [`imem_full`](imem_full.json) | 合法 | 命令領域（256 bundle）をちょうど使い切る。HALTは255番 | 256 cycles |
 | [`isa_example`](isa_example.json) | 合法 | docs/ISA.md「最初の命令例」: LD → MUL → ADD → ST → HALT | 7 cycles、golden trace |
 | [`issue_cycle_read`](issue_cycle_read.json) | 合法 | 発行サイクル自身での読出しは旧値を読む（ADDのソースとSTのソース） | 2 cycles |
+| [`mac3_spacing`](mac3_spacing.json) | 合法 | MAC のレイテンシーが3の構成。結果は s+3 から見える | 7 cycles、mvp1_mac3.json |
+| [`mac_accumulate`](mac_accumulate.json) | 合法 | rd = rs3 の累算。発行サイクルの rs3 は旧値を読む | 5 cycles、machine-mvp1.json |
+| [`mac_basic`](mac_basic.json) | 合法 | MAC は rd ← low32(rs1 × rs2 + rs3)。3つのソースを発行サイクルに読み、結果は s+2 から見える。LD と同じ境界に、別の書戻しポートで commit する | 7 cycles、machine-mvp1.json |
+| [`mac_store_rp4`](mac_store_rp4.json) | 合法 | 読出しポートが4本の構成では、MAC と ST を同じ bundle に置ける（読出し4） | 3 cycles、mvp1_rp4.json |
+| [`mac_then_mul`](mac_then_mul.json) | 合法 | MAC(s) と MUL(s+1) は、latency 2 では E_(s+2) と E_(s+3) に commit し、衝突しない | 4 cycles、machine-mvp1.json |
+| [`mac_wrap`](mac_wrap.json) | 合法 | MAC は2^32を法とする。(2^32-1)^2 + (2^32-1) ≡ 0 | 5 cycles、machine-mvp1.json |
 | [`register_address_bounds`](register_address_bounds.json) | 合法 | r0 / r15 とアドレス 0 / 511 の境界。r15 の加算は桁あふれする | 4 cycles |
 | [`same_register_other_boundaries`](same_register_other_boundaries.json) | 合法 | 同じレジスタへのComputeとMemoryの書込みは、区間が重ならなければ合法 | 4 cycles |
 | [`slow_store_same_bank`](slow_store_same_bank.json) | 合法 | ST のレイテンシーが2の構成で、書込み中の番地と同じ bank の別の番地は読める。ST(s) の番地は s+2 から読める | 6 cycles、slow_units.json |
@@ -27,6 +33,13 @@
 | [`ii_back_to_back_mul`](ii_back_to_back_mul.json) | 不正: L9 | MUL の II が2の構成で、MUL を連続するサイクルに発行する（L9） | ii_units.json |
 | [`ii_ld_too_close`](ii_ld_too_close.json) | 不正: L9 | LD の II が3の構成で、LD(s) の次の LD を s+2 に発行する（L9） | ii_units.json |
 | [`imem_overflow`](imem_overflow.json) | 不正: L2 | 命令領域を1 bundle超える（257 bundle、L2） |  |
+| [`mac3_mul_port`](mac3_mul_port.json) | 不正: L5 | MAC のレイテンシーが3の構成では、MAC(s) と MUL(s+1) が E_(s+3) で衝突する（L5） | mvp1_mac3.json |
+| [`mac_early_halt`](mac_early_halt.json) | 不正: L6 | HALT 時に MAC が完了していない（L6） | machine-mvp1.json |
+| [`mac_overlapping_ld`](mac_overlapping_ld.json) | 不正: L4 | MAC と LD が同じ rd に書き、書込み区間が重なる（L4） | machine-mvp1.json |
+| [`mac_reserved_bits`](mac_reserved_bits.json) | 不正: L1 | MAC の予約 bit 0 が1（L1）。最後は HALT | machine-mvp1.json、program_hex |
+| [`mac_rs3_in_flight`](mac_rs3_in_flight.json) | 不正: L3 | MAC の rs3 も発行サイクルに読む。MUL の結果を次のサイクルの rs3 で読む（L3） | machine-mvp1.json |
+| [`mac_store_read_ports`](mac_store_read_ports.json) | 不正: L11 | 読出しポートが3本の構成（既定）では、MAC と ST を同じ bundle に置けない（読出し4、L11） | machine-mvp1.json |
+| [`mac_then_add_port`](mac_then_add_port.json) | 不正: L5 | MAC(s) と ADD(s+1) はどちらも E_(s+2) に Compute ポートを使う（L5） | machine-mvp1.json |
 | [`mul_then_add_port`](mul_then_add_port.json) | 不正: L5 | MUL(s)とADD(s+1)はどちらもE_(s+2)にComputeポートを使う（L5） |  |
 | [`no_halt`](no_halt.json) | 不正: L2 | HALTが無い（L2） |  |
 | [`overlapping_mul_ld`](overlapping_mul_ld.json) | 不正: L4 | MULとLDの書込み区間が重なる（L4） |  |
@@ -49,18 +62,19 @@
 | `isa/TestCaseSpec` | 全ケースが形式どおりに読めること |
 | `compiler/VerifierSpec` | verifierが報告する規則の集合が `expect.verdict` と一致すること |
 | `sim/ReferenceModelSpec` | 参照モデルの結果（cycles、最終状態、golden trace、最初の違反）が期待値と合うこと |
-| `crosscheck/DifferentialSpec` | 乱数で作ったプログラムで、verifierと参照モデルの判定が一致すること（既定の構成と、レイテンシー・II・容量を変えた4構成）。合法なプログラムで、cyclesとcommit時刻が入力値に依存しないこと |
+| `crosscheck/DifferentialSpec` | 乱数で作ったプログラムで、verifierと参照モデルの判定が一致すること（既定の構成と、レイテンシー・II・容量を変えた4構成）。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json`・`mvp1_rp4.json`・`mvp1_mac3.json` と、MAC の II を2にした構成の4つ。生成器は rd = rs3、書込み中の rs3（L3）、同じ bundle の MAC と ST（読出し3本で L11、4本で合法）、MAC と後の ADD/SUB/MUL の書戻しポートの衝突（L5）を作り、参照モデルが最初に当たる規則はすべて出る（mvp-1 では L11 と、MAC の II が2の構成の L9 を含む）。合法なプログラムで、cyclesとcommit時刻が入力値に依存しないこと |
 | `sim/MetricsSpec` | 合法な全ケースで、メトリクスの値が命令列と整合すること |
 | `hw/CaseSpec` | 合法な全ケースを RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
 | `hw/AssertionSpec` | 不正な全ケースで、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
-| `crosscheck/CompiledKernelSpec` | DSL のベンチマークを list scheduling と register allocation で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出すこと |
-| `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL） |
+| `crosscheck/CompiledKernelSpec` | DSL のベンチマークを list scheduling と register allocation で命令列にし、最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出すこと。ISA mvp-1 では、MUL + ADD を MAC に融合した DAG から、レジスタ16・12・8本で作る。MAC の命令は融合した組の数だけあり、読出し3本の構成では MAC と ST が同じ bundle に無い（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`。RTL はレジスタ16本の構成で、12本・8本の命令列も実行する） |
+| `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL）。ISA mvp-1 の MAC を含む命令列でも同じ出力になること（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json`） |
 | `crosscheck/BenchmarkSpec` | `benchmarks/` の記録がソースから生成し直した内容と一致し、記録した命令列が参照モデルと RTL で期待どおりになること |
-| `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと |
+| `crosscheck/RandomKernelSpec` | 乱数で作った DSL のカーネル（400個）をコンパイルし、すべて最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、予測どおりの cycles で出すこと。ISA mvp-1 でも同じ（参照モデルは `machine-mvp1.json` と `mvp1_rp4.json`、RTL は MAC を含む60個を `machine-mvp1.json` で）。読む側が複数ある MUL は、ADD が読んでも MUL のまま残ること |
+| `crosscheck/ModuloKernelSpec` | ループのベンチマークを Modulo Scheduling（#68）で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出し、トレースから読んだ II が記録した II と一致すること（`ModuloTrace`）。ISA mvp-1 では、ループごとの融合の判定（`mvp1_mac3.json` の `dot8` は MII が上がるので融合しない）、II と cycles、融合したループの MAC の命令を確かめる（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`） |
 | `crosscheck/FixedPipelineKernelSpec` | ベンチマークの固定パイプライン（#75）を ChiselSim で実行し、乱数・全0・全1の入力で DSL の参照実装と同じ出力を、計画どおりの cycles と発行・書戻しの cycle で出すこと。FIR の係数を変えても同じ回路で正しいこと（係数可変） |
-| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成）。RTL のタイミングが入力値に依存しないこと |
+| `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json` と `mvp1_mac3.json`）。RTL のタイミングが入力値に依存しないこと |
 
-RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
+RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
 
 新しいケースは `tests/cases/<name>.json` に置けば、上のテストすべてが自動的に対象にする。
 
@@ -73,10 +87,13 @@ RTL が対応しない構成（`slow_units.json` と `ii_units.json`）のケー
 | `tests/machines/ii_units.json` | ADD・SUB・MUL の II が2、LD の II が3 | `ii_*` |
 | `tests/machines/regs3.json` | レジスタ3本（ほかは既定の構成と同じ） | Modulo Scheduling のテスト（`compiler/.../modulo/ModuloSchedulerSpec`、#68） |
 | `tests/machines/regs8.json`、`tests/machines/regs12.json` | レジスタ8本、12本（ほかは既定の構成と同じ） | レジスタ数を変えたベンチマーク（rematerialization、#70）。`crosscheck/CompiledKernelSpec` が参照モデルと RTL で実行する |
+| `config/machine-mvp1.json` | ISA mvp-1 の既定の構成: mvp-0 に MAC（latency 2、II 1）を足し、読出しポートは3本（[ADR-0018](../../docs/DECISIONS.md)） | `mac_*`（`mac_store_rp4` を除く）。`crosscheck` の ISA mvp-1 のテスト |
+| `tests/machines/mvp1_rp4.json` | mvp-1 で読出しポートだけ4本（制約なしの比較用。RTL の範囲外） | `mac_store_rp4`。`crosscheck` の ISA mvp-1 のテスト（verifier と参照モデル） |
+| `tests/machines/mvp1_mac3.json` | mvp-1 で MAC のレイテンシーだけ3（感度の確認） | `mac3_*`。`crosscheck` の ISA mvp-1 のテスト |
 
 ## mutation チェック
 
-`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL に1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**テストの失敗として**失敗することを確かめる。mutant ごとに全テストを実行するため時間がかかる（CI 上、1回の `sbt test` が約5.5分、最初の mutant なしの1回がコンパイルを含めて約10分）。1回の `sbt test` は `MUTATION_TIMEOUT`（既定 1200 秒）で打ち切る。`MUTATION_SHARD=k/n` を与えると、`mutants.tsv` の mutant の行のうち k, k+n, k+2n, … 番目（1 から数える）だけを実行する。CI では mutant を3つの shard に分けて並列に実行し、shard ごとに最初の mutant なしの1回を行う（20 mutant で shard 当たり約50分）。shard ごとに、ジョブの timeout が120分、mutation のステップの timeout が110分である（打ち切られてもログを残せるようにするため）。ログは shard ごとの artifact（`mutation-logs-shard<k>-attempt<n>`）に残る。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義・スクリプトを変えたPRでだけ実行し、required にはしない。
+`scripts/mutation-check.sh` は、`scripts/mutants.tsv` に列挙した誤り（verifier・参照モデル・エンコーダ・RTL・コンパイラに1か所ずつ入れる）を順に適用し（欄の `\n` は改行として扱う）、そのたびに `sbt test` が**テストの失敗として**失敗することを確かめる。mutant ごとに全テストを実行するため時間がかかる（CI 上、1回の `sbt test` が約5.5分、最初の mutant なしの1回がコンパイルを含めて約10分）。1回の `sbt test` は `MUTATION_TIMEOUT`（既定 1200 秒）で打ち切る。`MUTATION_SHARD=k/n` を与えると、`mutants.tsv` の mutant の行のうち k, k+n, k+2n, … 番目（1 から数える）だけを実行する。CI では mutant を8つの shard に分けて並列に実行し、shard ごとに最初の mutant なしの1回を行う（53 mutant で shard 当たり6〜7個）。shard ごとに、ジョブの timeout が120分、mutation のステップの timeout が110分である（打ち切られてもログを残せるようにするため）。ログは shard ごとの artifact（`mutation-logs-shard<k>-attempt<n>`）に残る。CIでは手動実行（`Mutation check` ワークフロー）と、mutantの定義・スクリプトを変えたPRでだけ実行し、required にはしない。
 
 `sbt test` が 0 以外で終わることだけでは、mutant を検出したとは言えない。Verilator・make のビルドの失敗も、ChiselSim ではそのテストの `*** FAILED ***` として表示されるからである（#74）。そこで、各実行の JUnit レポート（`*/target/test-reports`）と sbt のログを `scripts/mutation-classify.py` が読み、失敗したテストごとに原因を分類して、mutant を次のどれかと判定する。
 

@@ -30,8 +30,10 @@ object ModuloTrace {
   )
 
   private def parse(text: String): Issued = text.trim match {
-    case s"ld r$d, [$a]"     => Issued("LD", Some(d.toInt), Vector.empty, Some(a.toInt))
-    case s"st [$a], r$s"     => Issued("ST", None, Vector(s.toInt), Some(a.toInt))
+    case s"ld r$d, [$a]"           => Issued("LD", Some(d.toInt), Vector.empty, Some(a.toInt))
+    case s"st [$a], r$s"           => Issued("ST", None, Vector(s.toInt), Some(a.toInt))
+    case s"mac r$d, r$a, r$b, r$c" =>
+      Issued("MAC", Some(d.toInt), Vector(a.toInt, b.toInt, c.toInt), None)
     case s"$m r$d, r$a, r$b" => Issued(m.toUpperCase, Some(d.toInt), Vector(a.toInt, b.toInt), None)
     case other               => Issued(other.toUpperCase, None, Vector.empty, None)
   }
@@ -111,6 +113,7 @@ object ModuloTrace {
           case LoopNode.Load(a)          => (Some(a.at(k.getOrElse(0))), Vector.empty)
           case LoopNode.Store(a, v)      => (Some(a.at(k.getOrElse(0))), Vector(v))
           case LoopNode.Compute(_, a, b) => (None, Vector(a, b))
+          case LoopNode.Mac(a, b, c)     => (None, Vector(a, b, c))
         }
         if (got.addr != addr) mismatches += s"$where: address ${got.addr}, expected $addr"
         if (got.sources.size == operands.size)

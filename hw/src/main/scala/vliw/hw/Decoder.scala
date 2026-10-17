@@ -7,6 +7,9 @@ class DecodedBundle(val p: CoreParams) extends Bundle {
   val compute = Valid(new ComputeOperation(p.regBits))
   val rs1 = UInt(p.regBits.W)
   val rs2 = UInt(p.regBits.W)
+
+  /** MAC's rs3 (ISA mvp-1 only). */
+  val rs3 = Option.when(p.hasMac)(UInt(p.regBits.W))
   val halt = Bool()
   val memory = Valid(new MemoryOperation(p.regBits))
 
@@ -24,7 +27,9 @@ class DecoderIO(val p: CoreParams) extends Bundle {
 /** Combinational decoder of a 64-bit bundle (docs/ISA.md, "64bit bundleのエンコード案").
   *
   * Written independently of `vliw.isa.BundleCodec`; opcode values come from the machine
-  * description. The compute word is bits 31:0 and the memory word bits 63:32.
+  * description. The compute word is bits 31:0 and the memory word bits 63:32. On ISA mvp-1, MAC
+  * puts rs3 in bits 15:12 and keeps bits 11:0 reserved (docs/ISA.md, "mvp-1: MAC"); on mvp-0 there
+  * is no MAC logic, and its opcode is unknown.
   */
 class Decoder(p: CoreParams) extends Module {
   val io = IO(new DecoderIO(p))
@@ -42,13 +47,19 @@ class Decoder(p: CoreParams) extends Module {
     p.opcode("ADD") -> ComputeKind.Add,
     p.opcode("SUB") -> ComputeKind.Sub,
     p.opcode("MUL") -> ComputeKind.Mul
-  )
+  ) ++ p.macOpcode.map(_ -> ComputeKind.Mac)
   private val cIsArith = kinds.map { case (code, _) => cOp === code.U }.reduce(_ || _)
   private val cIsHalt = cOp === p.machine.haltOpcode.U
   private val cNoOperands = c(27, 0) === 0.U
+
+  // ADD/SUB/MUL reserve bits 15:0. MAC (mvp-1) has rs3 in bits 15:12 and reserves bits 11:0.
+  private val mac = p.macOpcode.map(code => (cOp === code.U, reg(c(15, 12))))
+  private val cLowIllegal = mac.fold(c(15, 0) =/= 0.U) { case (isMac, (_, rs3Ok)) =>
+    Mux(isMac, c(11, 0) =/= 0.U || !rs3Ok, c(15, 0) =/= 0.U)
+  }
   private val cIllegal = Mux(
     cIsArith,
-    c(15, 0) =/= 0.U || !rdOk || !rs1Ok || !rs2Ok,
+    cLowIllegal || !rdOk || !rs1Ok || !rs2Ok,
     Mux(cOp === p.machine.nopOpcode.U || cIsHalt, !cNoOperands, true.B)
   )
 
@@ -60,6 +71,7 @@ class Decoder(p: CoreParams) extends Module {
   io.out.compute.bits.rd := rd
   io.out.rs1 := rs1
   io.out.rs2 := rs2
+  io.out.rs3.zip(mac).foreach { case (out, (_, (rs3, _))) => out := rs3 }
   io.out.halt := cIsHalt && !cIllegal
 
   // Memory word.

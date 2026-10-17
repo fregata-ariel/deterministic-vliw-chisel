@@ -5,7 +5,7 @@ import vliw.compiler.dag.{Dag, Node}
 import vliw.compiler.dsl.Kernel
 import vliw.compiler.schedule.{ListScheduler, Priority, Schedule}
 import vliw.hw.{FixedOp, FixedParams, FixedPlan, StoragePolicy}
-import vliw.isa.MachineDescription
+import vliw.isa.{MachineDescription, Slot}
 
 /** Fixed pipelines (#75) of the DSL kernels: the kernel's layout (`MemoryLayout.fixedOrder`) and
   * DAG, list-scheduled under the machine's slots, write-back ports, latencies and IIs, as the plan
@@ -53,6 +53,8 @@ object FixedPipelines {
         case (Node.Load(addr), i)        => FixedOp.Load(issue(i), addr)
         case (Node.Compute(op, a, b), i) => FixedOp.Compute(issue(i), op.mnemonic, a, b)
         case (Node.Store(addr, v), i)    => FixedOp.Store(issue(i), addr, v)
+        case (_: Node.Mac, _)            =>
+          sys.error(s"$name: the fixed pipelines (#75) are built on mvp-0 and have no MAC")
       }
     )
 
@@ -77,15 +79,12 @@ object FixedPipelines {
   def lowerBound(dag: Dag): (Int, String) = {
     def lat(m: String) = dag.machine.operation(m).latency
     val n = dag.nodes.indices
-    val memory = n.filterNot(i => dag.nodes(i).isInstanceOf[Node.Compute])
-    val compute = n.filter(i => dag.nodes(i).isInstanceOf[Node.Compute])
+    val compute = n.filter(i => ListScheduler.slot(dag.nodes(i)) == Slot.Compute)
+    val memory = n.filterNot(compute.contains)
     val mem = memory.size - 1 + memory.map(dag.latency).min
     if (compute.isEmpty) (mem + 1, "memory")
     else {
-      def operands(i: Int) = dag.nodes(i) match {
-        case Node.Compute(_, a, b) => Seq(a, b).distinct
-        case _                     => Nil
-      }
+      def operands(i: Int) = dag.nodes(i).operands.distinct
       val first = compute.filter(i => operands(i).forall(o => dag.nodes(o).isInstanceOf[Node.Load]))
       val last =
         compute.filter(i => dag.readers(i).forall(r => dag.nodes(r).isInstanceOf[Node.Store]))

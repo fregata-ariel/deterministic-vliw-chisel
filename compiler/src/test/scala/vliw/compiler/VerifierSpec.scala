@@ -164,4 +164,77 @@ class VerifierSpec extends AnyFunSuite {
     // With ST latency 1 (mvp-0), the store is visible in the next cycle.
     assert(rules("| st [2], r1\n| ld r2, [2]\nnop\nhalt") == Set.empty)
   }
+
+  private val mvp1 = MachineDescription
+    .load(java.nio.file.Paths.get("config", "machine-mvp1.json"))
+    .fold(es => fail(es.mkString("\n")), identity)
+  private def on(m: MachineDescription, src: String): Set[String] =
+    Verifier.verify(m, words(src, m), all).map(_.rule.id).toSet
+
+  test("the mvp-1 examples table of docs/ISA.md (read_ports 3)") {
+    def r(src: String) = on(mvp1, src)
+    assert(r("mul r3, r1, r2\nmac r4, r1, r2, r3\nnop\nhalt") == Set("L3"))
+    assert(r("mul r3, r1, r2\nnop\nmac r4, r1, r2, r3\nnop\nhalt") == Set.empty)
+    assert(r("mac r1, r2, r3, r1\nnop\nmac r1, r2, r3, r1\nnop\nhalt") == Set.empty)
+    assert(r("mac r1, r2, r3, r1\nmac r1, r4, r5, r1\nnop\nhalt") == Set("L3", "L4"))
+    assert(r("mac r4, r1, r2, r3\nadd r5, r1, r2\nhalt") == Set("L5"))
+    assert(r("mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nhalt") == Set.empty)
+    assert(r("mac r4, r1, r2, r3 | ld r4, [0]\nnop\nhalt") == Set("L4"))
+    assert(r("mac r4, r1, r2, r3\nhalt") == Set("L6"))
+    assert(r("mac r4, r1, r2, r3 | st [0], r5\nnop\nhalt") == Set("L11"))
+    assert(r("mul r4, r1, r2 | st [0], r5\nnop\nhalt") == Set.empty)
+  }
+
+  test("L11: reads are counted per operand field, against the machine's read ports") {
+    val rp4 = machineFile("mvp1_rp4.json")
+    // The same register in every field still takes four reads.
+    assert(on(mvp1, "mac r1, r2, r2, r2 | st [0], r2\nnop\nhalt") == Set("L11"))
+    assert(on(rp4, "mac r1, r2, r2, r2 | st [0], r2\nnop\nhalt") == Set.empty)
+    assert(on(rp4, "mac r4, r1, r2, r3 | st [0], r5\nnop\nhalt") == Set.empty)
+    // MAC alone, MAC with LD, and every mvp-0 bundle read at most three registers.
+    assert(on(mvp1, "mac r4, r1, r2, r3 | ld r5, [0]\nnop\nhalt") == Set.empty)
+    assert(on(mvp1, "add r4, r1, r2 | st [0], r5\nhalt") == Set.empty)
+    assert(rules("mul r4, r1, r2 | st [0], r5\nnop\nhalt") == Set.empty)
+    val f = Verifier.verify(
+      mvp1,
+      words(
+        "nop\nmac r4, r1, r2, r3 | st [0], r5\nnop\nmac r6, r1, r2, r3 | st [1], r1\nnop\nhalt",
+        mvp1
+      ),
+      all
+    )
+    assert(f.map(f => (f.rule.id, f.cycle.get)) == Vector(("L11", 1), ("L11", 3)))
+    assert(f.head.message.contains("reads 4 registers (r1, r2, r3, r5)"), f.head.message)
+  }
+
+  test("MAC reads rs3 in its issue cycle: L3 and L8 apply to it") {
+    val none = Verifier.Declaration(Set(1, 2), Set.empty)
+    assert(
+      Verifier
+        .verify(mvp1, words("mac r4, r1, r2, r3\nnop\nhalt", mvp1), none)
+        .map(_.rule.id)
+        .toSet == Set("L8")
+    )
+    assert(on(mvp1, "add r3, r1, r2\nmac r4, r1, r2, r3\nnop\nhalt") == Set.empty)
+    // rd = rs3 reads the old value: the accumulator form is legal.
+    assert(on(mvp1, "mac r3, r1, r2, r3\nnop\nhalt") == Set.empty)
+  }
+
+  test("MAC uses its own latency and II from the machine description") {
+    val mac3 = machineFile("mvp1_mac3.json")
+    assert(on(mac3, "mac r4, r1, r2, r3\nnop\nhalt") == Set("L6"))
+    assert(on(mac3, "mac r4, r1, r2, r3\nnop\nnop\nhalt") == Set.empty)
+    // MAC(s) and MUL(s+1) share E_(s+3) when MAC has latency 3; ADD(s+2) too.
+    assert(on(mac3, "mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nnop\nhalt") == Set("L5"))
+    assert(on(mac3, "mac r4, r1, r2, r3\nnop\nadd r5, r1, r2\nnop\nhalt") == Set("L5"))
+    assert(
+      on(mac3, "mac r4, r1, r2, r4\nnop\nmac r4, r1, r2, r4\nnop\nnop\nhalt") == Set("L3", "L4")
+    )
+    val v = ujson.read(mvp1.canonicalJson)
+    v("operations")("MAC")("ii") = 2
+    val ii2 = MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
+    assert(on(ii2, "mac r4, r1, r2, r3\nmac r5, r1, r2, r3\nnop\nhalt") == Set("L9"))
+    // MUL and MAC are different operations, each with its own unit.
+    assert(on(ii2, "mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nhalt") == Set.empty)
+  }
 }

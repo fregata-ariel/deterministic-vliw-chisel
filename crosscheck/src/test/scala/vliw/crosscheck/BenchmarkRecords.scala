@@ -355,7 +355,7 @@ ${lines.mkString("\n")}"""
 | 項目 | 値 |
 |---|---|
 | machine | `${m.machineId}` revision ${m.revision}、`${m.hash}` |
-| ISA | `${vliw.isa.IsaVersion.Current}` |
+| ISA | `${m.isaVersion}` |
 | カーネル | `vliw.compiler.dsl.Benchmarks`（[docs/DSL.md](../docs/DSL.md)） |
 | 配置 | `MemoryLayout.fixedOrder` |
 | コンパイラの試行 | 優先度（critical-path、program-order）×（$limits）（[docs/COMPILER.md](../docs/COMPILER.md)） |
@@ -409,8 +409,8 @@ ${fixedPipelineSection(fx, m)}"""
     )
   }
 
-  /** Every file under benchmarks/ that this generates, with its content (with ModuloRecords and
-    * RegisterRecords).
+  /** Every file under benchmarks/ that this generates, with its content (with ModuloRecords,
+    * RegisterRecords and MacRecords).
     */
   def files(
       rs: Seq[Record] = records(),
@@ -418,16 +418,20 @@ ${fixedPipelineSection(fx, m)}"""
       m: MachineDescription = machine,
       ms: Option[Seq[ModuloRecords.Compared]] = None,
       regs: Option[Seq[RegisterRecords.Series]] = None,
-      fx: Option[Seq[FixedPipelineRecord]] = None
-  ): Seq[(Path, String)] =
-    ModuloRecords.files(ms.getOrElse(ModuloRecords.records(m)), rs, fs, m) ++
+      fx: Option[Seq[FixedPipelineRecord]] = None,
+      mac: Option[Seq[MacRecords.Series]] = None
+  ): Seq[(Path, String)] = {
+    val loops = ms.getOrElse(ModuloRecords.records(m))
+    ModuloRecords.files(loops, rs, fs, m) ++
       RegisterRecords.files(regs.getOrElse(RegisterRecords.series(rs, fs, m))) ++
+      MacRecords.files(mac.getOrElse(MacRecords.series(rs, fs, loops, m))) ++
       recordFiles(rs) :+ (Dir.resolve("RESULTS.md") -> results(
         rs,
         fs,
         m,
         fx.getOrElse(fixedPipelines(rs, m))
       ))
+  }
 
   def main(args: Array[String]): Unit =
     files().foreach { case (p, text) =>

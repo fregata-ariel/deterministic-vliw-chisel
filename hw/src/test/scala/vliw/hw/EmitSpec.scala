@@ -14,6 +14,21 @@ class EmitSpec extends AnyFunSuite {
     )
     assert(sv.contains("module Core("))
     assert(sv.contains("module Decoder("))
+    // mvp-0 has no MAC logic: no rs3, no L11 signal (the RTL is that of mvp-0 before #77).
+    assert(!sv.contains("rs3") && !sv.contains("readPorts") && !sv.contains("L11"))
+  }
+
+  test("the core for config/machine-mvp1.json has MAC, rs3 on read port 2 and the L11 assertion") {
+    val machine =
+      MachineDescription.load(MachineDescription.Mvp1Path).fold(es => fail(es.mkString), identity)
+    val sv = ChiselStage.emitSystemVerilog(
+      new Core(CoreParams(machine)),
+      firtoolOpts = Emit.FirtoolOptions
+    )
+    assert(sv.contains("module Core("))
+    assert(sv.contains("io_observe_decoded_rs3") && sv.contains("io_violation_readPorts"))
+    assert(sv.contains("io_c"), "the compute slot's third operand")
+    assert(sv.contains("L11 (more register reads than read ports)"))
   }
 
   private val base = MachineDescription.load().fold(es => fail(es.mkString), identity)
@@ -55,6 +70,27 @@ class EmitSpec extends AnyFunSuite {
     assert(both.map(_.takeWhile(_ != ' ')) == Seq("ST", "LD"))
   }
 
+  private val mvp1 =
+    MachineDescription.load(MachineDescription.Mvp1Path).fold(es => fail(es.mkString), identity)
+  private def editedMvp1(edit: ujson.Value => Unit) = {
+    val v = ujson.read(mvp1.canonicalJson)
+    edit(v)
+    MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
+  }
+
+  test("mvp-1: 4 read ports and a MAC II above 1 are outside the RTL's range") {
+    assert(CoreParams.check(mvp1).isRight)
+    assert(CoreParams.check(machineFile("mvp1_mac3.json")).isRight)
+    val rp4 = CoreParams.check(machineFile("mvp1_rp4.json")).left.getOrElse(fail("rp4 accepted"))
+    assert(rp4.size == 1 && rp4.head.startsWith("read_ports is 4;") && rp4.head.contains("#57"))
+    val ii = CoreParams
+      .check(editedMvp1(_("operations")("MAC")("ii") = 2))
+      .left
+      .getOrElse(fail("MAC II 2 accepted"))
+    assert(ii.size == 1 && ii.head.startsWith("MAC has II 2;"), ii)
+    assertThrows[IllegalArgumentException](CoreParams(machineFile("mvp1_rp4.json")))
+  }
+
   test("every other setting the loader accepts is within the RTL's range") {
     def bounds(latency: Int, registers: Int, banks: Int, words: Int, bundles: Int) = edited { v =>
       Seq("ADD", "SUB", "MUL").foreach(op => v("operations")(op)("latency") = latency)
@@ -67,6 +103,11 @@ class EmitSpec extends AnyFunSuite {
       v("instruction_memory")("bundles") = bundles
     }
     Seq(bounds(1, 1, 1, 1, 1), bounds(8, 16, 512, 1, 4096)).foreach { m =>
+      assert(CoreParams.check(m).isRight)
+      ChiselStage.emitSystemVerilog(new Core(CoreParams(m)), firtoolOpts = Emit.FirtoolOptions)
+    }
+    // MAC follows the same range as MUL.
+    Seq(1, 8).map(l => editedMvp1(_("operations")("MAC")("latency") = l)).foreach { m =>
       assert(CoreParams.check(m).isRight)
       ChiselStage.emitSystemVerilog(new Core(CoreParams(m)), firtoolOpts = Emit.FirtoolOptions)
     }

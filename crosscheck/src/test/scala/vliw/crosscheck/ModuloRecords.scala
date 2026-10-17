@@ -3,7 +3,7 @@ package vliw.crosscheck
 import java.nio.file.{Path, Paths}
 
 import vliw.compiler.KernelCompiler
-import vliw.compiler.loop.{LoopBenchmarks, LoopGraph, LoopKernel, LoopLowering}
+import vliw.compiler.loop.{LoopBenchmarks, LoopKernel}
 import vliw.compiler.modulo.{
   Attempt,
   ModuloCompiled,
@@ -30,14 +30,23 @@ object ModuloRecords {
       kernel: LoopKernel,
       compiled: ModuloCompiled,
       testCase: ujson.Obj,
-      metrics: ujson.Obj
+      metrics: ujson.Obj,
+      suffix: String = ""
   ) {
-    def name: String = s"${kernel.name}_${kernel.index}_modulo"
+    def name: String = s"${kernel.name}_${kernel.index}_modulo$suffix"
   }
 
-  def records(m: MachineDescription = BenchmarkRecords.machine): Seq[Compared] = compared.map { k =>
+  /** The record of loop `k` on `m`: its program, test case and metrics. `machinePath` goes into the
+    * test case (None for the default machine), and `suffix` ends the record name.
+    */
+  def record(
+      k: LoopKernel,
+      m: MachineDescription,
+      machinePath: Option[String] = None,
+      suffix: String = ""
+  ): Compared = {
     val c = ModuloCompiler.compile(k, m).fold(sys.error, identity)
-    val name = s"${k.name}_${k.index}_modulo"
+    val name = s"${k.name}_${k.index}_modulo$suffix"
     val tc = KernelCompiler
       .testCaseOf(
         k.unroll,
@@ -46,7 +55,7 @@ object ModuloRecords {
         c.cycles,
         s"generated from the loop of ${k.name} over ${k.index} by Modulo Scheduling at II ${c.ii}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler",
         KernelCompiler.sampleInputs(k.unroll, Seed),
-        None,
+        machinePath,
         name
       )
       .fold(sys.error, identity)
@@ -57,8 +66,11 @@ object ModuloRecords {
       case Right(Some(ii)) => ii
       case other           => sys.error(s"$name: the trace does not confirm II ${c.ii}: $other")
     }
-    Compared(k, c, tc, Metrics.of(m, c.words, run, name, Some(ii)))
+    Compared(k, c, tc, Metrics.of(m, c.words, run, name, Some(ii)), suffix)
   }
+
+  def records(m: MachineDescription = BenchmarkRecords.machine): Seq[Compared] =
+    compared.map(record(_, m))
 
   private def machineFile(name: String) = MachineDescription
     .load(Paths.get("tests", "machines", name))
@@ -91,21 +103,21 @@ object ModuloRecords {
   def largest(m: MachineDescription): Int =
     (1 to tried(m)).filter(n => ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m).isRight).max
 
-  /** Why no II gives a program for `k` on `m`: the attempts of the search. */
-  private def failure(k: LoopKernel, m: MachineDescription): NoSchedule = {
-    val layout = LoopLowering.layout(k, m).fold(sys.error, identity)
+  /** Why no II gives a program for `k` on `m`: the attempts of the search, on the graph that
+    * `ModuloCompiler` schedules (fused into MAC when it chooses so).
+    */
+  def failure(k: LoopKernel, m: MachineDescription): NoSchedule =
     ModuloScheduler
-      .schedule(LoopGraph.of(LoopLowering.lower(k, layout), m))
+      .schedule(ModuloCompiler.prepare(k, m).fold(sys.error, identity).graph)
       .swap
       .getOrElse(sys.error(s"${k.name} compiles on ${m.machineId}"))
-  }
 
-  private def label(k: LoopKernel) = s"`${k.name}`（${k.index}）"
+  def label(k: LoopKernel): String = s"`${k.name}`（${k.index}）"
 
   /** The attempts before the chosen II, grouped by cause: (a) no reservation table, the order of
     * placement, (b) registers, the instruction memory.
     */
-  private def reasons(attempts: Seq[Attempt]): String = {
+  def reasons(attempts: Seq[Attempt]): String = {
     // Consecutive IIs share a group when they fail the same way; for (a), on the same resources.
     def kind(o: Outcome) = o match {
       case Outcome.NoMrt(r)       => (0, r)
@@ -153,7 +165,7 @@ object ModuloRecords {
     s"$before + $each × ${g.trips} = ${before + each * g.trips}"
   }
 
-  private def bound(c: ModuloCompiled) =
+  def bound(c: ModuloCompiled): String =
     s"${c.result.mii.resMII}（${c.result.mii.bounding.map(r => s"`$r`").mkString("、")}）"
 
   /** benchmarks/MODULO.md. `rs` and `fs` are the list-scheduling records of BenchmarkRecords. */
@@ -326,6 +338,16 @@ ${saxpy.mkString("\n")}
 """
   }
 
+  /** The test case and the metrics of each record. */
+  def recordFiles(cs: Seq[Compared]): Seq[(Path, String)] = cs.flatMap { r =>
+    Seq(
+      Dir.resolve("cases").resolve(s"${r.name}.json") -> (ujson
+        .write(r.testCase, indent = 2) + "\n"),
+      Dir.resolve("metrics").resolve(s"${r.name}.json") -> (ujson
+        .write(r.metrics, indent = 2) + "\n")
+    )
+  }
+
   /** The files of this record under benchmarks/. */
   def files(
       cs: Seq[Compared],
@@ -333,12 +355,5 @@ ${saxpy.mkString("\n")}
       fs: Seq[Fixed],
       m: MachineDescription
   ): Seq[(Path, String)] =
-    cs.flatMap { r =>
-      Seq(
-        Dir.resolve("cases").resolve(s"${r.name}.json") -> (ujson
-          .write(r.testCase, indent = 2) + "\n"),
-        Dir.resolve("metrics").resolve(s"${r.name}.json") -> (ujson
-          .write(r.metrics, indent = 2) + "\n")
-      )
-    } :+ (Dir.resolve("MODULO.md") -> report(cs, rs, fs, m))
+    recordFiles(cs) :+ (Dir.resolve("MODULO.md") -> report(cs, rs, fs, m))
 }

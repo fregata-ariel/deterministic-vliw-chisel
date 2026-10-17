@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "mac_reserved_bits",
+  "description": "MAC の予約 bit 0 が1（L1）。最後は HALT",
+  "machine": "config/machine-mvp1.json",
+  "program_hex": [
+    "0000000045123001",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}
