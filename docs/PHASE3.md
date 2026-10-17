@@ -273,4 +273,4 @@ Phase 4（DMA、Double Buffer、bank 最適化）は #109（Milestone 4）で追
 
 #80 は Milestone 5（#57 の後）とする。
 
-GitHub の Milestone 4 と Milestone 5 は、オーナーが作る（この作業のツールでは Milestone を作れない）。それまでは、Milestone 4 の Issue（#57、#78、#81 と、新しく起票する Issue）にラベル `milestone-4` を付け、#109 のサブIssueにする。Milestone 4 ができたら、これらに付ける。#80 は、Milestone 5 ができるまで、本文の冒頭に Milestone 5 と書いておく。
+GitHub の Milestone 4 と Milestone 5 は、オーナーが作る（この作業のツールでは Milestone を作れない）。それまでは、Milestone 4 の Issue（#57、#78、#81 と、このレビューで起票した #110〜#117）にはラベル `milestone-4` を付け、#109 のサブIssueにした。Milestone 4 ができたら、これらに付ける。#80 は、Milestone 5 ができるまで、本文の冒頭に Milestone 5 と書いておく。
