@@ -69,6 +69,19 @@ object ModuloRecords {
     Compared(k, c, tc, Metrics.of(m, c.words, run, name, Some(ii)), suffix)
   }
 
+  /** `record`, whose run must also take the cycles the scheduler predicted: what a table row of
+    * MODULO.md that has no record file of its own is written from (ADR-0015).
+    */
+  def confirmed(k: LoopKernel, m: MachineDescription): Compared = {
+    val r = record(k, m)
+    val cycles = r.metrics("cycles").num.toInt
+    if (cycles != r.compiled.cycles)
+      sys.error(
+        s"${r.name}: the run takes $cycles cycles, the scheduler predicted ${r.compiled.cycles}"
+      )
+    r
+  }
+
   def records(m: MachineDescription = BenchmarkRecords.machine): Seq[Compared] =
     compared.map(record(_, m))
 
@@ -263,8 +276,10 @@ ${lines.mkString("\n")}
 
     val saxpy = series.map { n =>
       ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m) match {
-        case Right(c) => s"| $n | ${c.ii} | ${c.words.size} | ${c.cycles} |"
-        case Left(_)  =>
+        case Right(_) =>
+          val r = confirmed(LoopBenchmarks.saxpy(n), m)
+          s"| $n | ${r.metrics("ii").num.toInt} | ${r.compiled.words.size} | ${r.metrics("cycles").num.toInt} |"
+        case Left(_) =>
           val no = failure(LoopBenchmarks.saxpy(n), m)
           s"| $n | - | - | 不成立: ${reasons(no.attempts)}（II ${no.mii.mii}〜${no.iiMax} のどれにも収まらない） |"
       }
@@ -331,6 +346,8 @@ ${accept.mkString("\n")}
 | n | II | bundle | cycles |
 |---|---|---|---|
 ${saxpy.mkString("\n")}
+
+II と cycles は、各行の命令列を参照モデルで実行し、トレースで確かめた値である（上の「ループごとの結果」と同じ。cycles はスケジューラの予測とも一致する）。
 
 命令領域（${m.instructionMemoryBundles} bundle）に収まる最大の n は $nMax。n = 1 から ${tried(
         m

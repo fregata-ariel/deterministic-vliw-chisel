@@ -45,6 +45,9 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 - 他の比較も、同じ2つの系列で記録している。MAC のある・なし（#77、[MAC.md](MAC.md)）とレジスタ数（#70、[REGISTERS.md](REGISTERS.md)）は両方の系列を、Modulo Scheduling と list scheduling（#68、[MODULO.md](MODULO.md)）は list scheduling の側に両方の系列の値を書く
 - 固定パイプライン（#75、RESULTS.md）と比べるときは、どの回路の値かを書く。「VLIW の命令列」は VLIW と同じスケジュール・同じレジスタで、cycles は VLIW と同じになる（違いは命令メモリ・制御・RF で、面積と Fmax は #80）。「上限なし」は、同じスケジューラでレジスタの上限を外したもので、VLIW との cycles の差は RF の容量の効果である。値のレジスタは 16 本を超えることがある（`fir4x8` 44 本、`matmul3` 38 本）
 - Modulo Scheduling と list scheduling の比較（[MODULO.md](MODULO.md)）では、list scheduling の側は戦略を固定した系列の各行で、Modulo Scheduling の側は1つの戦略（最初に命令列ができた II）である。比はその組合せの比で、Modulo Scheduling の cycles 最小ではない
+- Modulo Scheduling の II は、MII から順に試して最初に命令列ができた II である。命令列を作れる最小の II とは書かない（[docs/DECISIONS.md](../docs/DECISIONS.md) ADR-0015）
+  - 理由が (a) の II は、予約表が無く、その II では原理的に置けない
+  - それ以外の理由（(b) レジスタ、配置の順で置けない（`NoTime`）、命令領域）の II は、今の配置の手順（番号の順、後戻りなし）と、spill も rematerialization もしない割り当てで収まらなかった II である。別の配置なら収まるかは確かめていない
 - レジスタ数を変える比較（#70）では、レジスタ上限はそれぞれのレジスタ数になる。戦略を固定した系列は、優先度と `loadReserve` が同じ行（上限なしの行は上限なしの行）どうしを比べる。片方にしかない行（`loadReserve` がもう一方のレジスタ数/2 を超える行）は、片方だけの行として記録し、比に含めない
 - 上限付きの試行は、どの語も1回だけ読むままでは行き詰まるときだけ、入力・スカラー・定数を読み直す（rematerialization、[docs/DECISIONS.md](../docs/DECISIONS.md) ADR-0016）。記録では、読み直した行（LD がカーネルの DAG より多い行）の cycles に「（LD n）」を添える。添えていない行の LD の数は、カーネルの DAG の数（[REGISTERS.md](REGISTERS.md) の、方式ごとに cycles 最小の表の括弧の値）である。同じ行でも、片方の構成だけが読み直すことがある（レジスタの少ない方が速くなることもある）ので、比を書くときは両方の LD の数も書く
 - MAC のある構成とない構成の比較（#77、[MAC.md](MAC.md)）では、mvp-0（`config/machine.json`）と、MAC のある3つの構成を、同じカーネル・入力・配置・試行で比べる。3つの構成は、mvp-1（`config/machine-mvp1.json`）、読出しポート4本の rp4（`tests/machines/mvp1_rp4.json`）、MAC の latency 3 の mac3（`tests/machines/mvp1_mac3.json`）である。どれもレジスタは16本なので、戦略を固定した系列の行は同じで、同じ行どうしを比べる
