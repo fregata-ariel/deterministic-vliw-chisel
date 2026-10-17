@@ -288,6 +288,21 @@ class ReferenceModelSpec extends AnyFunSuite {
     assert(violationOn(mac3, "mac r4, r1, r2, r3\nnop\nhalt", in).rule == Rule.HaltCompletion)
   }
 
+  test("L4: MAC's rd overlaps a LD of the same bundle and a MAC in flight") {
+    val in = Map(1 -> 2L, 2 -> 3L, 3 -> 4L)
+    // MAC and LD both commit r4 at E_2, through different write-back ports.
+    val same = runOn(mvp1, "mac r4, r1, r2, r3 | ld r4, [0]\nnop\nhalt", in, Map(0 -> 0L))
+    assert(
+      same.left.toOption.map(v => (v.rule, v.cycle)) == Some((Rule.OverlappingWrites, Some(0)))
+    )
+    // [0, 2) and [1, 3).
+    val next = violationOn(mvp1, "mac r4, r1, r2, r3\nmac r4, r1, r2, r3\nnop\nhalt", in)
+    assert((next.rule, next.cycle) == ((Rule.OverlappingWrites, Some(1))))
+    // [0, 2) and [2, 4) do not overlap: 2 * 3 + 4 = 10, then 2 * 3 + 10.
+    val after = okOn(mvp1, "mac r4, r1, r2, r3\nnop\nmac r4, r1, r2, r4\nnop\nhalt", in)
+    assert(after.registers(4).contains(16L))
+  }
+
   test("L9: MAC has its own unit with operations.MAC.ii, independent of MUL") {
     val v = ujson.read(mvp1.canonicalJson)
     v("operations")("MAC")("ii") = 2
