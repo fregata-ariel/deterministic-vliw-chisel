@@ -19,20 +19,29 @@ Usage (python3, standard library only):
       (wall time) and exits with COMMAND's status. A step stopped by its timeout leaves no exit.
   toolchain-candidates.py summary build|test|timing [options]
       Classifies the part that the job ran and prints 'toolchain-candidates summary: <JSON>' to
-      the log; --out also writes the JSON (an artifact for the report job). Exits 0 only for
-      success.
+      the log; --out also writes the JSON (an artifact for the report job). For a failed test run,
+      it first prints the failure texts of the failing tests. Exits 0 only for success.
   toolchain-candidates.py timing --versions JSON --installed TSV --dir DIR
       Compiles once, then runs 'scripts/check.sh sbt test' with each version in the order
       A B C C B A in this job, and prints each version's time against the pinned one's.
   toolchain-candidates.py report --summaries DIR [--mutation DIR]
       Reads the plan (PLAN), the results of the jobs (NEEDS: toJSON(needs)), the summaries and the
-      logs of the mutation shards, and prints the comparison and then the records.
+      logs of the mutation shards, and prints the comparison, the failure texts of the mutation
+      shards, and then the records.
 
 The classes of a part: success and test-failure are results; setup (the action, the cache, the
-build, scripts/toolchain.sh check, or a [toolchain] line that does not name the expected version),
+build, scripts/toolchain.sh check, or a [toolchain] or [sim-seed] line other than the run's),
 timeout, cancelled, skipped, compile (scalac or scalafmt) and other are inconclusive and call for
-a re-run. A failure of a candidate alone is a regression only when a re-run of the same part fails
-the same way: the report compares with the records committed from earlier runs.
+a re-run. A candidate is compared with the control test by test ('<suite> / <test>'; the suite
+alone where no JUnit report names a test). A failure of a candidate alone is a regression only
+when a re-run of the same part fails the same way: the report compares with the records committed
+from earlier runs.
+
+Failure texts: the files of a failed run that a fixture in scripts/testdata/mutation-classify/
+needs (exit, the verdict of scripts/mutation-classify.py, classification.tsv, the failing test
+cases of the JUnit reports with their bodies, and the ends of sbt.log and of the ChiselSim logs),
+each between '===BEGIN failure-text <label>/<file>===' and '===END===' (#121 M8: the failures of
+Verilator 5.040 and later).
 """
 
 import argparse
@@ -46,6 +55,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPSTREAM = "https://github.com/verilator/verilator"
@@ -63,6 +73,16 @@ RECENT_MAX_SECONDS = 555
 RESULTS = ("success", "test-failure")
 SUMMARY_PREFIX = "toolchain-candidates summary: "
 COUNTS = ("succeeded", "failed", "canceled", "ignored", "pending")
+# The failing tests that a summary keeps for the comparison ([suite, test, kind]), and those shown
+# with their detail.
+FAILED_TESTS_KEPT = 500
+FAILURES_SHOWN = 20
+# Failure texts: the characters of a body kept before the lines that are not stack frames, the
+# lines of the end of a log, the failing test cases per run, and the runs per mutation version.
+BODY_KEPT = 12000
+TAIL_LINES = 60
+CASES_SHOWN = 4
+SAMPLES_PER_VERSION = 8
 
 VERSION = re.compile(r"[0-9]+\.[0-9]{3}")
 APT = re.compile(r"apt:([0-9]+\.[0-9]{3})-[0-9A-Za-z.+~]+")
@@ -79,11 +99,16 @@ SUITE_LIST = re.compile(r"^\[error\] (?:Failed tests|Error during tests):\s*$")
 SUITE_NAME = re.compile(r"^\[error\]\s+([A-Za-z_$][\w$]*(?:\.[\w$]+)*)\s*$")
 TOOLCHAIN_LINE = re.compile(r"^\[toolchain\] (.*?)\s*$", re.M)
 SEED_LINE = re.compile(r"^\[sim-seed\] (.*?)\s*$", re.M)
+# vliw.hw.SimSeed.describe: VLIW_SIM_SEED=<n> (<default|random|env>) verilator=<version>.
+SEED_SOURCE = re.compile(r"^VLIW_SIM_SEED=\S+ \((\w+)\)")
 FORK_DIED = re.compile(r"^Warning: Unable to read from client", re.M)
 # scripts/check.sh's own messages.
 CHECK_STOPPED = "check: sbt stopped after CHECK_TIMEOUT="
 TOOLCHAIN_FAILED = "check: scripts/toolchain.sh check failed"
 WARNING = re.compile(r"%Warning-([A-Za-z0-9_]+):")
+# The stack frames of a JUnit body (the classifier reads only the first after each exception line).
+FRAME_LINE = re.compile(r"^\s+at [\w$.]+\(")
+MORE_LINE = re.compile(r"^\s+\.\.\. \d+ more\s*$")
 # One line per run section of a committed report.md.
 RECORD_LINE = re.compile(r"^<!-- toolchain-candidates: (\{.*\}) -->$", re.M)
 MUTATION_ARTIFACT = re.compile(r"^mutation-logs-verilator-(.+)-shard(\d+)-attempt(\d+)$")
@@ -97,6 +122,18 @@ def annotate(level, message):
     """A workflow annotation on GitHub Actions; a plain line elsewhere."""
     message = message.replace("\n", " ")
     print(f"::{level}::{message}" if os.environ.get("GITHUB_ACTIONS") else f"{level}: {message}")
+
+
+def print_texts(lines, out=print):
+    """Prints LINES (failure texts, which quote logs); on GitHub Actions with the workflow commands
+    stopped, so that no line of a log is read as one."""
+    token = f"toolchain-candidates-{os.getpid()}-{time.time_ns()}" if os.environ.get("GITHUB_ACTIONS") else ""
+    if token:
+        out(f"::stop-commands::{token}")
+    for line in lines:
+        out(line)
+    if token:
+        out(f"::{token}::")
 
 
 def read_text(path, default=None):
@@ -200,10 +237,11 @@ def describe_install(entry):
     return f"source {entry['source_commit'] or '(no commit)'}"
 
 
-def make_plan(env, pinned, ls_remote, tag_date, now):
+def make_plan(env, pinned, ls_remote, tag_date, now, records=lambda version: []):
     """Checks the knobs in ENV, with PINNED (the values of the properties file); returns the plan,
     or raises Failure with every error. ls_remote(refs) -> {ref: sha}; tag_date(tag object) -> an
-    ISO time or None; NOW: a UTC datetime."""
+    ISO time or None; NOW: a UTC datetime; records(version) -> the machine lines committed in
+    docs/toolchain/<version>/report.md (a tag that has moved since then warns)."""
     errors, notes, warnings = [], [], []
     knobs = {}
     for name in KNOBS:
@@ -262,6 +300,13 @@ def make_plan(env, pinned, ls_remote, tag_date, now):
                               f" (git ls-remote printed no refs/tags/v{c['version']}^{{}})")
                 continue
             c["commit"] = c["source_commit"] = commit
+            # scripts/verilator-build.sh catches a tag moved during this run; the records, one moved since.
+            moved = [r for r in records(c["version"])
+                     if SHA.fullmatch(str(r.get("commit") or "")) and r["commit"] != commit]
+            if moved:
+                warnings.append(f"the tag v{c['version']} is now at {commit}, but run {moved[-1].get('run_id')} built"
+                                f" {moved[-1]['commit']} (docs/toolchain/{c['version']}/report.md): the tag has moved,"
+                                " so this run does not test what the records say")
             when = parse_time(tag_date(found.get(f"refs/tags/v{c['version']}", "")))
             if when is None:
                 notes.append(f"the date of the tag v{c['version']} is unknown (GitHub's API did not answer)")
@@ -285,6 +330,13 @@ def make_plan(env, pinned, ls_remote, tag_date, now):
             errors.append(f"MUTATION lists {token} twice")
         else:
             mutation.append(by_version[token])
+    named = [e["version"] for e in mutation if e["kind"] == "candidate"]
+    if named and version not in [e["version"] for e in mutation]:
+        errors.append(f"MUTATION names {' '.join(named)} but not the pinned version {version}: a candidate's mutation"
+                      f" check is compared with the control's in the same run, so write"
+                      f" MUTATION=\"{' '.join([version] + named)}\"")
+    # The control first, as in the other parts.
+    mutation.sort(key=lambda e: e["kind"] != "pinned")
 
     seed_runs = 0
     if re.fullmatch(r"[1-9][0-9]*", knobs["SEED_RUNS"]) and int(knobs["SEED_RUNS"]) <= MAX_SEED_RUNS:
@@ -382,8 +434,10 @@ def print_plan(plan):
 
 def cmd_plan(args):
     now = parse_time(args.now) if args.now else datetime.datetime.now(datetime.timezone.utc)
+    records_dir = args.records or os.path.join(REPO_ROOT, "docs", "toolchain")
     try:
-        plan = make_plan(os.environ, read_pinned(args.file), git_ls_remote, gh_tag_date, now)
+        plan = make_plan(os.environ, read_pinned(args.file), git_ls_remote, gh_tag_date, now,
+                         lambda version: earlier_records(records_dir, version))
     except Failure as e:
         for line in str(e).splitlines():
             annotate("error", line)
@@ -401,7 +455,7 @@ def run_command(directory, cmd, env=None):
     for name in ("exit", "seconds"):
         if os.path.exists(os.path.join(directory, name)):
             os.remove(os.path.join(directory, name))
-    write_text(os.path.join(directory, "start"), f"{time.time():.0f}\n")
+    write_text(os.path.join(directory, "start"), f"{time.time():.3f}\n")
     start = time.monotonic()
     out = sys.stdout.buffer
     sys.stdout.flush()
@@ -468,13 +522,18 @@ def expected_toolchain(version, kind):
     return f"verilator={version} expected={version} ({'pinned' if kind == 'pinned' else 'env'})"
 
 
-def classify_output(code, facts, expected):
+def classify_output(code, facts, expected, seed=None, seconds=None, limit=None):
     """(class, detail) of one run of scripts/check.sh that exited with CODE; EXPECTED is the
-    [toolchain] line that every test JVM must print, or None to skip that check."""
+    [toolchain] line that every test JVM must print, or None to skip that check. SEED ('default'
+    or 'random'): the source that every [sim-seed] line must name once a test JVM has run. SECONDS
+    and LIMIT (CHECK_TIMEOUT): exit 137 at LIMIT or later is a timeout, since check.sh prints its
+    message only for 124 (timeout's KILL after --kill-after gives 137)."""
     if facts["toolchain_failed"]:
         return "setup", "scripts/toolchain.sh check failed, so sbt did not run"
     if facts["check_stopped"] or code == 124:
         return "timeout", f"sbt stopped after CHECK_TIMEOUT (exit {code})"
+    if code == 137 and seconds is not None and limit and seconds >= limit:
+        return "timeout", f"sbt killed after CHECK_TIMEOUT={limit} s (exit 137 after {seconds:.0f} s)"
     if facts["scalac"]:
         return "compile", "scalac: " + ", ".join(facts["scalac"])
     if facts["scalafmt"]:
@@ -482,6 +541,13 @@ def classify_output(code, facts, expected):
     wrong = [line for line in facts["toolchain"] if expected is not None and line != expected]
     if wrong:
         return "setup", f"a test JVM printed '[toolchain] {wrong[0]}', not '[toolchain] {expected}'"
+    # Every test JVM that simulates prints both lines (vliw.hw.VliwChiselSim).
+    if seed and facts["toolchain"]:
+        if not facts["seeds"]:
+            return "setup", f"no [sim-seed] line in the sbt log: no test JVM named its seed (expected ({seed}))"
+        wrong = [s for s in facts["seeds"] if (SEED_SOURCE.match(s) or [None, None])[1] != seed]
+        if wrong:
+            return "setup", f"a test JVM printed '[sim-seed] {wrong[0]}', not a seed from ({seed})"
     tests, suites = facts["tests"], facts["suites"]
     failed = bool(facts["failed_suites"]) or bool(tests and tests["failed"]) or bool(suites and suites["aborted"])
     if code == 0:
@@ -499,9 +565,10 @@ def classify_output(code, facts, expected):
     return "other", f"sbt exit {code} with no failed test"
 
 
-def classify_step(setup, step, code, facts, expected):
+def classify_step(setup, step, code, facts, expected, seed=None, seconds=None, limit=None):
     """(class, detail) of a test job, from the outcomes of its setup-toolchain and test steps and the
-    exit status that the run wrapper recorded (None: the step was stopped before the command ended)."""
+    exit status that the run wrapper recorded (None: the step was stopped before the command ended);
+    the rest as in classify_output."""
     if "cancelled" in (setup, step):
         return "cancelled", f"cancelled (setup {setup or '-'}, test {step or '-'})"
     if setup != "success":
@@ -512,7 +579,7 @@ def classify_step(setup, step, code, facts, expected):
         if step == "failure":
             return "timeout", "the step was stopped before scripts/check.sh ended (its timeout-minutes)"
         return "other", f"no exit status recorded (the step's outcome is {step})"
-    return classify_output(code, facts, expected)
+    return classify_output(code, facts, expected, seed, seconds, limit)
 
 
 def classify_timing(versions, setups, step, compiled, runs):
@@ -548,8 +615,9 @@ def ratio_of(times, base):
 
 
 def timing_versions(summary):
-    """{version: {class, detail, seconds, failed_suites, ratio}} of a timing summary; ratio is the mean
-    time against the pinned version's (the first), when both passed."""
+    """{version: {class, detail, seconds, failed_suites, failed_tests, failed_tests_cut, ratio}} of a
+    timing summary; ratio is the mean time against the pinned version's (the first), when both
+    passed."""
     runs, versions, result = summary.get("runs") or [], summary.get("versions") or [], {}
     for e in versions:
         mine = [r for r in runs if r["version"] == e["version"]]
@@ -569,7 +637,9 @@ def timing_versions(summary):
         else:
             cls, detail = "success", "both runs passed"
         result[e["version"]] = {"class": cls, "detail": detail, "seconds": [r["seconds"] for r in mine],
-                                "failed_suites": unique(s for r in failures for s in r.get("failed_suites") or [])}
+                                "failed_suites": unique(s for r in failures for s in r.get("failed_suites") or []),
+                                "failed_tests": unique(t for r in failures for t in r.get("failed_tests") or []),
+                                "failed_tests_cut": any(r.get("failed_tests_cut") for r in failures)}
     if versions:
         base = result[versions[0]["version"]]
         for info in result.values():
@@ -652,30 +722,142 @@ def warning_counts(start=None):
     return dict(sorted(counts.items())), builds
 
 
-def junit_failures(code, output):
-    """The failing tests in the JUnit reports, as scripts/mutation-classify.py classifies them
-    (assertion, exception, env:sim-build, env:sim-exit, ...): (its verdict line, rows)."""
-    reports = glob.glob(os.path.join("*", "target", "test-reports"))
+def read_rows(run_dir):
+    """The rows of RUN_DIR/classification.tsv (scripts/mutation-classify.py): [suite, test, kind, detail]."""
+    rows = []
+    for line in (read_text(os.path.join(run_dir, "classification.tsv"), "") or "").splitlines():
+        fields = line.split("\t")
+        if len(fields) >= 4:
+            rows.append(fields[:3] + ["\t".join(fields[3:])])
+    return rows
+
+
+def junit_failures(code, output, label, since=None):
+    """The failing tests in this checkout's JUnit reports (*/target/test-reports/*.xml written at
+    SINCE or later), as scripts/mutation-classify.py classifies them (assertion, exception,
+    env:sim-build, env:sim-exit, ...): (its verdict line, rows [suite, test, kind, detail], and the
+    failure texts of the run, as LABEL)."""
+    reports = [p for p in sorted(glob.glob(os.path.join("*", "target", "test-reports", "*.xml")))
+               if since is None or os.path.getmtime(p) >= since]
     if code in (None, 0) or not reports:
-        return "", []
+        return "", [], []
     tmp = tempfile.mkdtemp()
     try:
         write_text(os.path.join(tmp, "sbt.log"), output)
         write_text(os.path.join(tmp, "exit"), f"{code}\n")
-        for d in reports:
-            target = os.path.join(tmp, "reports", d.split(os.sep)[0])
+        for path in reports:
+            target = os.path.join(tmp, "reports", path.split(os.sep)[0])
             os.makedirs(target, exist_ok=True)
-            for xml in glob.glob(os.path.join(d, "*.xml")):
-                shutil.copy(xml, target)
+            shutil.copy(path, target)
         _, verdict = capture([sys.executable, "-I", os.path.join(REPO_ROOT, "scripts", "mutation-classify.py"), tmp])
-        rows = []
-        for line in (read_text(os.path.join(tmp, "classification.tsv"), "") or "").splitlines():
-            fields = line.split("\t")
-            if len(fields) >= 4:
-                rows.append([fields[0], fields[1][:120], fields[2], fields[3][:200]])
-        return verdict.strip()[:300], rows[:20]
+        verdict = verdict.strip()
+        # As scripts/mutation-check.sh keeps it, for the failure texts.
+        write_text(os.path.join(tmp, "verdict"), verdict + "\n")
+        return verdict[:300], read_rows(tmp), failure_texts(label, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def failure_fields(rows):
+    """The fields of a summary for the failing tests ROWS: those shown (cut) and those compared."""
+    return {"failures": [[s, t[:120], k, d[:200]] for s, t, k, d in rows[:FAILURES_SHOWN]],
+            "failed_tests": [[s, t, k] for s, t, k, _ in rows[:FAILED_TESTS_KEPT]],
+            "failed_tests_cut": len(rows) > FAILED_TESTS_KEPT}
+
+
+def named_failure(cls, detail, suites, rows):
+    """A test-failure that names neither a suite (sbt) nor a test (the JUnit reports) cannot be
+    compared with another version's failures, nor found again in a re-run: other."""
+    if cls == "test-failure" and not suites and not rows:
+        return "other", f"{detail}, and no JUnit report names a failing test"
+    return cls, detail
+
+
+# --- failure texts -------------------------------------------------------------------------------
+def cut_body(text):
+    """TEXT (the body of a JUnit <failure> or <error>) cut at a line break after BODY_KEPT characters,
+    followed by the lines of the rest that are not stack frames, each block of them with its first
+    frame: what scripts/mutation-classify.py reads (the exception and 'Caused by:' lines, the first
+    frame after each, 'Nonzero exit status', make's and Verilator's messages)."""
+    if len(text) <= BODY_KEPT:
+        return text
+    head = text[:BODY_KEPT]
+    head = head[:head.rfind("\n") + 1] or head
+    kept, frame = [], False
+    for line in text[len(head):].splitlines():
+        if FRAME_LINE.match(line):
+            if frame:
+                kept.append(line)
+            frame = False
+        elif not MORE_LINE.match(line) and len(kept) < 200:
+            kept.append(line[:400])
+            frame = True
+    note = (f"\t... toolchain-candidates.py cut {len(text) - len(head)} characters here; the lines that follow are"
+            " those of the rest that are not stack frames, with the first frame after each block")
+    return head + "\n".join([note] + kept) + "\n"
+
+
+def tail(text, lines=TAIL_LINES):
+    """The last LINES lines of TEXT, without sbt's colours."""
+    rows = ANSI.sub("", text or "").replace("\r", "").splitlines()
+    return "".join(line[:400] + "\n" for line in rows[-lines:])
+
+
+def failing_cases(path, wanted):
+    """The JUnit report PATH with only its failing test cases whose (suite, test) is in WANTED, their
+    bodies cut (cut_body); None if there is none. An unreadable report comes as it is (cut)."""
+    try:
+        root = ET.parse(path).getroot()
+    except (ET.ParseError, OSError):
+        return (read_text(path, "") or "")[:BODY_KEPT] or None
+    suite = ET.Element(root.tag, dict(root.attrib))
+    for case in root.iter("testcase"):
+        bad = case.findall("failure") + case.findall("error")
+        if not bad or (case.get("classname") or root.get("name"), case.get("name") or "") not in wanted:
+            continue
+        copy = ET.SubElement(suite, "testcase", dict(case.attrib))
+        for el in bad:
+            attrs = {k: v[:2000] if k == "message" else v for k, v in el.attrib.items()}
+            ET.SubElement(copy, el.tag, attrs).text = cut_body(el.text or "")
+    if not len(suite):
+        return None
+    if hasattr(ET, "indent"):
+        ET.indent(suite)
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(suite, encoding="unicode") + "\n"
+
+
+def failure_texts(label, run_dir):
+    """The failure texts of the failed run in RUN_DIR, in the layout of scripts/mutation-check.sh
+    (exit, sbt.log, reports/<project>/*.xml, verdict, classification.tsv, mutant.diff and the
+    ChiselSim logs under build/chiselsim): lines, each file between '===BEGIN failure-text
+    LABEL/<file>===' and '===END==='. Of the failing tests, the first of each kind (CASES_SHOWN
+    kinds at most), so that a fixture of scripts/testdata/mutation-classify can be made from them."""
+    blocks = []
+    for name, keep in (("verdict", None), ("exit", None), ("classification.tsv", 50)):
+        text = read_text(os.path.join(run_dir, name))
+        if text is not None:
+            blocks.append((name, "".join(text.splitlines(True)[:keep]) if keep else text))
+    wanted, kinds = set(), []
+    for suite, test, kind, _ in read_rows(run_dir):
+        if kind not in kinds and len(kinds) < CASES_SHOWN:
+            kinds.append(kind)
+            wanted.add((suite, test))
+    for path in sorted(glob.glob(os.path.join(run_dir, "reports", "**", "*.xml"), recursive=True)):
+        text = failing_cases(path, wanted)
+        if text:
+            blocks.append((os.path.relpath(path, run_dir), text))
+    if os.path.exists(os.path.join(run_dir, "sbt.log")):
+        blocks.append(("sbt.log", tail(read_text(os.path.join(run_dir, "sbt.log"), ""))))
+    for name in ("simulation-log.txt", "compilation-log.txt"):
+        for path in sorted(glob.glob(os.path.join(run_dir, "build", "chiselsim", "**", name), recursive=True))[:2]:
+            blocks.append((os.path.relpath(path, run_dir), tail(read_text(path, ""), 40)))
+    diff = read_text(os.path.join(run_dir, "mutant.diff"))
+    if diff:
+        blocks.append(("mutant.diff", diff[:3000]))
+    lines = []
+    for name, text in blocks:
+        lines += [f"===BEGIN failure-text {label}/{name}===", text.rstrip("\n"), "===END==="]
+    return lines
 
 
 def summarize_build(args, entry):
@@ -691,27 +873,36 @@ def summarize_build(args, entry):
 
 
 def summarize_test(args, entry):
-    directory = args.dir or ""
-    output = read_text(os.path.join(directory, "output.log"), "") if directory else ""
-    code = read_number(os.path.join(directory, "exit"), int) if directory else None
+    """(the summary of a test job, the failure texts of its failing tests)."""
+    def number(name, kind):
+        return read_number(os.path.join(args.dir, name), kind) if args.dir else None
+
+    output = read_text(os.path.join(args.dir, "output.log"), "") if args.dir else ""
+    code, seconds, start = number("exit", int), number("seconds", float), number("start", float)
+    limit = os.environ.get("CHECK_TIMEOUT", "")
     facts = parse_output(output)
     expected = expected_toolchain(entry["version"], entry["kind"])
-    cls, detail = classify_step(args.setup, args.step, code, facts, expected)
-    warnings, builds = warning_counts(read_number(os.path.join(directory, "start"), float) if directory else None)
-    verdict, failures = junit_failures(code, output) if cls == "test-failure" else ("", [])
+    # Run 1 has the default seed; the workflow sets VLIW_SIM_SEED=random for the later runs.
+    seed = "random" if args.run > 1 else "default"
+    cls, detail = classify_step(args.setup, args.step, code, facts, expected, seed, seconds,
+                                int(limit) if limit.isdigit() else None)
+    warnings, builds = warning_counts(start)
+    verdict, rows, texts = "", [], []
+    if cls == "test-failure":
+        verdict, rows, texts = junit_failures(code, output, f"{entry['version']}/test-run{args.run}", start)
+        cls, detail = named_failure(cls, detail, facts["failed_suites"], rows)
     summary = {
         "part": "test", "run": args.run, "class": cls, "detail": detail, "setup": args.setup,
-        "step": args.step, "exit": code,
-        "seconds": read_number(os.path.join(directory, "seconds"), float) if directory else None,
-        "seed_env": os.environ.get("VLIW_SIM_SEED") or "default", "seeds": facts["seeds"],
+        "step": args.step, "exit": code, "seconds": seconds,
+        "seed_env": os.environ.get("VLIW_SIM_SEED") or "default", "seed_expected": seed, "seeds": facts["seeds"],
         "toolchain": facts["toolchain"], "expected_toolchain": expected, "tests": facts["tests"],
         "suites": facts["suites"], "failed_suites": facts["failed_suites"], "junit": verdict,
-        "failures": failures, "warnings": warnings, "builds": builds,
-        "check_timeout": os.environ.get("CHECK_TIMEOUT", ""),
+        "warnings": warnings, "builds": builds, "check_timeout": limit,
     }
+    summary.update(failure_fields(rows))
     if args.setup == "success":
         summary["fingerprint"] = fingerprint(entry, args.toolchain_file, read_number(args.start, float))
-    return summary
+    return summary, texts
 
 
 def summarize_timing(args):
@@ -747,10 +938,14 @@ def cmd_summary(args):
         entry = json.loads(args.entry or "{}")
         if not entry.get("version"):
             raise Failure("summary build and test need --entry with the version's matrix entry")
-        summary = summarize_build(args, entry) if args.part == "build" else summarize_test(args, entry)
+        summary, texts = (summarize_build(args, entry), []) if args.part == "build" else summarize_test(args, entry)
         summary.update({"version": entry["version"], "kind": entry["kind"], "method": entry["method"]})
         for line in summary.get("fingerprint") or []:
             print(f"fingerprint: {line}")
+        if texts:
+            print("failure texts of the failing tests (the first of each kind), for the fixtures of"
+                  " scripts/testdata/mutation-classify (#121 M8):")
+            print_texts(texts)
         run = f" run {args.run}" if args.part == "test" else ""
         print(f"{args.part} {entry['version']}{run}: {summary['class']} ({summary['detail']})")
     summary.update({"schema": 1, "attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT") or 1)})
@@ -819,12 +1014,24 @@ def cmd_timing(args):
         env["CHECK_TIMEOUT"] = str(args.run_timeout)
         print(f"==> timing: position {position} of {len(order)}: Verilator {entry['version']}", flush=True)
         code = run_command(directory, [check, "sbt", "test"], env)
-        facts = parse_output(read_text(os.path.join(directory, "output.log"), ""))
-        cls, detail = classify_output(code, facts, expected_toolchain(entry["version"], entry["kind"]))
+        output = read_text(os.path.join(directory, "output.log"), "")
+        facts = parse_output(output)
         seconds = read_number(os.path.join(directory, "seconds"), float)
+        cls, detail = classify_output(code, facts, expected_toolchain(entry["version"], entry["kind"]), "default",
+                                      seconds, args.run_timeout)
+        rows = []
+        if cls == "test-failure":
+            # The reports of this run only: the earlier runs of this job wrote theirs in the same place.
+            _, rows, texts = junit_failures(code, output, f"{entry['version']}/timing-position{position}",
+                                            read_number(os.path.join(directory, "start"), float))
+            cls, detail = named_failure(cls, detail, facts["failed_suites"], rows)
+            if texts:
+                print(f"timing: failure texts of position {position} (the first failing test of each kind):")
+                print_texts(texts)
         doc["runs"].append({"position": position, "version": entry["version"], "exit": code, "seconds": seconds,
                             "class": cls, "detail": detail, "failed_suites": facts["failed_suites"],
                             "seeds": facts["seeds"]})
+        doc["runs"][-1].update({k: v for k, v in failure_fields(rows).items() if k != "failures"})
         save()
         print(f"timing: position {position}: {entry['version']} {cls} ({detail}) in {seconds} s", flush=True)
     summary = {"versions": versions, "runs": doc["runs"]}
@@ -856,10 +1063,14 @@ def parse_shard(path):
     results, text = None, read_text(os.path.join(path, "results.tsv"))
     if text is not None:
         results = []
+        # id, verdict, category, detail, log (the directory of the last attempt); a tab in the detail
+        # leaves the log last.
         for line in text.splitlines()[1:]:
-            fields = (line.split("\t") + ["", "", ""])[:4]
+            fields = line.split("\t")
             if fields[0]:
-                results.append(dict(zip(("id", "verdict", "category", "detail"), fields)))
+                fields += [""] * (5 - len(fields))
+                results.append({"id": fields[0], "verdict": fields[1], "category": fields[2],
+                                "detail": "\t".join(fields[3:-1]), "dir": os.path.basename(fields[-1].rstrip("/"))})
     baseline, retries = [], {}
     for name in sorted(os.listdir(path)):
         m = re.fullmatch(r"(.+)\.retry(\d+)", name)
@@ -867,13 +1078,13 @@ def parse_shard(path):
         if mutant == "_baseline":
             fields = ((read_text(os.path.join(path, name, "verdict"), "") or "").rstrip("\n").split("\t") + ["", ""])
             baseline.append({"attempt": attempt, "verdict": fields[0] or "ERROR", "category": fields[1],
-                             "detail": fields[2]})
+                             "detail": fields[2], "dir": name})
         elif m:
             retries[mutant] = retries.get(mutant, 0) + 1
     baseline.sort(key=lambda b: b["attempt"])
     shard = re.search(r"^shard: (\d+)/(\d+)$", env, re.M)
     expected = re.search(r"^expected: verilator (\S+)", env, re.M)
-    return {"results": results, "baseline": baseline, "retries": retries,
+    return {"results": results, "baseline": baseline, "retries": retries, "path": path,
             "shard": int(shard.group(1)) if shard else None, "n": int(shard.group(2)) if shard else None,
             "version": expected.group(1) if expected else None, "attempt": 1}
 
@@ -915,9 +1126,10 @@ def shard_count(shards):
 
 def mutation_part(shards, mutants_file):
     """The mutation part of one version: class, detail, verdicts {mutant: (verdict, category)} (None
-    unless every mutant has one), failed (the SURVIVED mutants and failed baselines), notes, rows."""
+    unless every mutant has one; all_verdicts has those there are), failed (the SURVIVED mutants, and
+    'baseline: <suite> / <test>' for each test that failed in an unmutated run), notes, rows."""
     n = shard_count(shards)
-    problems, baselines, notes, verdicts, errors = [], [], [], {}, {}
+    problems, baselines, notes, verdicts, errors = [], {}, [], {}, {}
     complete = True
     for k in range(1, n + 1):
         s = shards.get(k)
@@ -933,8 +1145,14 @@ def mutation_part(shards, mutants_file):
         if last and last["verdict"] != "SURVIVED":
             complete = False
             if last["verdict"] == "KILLED":
-                baselines.append(k)
+                # The tests that killed it (scripts/mutation-classify.py), as the test part names them.
+                rows = [r for r in read_rows(os.path.join(s["path"], last["dir"]))
+                        if r[2] in ("assertion", "exception")]
                 notes.append(f"shard {k}: the unmutated tests failed ({last['category']}: {last['detail'][:160]})")
+                if rows:
+                    baselines[k] = [f"baseline: {label}" for label in failure_labels([], rows)]
+                else:
+                    problems.append(f"shard {k}: the unmutated tests failed, but its classification.tsv names no test")
             else:
                 problems.append(f"shard {k}: the unmutated run ended with {last['verdict']} {last['category']}")
             continue
@@ -958,19 +1176,57 @@ def mutation_part(shards, mutants_file):
     survived = sorted(m for m, (v, _) in verdicts.items() if v == "SURVIVED")
     killed = sum(1 for v, _ in verdicts.values() if v == "KILLED")
     inconclusive = problems + [f"{key} x{count}" for key, count in sorted(errors.items())]
-    if survived or baselines:
+    failed_baselines = unique(label for k in sorted(baselines) for label in baselines[k])
+    if survived or failed_baselines:
         cls = "test-failure"
-        found = ([f"the unmutated tests failed in shard {', '.join(map(str, baselines))}"] if baselines else [])
+        found = ([f"the unmutated tests failed in shard {', '.join(map(str, sorted(baselines)))}"
+                  f" ({names_text([label[len('baseline: '):] for label in failed_baselines])})"]
+                 if failed_baselines else [])
         found += [f"SURVIVED: {', '.join(survived)}"] if survived else []
         detail = "; ".join(found) + ("; also " + "; ".join(inconclusive) if inconclusive else "")
     elif inconclusive:
         cls, detail = "other", "; ".join(inconclusive)
     else:
         cls, detail = "success", f"every mutant KILLED ({killed})"
-    return {"class": cls, "detail": detail, "verdicts": verdicts if complete else None, "notes": notes,
-            "failed": set(survived) | {f"baseline shard {k}" for k in baselines},
+    return {"class": cls, "detail": detail, "verdicts": verdicts if complete else None, "all_verdicts": verdicts,
+            "notes": notes, "failed": set(survived) | set(failed_baselines),
             "counts": f"{killed} KILLED, {len(survived)} SURVIVED, {sum(errors.values())} other",
             "rows": [(k, shards.get(k)) for k in range(1, n + 1)]}
+
+
+def mutation_samples(version, shards, control=None):
+    """The failed runs of VERSION's mutation shards whose failure texts the report prints: the first
+    unmutated run of each (verdict, category) that is not SURVIVED, the first mutant of each verdict
+    other than KILLED and SURVIVED, and the first KILLED mutant of each category that differs from
+    the control's verdict (CONTROL: {mutant: (verdict, category)}), SAMPLES_PER_VERSION at most:
+    [(label, header, directory)]."""
+    samples, seen = [], set()
+
+    def add(key, k, s, name, header):
+        if key in seen or len(samples) >= SAMPLES_PER_VERSION:
+            return
+        seen.add(key)
+        path = os.path.join(s["path"], name)
+        samples.append((f"{version}/mutation/{name}", f"{version} mutation shard {k} {name}: {header}"
+                        + ("" if os.path.isdir(path) else " (no logs of it in the artifact)"), path))
+
+    for k in sorted(shards):
+        for b in shards[k]["baseline"]:
+            if b["verdict"] != "SURVIVED":
+                add(("baseline", b["verdict"], b["category"]), k, shards[k], b["dir"],
+                    f"the unmutated run (attempt {b['attempt'] + 1}): {b['verdict']} {b['category']}")
+    results = sorted(((r["id"], k, r) for k in sorted(shards) for r in shards[k]["results"] or []),
+                     key=lambda x: x[:2])
+    for mutant, k, r in results:
+        name = r["dir"] if r["dir"] and os.path.isdir(os.path.join(shards[k]["path"], r["dir"])) else mutant
+        theirs = (control or {}).get(mutant)
+        if r["verdict"] not in ("KILLED", "SURVIVED"):
+            add(("mutant", r["verdict"], r["category"]), k, shards[k], name, f"{r['verdict']} {r['category']}"
+                + (f" (the control: {' '.join(theirs)})" if theirs else ""))
+        elif r["verdict"] == "KILLED" and theirs and theirs != (r["verdict"], r["category"]):
+            add(("differs", r["category"], theirs), k, shards[k], name,
+                f"KILLED {r['category']}, the control {' '.join(theirs)}")
+    return samples
 
 
 # --- report --------------------------------------------------------------------------------------
@@ -999,6 +1255,39 @@ def missing(needs, job):
     return "other", f"no summary from the {job} job (its result: {result or 'unknown'}); see its log"
 
 
+def failure_labels(suites, rows):
+    """What failed, to compare with another version and with earlier runs: '<suite> / <test>' for each
+    failing test of the JUnit ROWS ([suite, test, kind, ...]), and the suite alone for each of SUITES
+    (those that sbt named) that no row names."""
+    labels = unique(f"{r[0]} / {r[1]}" if r[1] else r[0] for r in rows)
+    named = {r[0] for r in rows}
+    return labels + [s for s in unique(suites) if s not in named and s not in labels]
+
+
+def suite_of(label):
+    return label.split(" / ", 1)[0]
+
+
+def covered(label, others):
+    """Whether LABEL failed in OTHERS too: the same test, or a suite named alone on either side."""
+    suite = suite_of(label)
+    return label in others or suite in others or (label == suite and any(suite_of(o) == suite for o in others))
+
+
+def env_only(failure):
+    """Whether every failing test of FAILURE (a test summary, or a version of the timing summary) is an
+    environment error of scripts/mutation-classify.py (env:sim-build, env:sim-exit, ...) and every
+    suite that sbt named has such a row: a failure of the runner, not of the tests."""
+    rows = failure.get("failed_tests") or []
+    return (bool(rows) and not failure.get("failed_tests_cut") and all(r[2].startswith("env:") for r in rows)
+            and all(s in {r[0] for r in rows} for s in failure.get("failed_suites") or []))
+
+
+def names_text(names, shown=10):
+    names = list(names)
+    return ", ".join(names[:shown]) + (f" and {len(names) - shown} more" if len(names) > shown else "")
+
+
 def verdict_of(classes):
     """A part's verdict from the classes of its runs: test-failure if any run failed, success if
     every run passed, else inconclusive."""
@@ -1025,15 +1314,31 @@ class Report:
 
     def __init__(self, plan, needs, summaries, mutation, notes, run, records_dir, mutants_file):
         self.plan, self.needs, self.summaries, self.run = plan, needs, summaries, run
-        self.records_dir, self.notes = records_dir, notes
+        self.records_dir, self.notes, self.mutation = records_dir, notes, mutation
         self.pinned = plan["pinned"]["version"]
         self.timing = summaries.get(("timing", "", 0))
         self.parts = ["build"] + [p for p in PART_NAMES if plan["parts"][p]]
         self.cells = {e["version"]: self.version_cells(e["version"], mutation.get(e["version"]), mutants_file)
                       for e in plan["versions"]}
 
+    def judged(self, v, failure):
+        """FAILURE (a test run's summary, or a version of the timing summary) as the comparison sees
+        it: a test-failure with the labels of what failed; other when it names nothing, or when it is
+        the control's and only the environment failed (it says nothing about the candidates)."""
+        failure = dict(failure)
+        if failure["class"] != "test-failure":
+            return failure
+        failure["labels"] = failure_labels(failure.get("failed_suites") or [], failure.get("failed_tests") or [])
+        if not failure["labels"]:
+            failure.update({"class": "other", "detail": f"{failure['detail']}; it names no failing suite or test"})
+        elif v == self.pinned and env_only(failure):
+            kinds = ", ".join(unique(r[2] for r in failure["failed_tests"]))
+            failure.update({"class": "other", "detail": f"only environment errors on the control ({kinds}):"
+                            f" {failure['detail']}"})
+        return failure
+
     def version_cells(self, v, shards, mutants_file):
-        """{part: cell}; a cell has verdict, classes (of its runs), detail and failed (names)."""
+        """{part: cell}; a cell has verdict, classes (of its runs), detail and failed (labels)."""
         cells = {}
         s = self.summaries.get(("build", v, 0))
         if s is None:
@@ -1047,21 +1352,21 @@ class Report:
                 if t is None:
                     cls, detail = missing(self.needs, "test")
                     t = {"class": cls, "detail": detail, "run": r}
-                runs.append(t)
-            failed = {n for t in runs if t["class"] == "test-failure" for n in t.get("failed_suites") or ["(unnamed)"]}
+                runs.append(self.judged(v, t))
+            failed = {n for t in runs if t["class"] == "test-failure" for n in t["labels"]}
             detail = "; ".join(f"run {t['run']}: {t['class']} ({t['detail']})" for t in runs if t["class"] != "success")
             cells["test"] = {"classes": [t["class"] for t in runs], "runs": runs, "failed": failed,
                              "detail": detail or ("every run passed" if len(runs) > 1 else runs[0]["detail"])}
         if self.plan["parts"]["timing"] and v in self.plan["timing"]:
             if self.timing is None:
                 cls, detail = missing(self.needs, "timing")
-                info = {"class": cls, "detail": detail, "ratio": None, "seconds": [], "failed_suites": []}
+                info = {"class": cls, "detail": detail, "ratio": None, "seconds": []}
             else:
                 info = (self.timing.get("per_version") or {}).get(v) or {
-                    "class": "other", "detail": "not in the timing summary", "ratio": None, "seconds": [],
-                    "failed_suites": []}
-            failed = set(info["failed_suites"] or (["(unnamed)"] if info["class"] == "test-failure" else []))
-            cells["timing"] = {"classes": [info["class"]], "detail": info["detail"], "failed": failed, "info": info}
+                    "class": "other", "detail": "not in the timing summary", "ratio": None, "seconds": []}
+            info = self.judged(v, info)
+            cells["timing"] = {"classes": [info["class"]], "detail": info["detail"],
+                               "failed": set(info.get("labels") or []), "info": info}
         if self.plan["parts"]["mutation"] and v in self.plan["mutation"]:
             if shards:
                 m = mutation_part(shards, mutants_file)
@@ -1111,10 +1416,11 @@ class Report:
             which = [f"{version}: {cand['detail']}"] if cand["verdict"] == "inconclusive" else []
             which += [f"the control {self.pinned}: {ctrl['detail']}"] if ctrl["verdict"] == "inconclusive" else []
             if cand["verdict"] == "test-failure":
-                which.insert(0, f"{version} failed ({', '.join(sorted(cand['failed']))}), but there is nothing to"
+                which.insert(0, f"{version} failed ({names_text(sorted(cand['failed']))}), but there is nothing to"
                                 " compare it with")
             return f"inconclusive (re-run with {rerun}): " + "; ".join(which), []
-        only = sorted(cand["failed"] - ctrl["failed"])
+        # Test by test: a failure of the control in the same suite does not cover another test.
+        only = sorted(n for n in cand["failed"] if not covered(n, ctrl["failed"]))
         if not only and cand.get("verdicts") and ctrl.get("verdicts"):
             diff = sorted(m for m in set(cand["verdicts"]) | set(ctrl["verdicts"])
                           if cand["verdicts"].get(m) != ctrl["verdicts"].get(m))
@@ -1127,20 +1433,21 @@ class Report:
                 return "same as the control: success", []
             if cand["verdict"] == "success":
                 return f"the control failed ({ctrl['detail']}); {version} passed", []
-            return f"fails as the control does ({', '.join(sorted(cand['failed']))}): not a regression of {version}", []
+            return (f"fails as the control does ({names_text(sorted(cand['failed']))}): not a regression of"
+                    f" {version}"), []
         runs, names = self.reproduced(version, part, set(only))
         if runs:
-            return (f"REGRESSION of {version}: {', '.join(sorted(names))} failed on {version} and not on the control"
+            return (f"REGRESSION of {version}: {names_text(sorted(names))} failed on {version} and not on the control"
                     f" in run {', '.join(runs)} and again in this run"), only
         if part in self.plan["knobs"]["PARTS"].split():
             hint = "no record committed from an earlier run has the same failure"
         else:
             hint = f"commit these records, then re-run it with {rerun} and the same CANDIDATES"
-        return (f"candidate-only failure: {', '.join(only)} failed on {version} and not on the control; a regression"
-                f" only if a re-run fails the same way ({hint})"), only
+        return (f"candidate-only failure: {names_text(only)} failed on {version} and not on the control; a"
+                f" regression only if a re-run fails the same way ({hint})"), only
 
     def reproduced(self, version, part, names):
-        """(earlier runs, names) where the same names failed on this version alone."""
+        """(earlier runs, names) where the same tests (labels) failed on this version alone."""
         runs, common = [], set()
         for record in earlier_records(self.records_dir, version):
             if str(record.get("run_id")) == str(self.run["id"]):
@@ -1158,8 +1465,10 @@ class Report:
         if cell["verdict"] == "success":
             return "success"
         line = f"{cell['verdict']}: {cell['detail']}"
-        if part != "build":
+        if part != "build" and cell["verdict"] == "inconclusive":
             line += " (the control: the candidates' results of this part cannot be judged)"
+        elif part != "build":
+            line += " (the control: the candidates are compared with these failures)"
         return line
 
     def timing_note(self, version):
@@ -1181,7 +1490,8 @@ class Report:
     # --- the job log ------------------------------------------------------------------------------
     def print_log(self, out=print):
         plan, run = self.plan, self.run
-        trigger = f"{run['event']}{' #' + run['pr'] if run['pr'] else ''}, head {run['head'] or '?'}"
+        trigger = f"{run['event']}{' #' + run['pr'] if run['pr'] else ''}, main {run['main'] or '?'}"
+        trigger += f", head {run['head'] or '?'}" if run["event"] == "pull_request" else ""
         trigger += f", merge commit {run['merge']}" if run["merge"] else ""
         out(f"==> toolchain-candidates report: run {run['id']} attempt {run['attempt']} ({trigger})")
         out("knobs: " + " ".join(f'{k}="{plan["knobs"][k]}"' for k in KNOBS))
@@ -1227,6 +1537,12 @@ class Report:
                         f" image {t.get('image', '-')}")
                     for f in t.get("failures") or []:
                         out(f"    {f[0]} / {f[1]}: {f[2]}: {f[3]}")
+                    shown, rows = len(t.get("failures") or []), len(t.get("failed_tests") or [])
+                    if rows > shown:
+                        out(f"    ... {rows - shown} more failing tests" + (" (and more not kept)"
+                                                                          if t.get("failed_tests_cut") else ""))
+                    if t.get("failures"):
+                        out(f"    failure texts: in the log of the job 'test {e['version']} run {t.get('run')}'")
         if self.timing:
             out("")
             out(f"timing (one job; cpu {self.timing.get('cpu')}, nproc {self.timing.get('nproc')},"
@@ -1238,6 +1554,32 @@ class Report:
             for v in self.plan["mutation"]:
                 for k, s in self.cells[v]["mutation"]["rows"]:
                     out(f"  {v} shard {k}: {shard_text(s)}")
+
+    def failure_samples(self):
+        """[(label, header, directory)] of the mutation runs whose failure texts the report prints."""
+        if not self.plan["parts"]["mutation"]:
+            return []
+        control = (self.cells[self.pinned].get("mutation") or {}).get("all_verdicts")
+        samples = []
+        for v in self.plan["mutation"]:
+            if self.mutation.get(v):
+                samples += mutation_samples(v, self.mutation[v], None if v == self.pinned else control)
+        return samples
+
+    def print_failure_texts(self, out=print):
+        """The failure texts of the mutation shards (the agent cannot download their logs); those of
+        the test and timing parts are in the logs of their jobs."""
+        samples = self.failure_samples()
+        if not samples:
+            return
+        out("")
+        out("failure texts of the mutation shards, for the fixtures of scripts/testdata/mutation-classify (#121 M8):"
+            " each file of a run between '===BEGIN failure-text <version>/mutation/<run>/<file>===' and '===END==='")
+        lines = []
+        for label, header, path in samples:
+            lines.append(f"failure text: {header}")
+            lines += failure_texts(label, path) if os.path.isdir(path) else []
+        print_texts(lines, out)
 
     # --- the records ------------------------------------------------------------------------------
     def records(self):
@@ -1259,8 +1601,12 @@ class Report:
             if (cell.get("info") or {}).get("ratio") is not None:
                 record["ratio"] = cell["info"]["ratio"]
             parts[p] = record
-        return {"run_id": self.run["id"], "attempt": self.run["attempt"], "version": e["version"],
-                "kind": e["kind"], "pinned": self.pinned, "parts": parts}
+        record = {"run_id": self.run["id"], "attempt": self.run["attempt"], "version": e["version"],
+                  "kind": e["kind"], "pinned": self.pinned, "main": self.run["main"], "parts": parts}
+        # The plan of a later run warns when the tag has moved.
+        if e["method"] == "source" and e.get("source_commit"):
+            record["commit"] = e["source_commit"]
+        return record
 
     def report_md(self, e):
         v, run, plan, cells = e["version"], self.run, self.plan, self.cells[e["version"]]
@@ -1424,19 +1770,26 @@ def install_md(e):
 
 def trigger_md(run):
     if run["event"] == "pull_request":
-        return f"pull_request #{run['pr']}（head `{run['head']}`、merge commit `{run['merge']}`）"
+        return (f"pull_request #{run['pr']}（main `{run['main'] or '?'}`、head `{run['head']}`、"
+                f"merge commit `{run['merge']}`）")
     return f"{run['event']}（commit `{run['head']}`、ref `{run['ref']}`）"
 
 
 def run_info(env):
+    """The run, from the environment of the report step. main is the commit of main that the run tested:
+    for pull_request the first parent of the merge commit (MAIN_SHA: the step reads it with git, since
+    the merge commit is replaced on the next push), else the pull request's base (PR_BASE_SHA); for
+    another event the commit of the run."""
     server, repo, run_id = env.get("GITHUB_SERVER_URL", "https://github.com"), env.get("GITHUB_REPOSITORY", ""), \
         env.get("GITHUB_RUN_ID", "")
     event = env.get("GITHUB_EVENT_NAME", "")
+    pull = event == "pull_request"
     return {
         "id": run_id, "attempt": int(env.get("GITHUB_RUN_ATTEMPT") or 1),
         "url": f"{server}/{repo}/actions/runs/{run_id}", "event": event, "pr": env.get("PR_NUMBER", ""),
         "head": env.get("PR_HEAD_SHA") or env.get("GITHUB_SHA", ""),
-        "merge": env.get("GITHUB_SHA", "") if event == "pull_request" else "", "ref": env.get("GITHUB_REF", ""),
+        "merge": env.get("GITHUB_SHA", "") if pull else "", "ref": env.get("GITHUB_REF", ""),
+        "main": (env.get("MAIN_SHA") or env.get("PR_BASE_SHA", "")) if pull else env.get("GITHUB_SHA", ""),
         "date": env.get("REPORT_DATE") or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"),
     }
 
@@ -1453,9 +1806,10 @@ def cmd_report(args):
                     run_info(os.environ), args.records or os.path.join(REPO_ROOT, "docs", "toolchain"),
                     args.mutants or os.path.join(REPO_ROOT, "scripts", "mutants.tsv"))
     report.print_log()
+    report.print_failure_texts()
     print("")
-    print("records to commit, each file between its BEGIN and END lines; to a report.md committed from an"
-          " earlier run, append the lines from '## run' on:")
+    print("records to commit, each file between '===BEGIN docs/toolchain/<version>/<file>===' and '===END==='; to a"
+          " report.md committed from an earlier run, append the lines from '## run' on:")
     for path, text in report.records():
         print(f"===BEGIN {path}===")
         sys.stdout.write(text)
@@ -1469,6 +1823,7 @@ def main(argv=None):
     p = sub.add_parser("plan")
     p.add_argument("--file", help="another file in the format of project/toolchain.properties")
     p.add_argument("--now", help=argparse.SUPPRESS)
+    p.add_argument("--records", help=argparse.SUPPRESS)
     p = sub.add_parser("run")
     p.add_argument("dir")
     p.add_argument("command", nargs=argparse.REMAINDER)

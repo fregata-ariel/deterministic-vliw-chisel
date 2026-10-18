@@ -106,21 +106,21 @@ PR の差分が、この workflow、`project/toolchain.properties`、action（`.
 | knob | 既定 | 値 |
 |---|---|---|
 | `CANDIDATES` | `"5.032 5.052"` | 候補を空白で区切る。`5.052` はタグ `v5.052` のソースからビルドし、`apt:5.020-1` は apt のパッケージを入れる。3つまで。固定の版はいつも対照として先頭で走るので、候補に書いても1回だけ走る。同じ候補を2回書いても1回だけ走る |
-| `MUTATION` | `""` | mutation を走らせる版（固定の版か候補を、版の番号で書く）。1つの版で 8 shard、約 7 runner 時間かかる |
+| `MUTATION` | `""` | mutation を走らせる版（固定の版か候補を、版の番号で書く）。候補を書くときは、同じ run の対照として固定の版も書く（例: `"5.020 5.052"`）。1つの版で 8 shard、約 7 runner 時間かかる |
 | `SEED_RUNS` | `"1"` | 版ごとの test の回数（1〜10）。run 1 は既定の seed、2 以降は `VLIW_SIM_SEED=random`（JVM ごとに新しい seed） |
 | `TIMING` | `"false"` | `true` なら、固定の版とソースの候補を1つの job に入れ、A B C C B A の順に `sbt test` を走らせて時間を比べる |
 | `PARTS` | `""` | 空ならすべての part を走らせる。`test`・`timing`・`mutation` を空白で区切って書くと、その part だけを走らせる（やり直し）。build はいつも走る |
 
-`env` は job の `if`・`strategy`・`with` では使えないので、plan job が knob を確かめて outputs に出し、後の job はそれだけを使う。plan job は、次の場合に失敗し、何も走らせない: 書式の誤り（空白以外の区切り、版の形でない値）、upstream に annotated tag `v<版>` がない、同じ版の候補が2つ、候補が4つ以上、固定の版でも候補でもない版の `MUTATION`、範囲外の `SEED_RUNS`、`true`・`false` 以外の `TIMING`、`TIMING` が `true` でないのに `PARTS` に `timing`、`MUTATION` が空なのに `PARTS` に `mutation`、`TIMING=true` でソースの候補がない。knob が既定と違えば warning を出す（マージの前に戻すため）。タグの日付が2週間以内なら warning を出す。ADR-0004 は2週間未満の版を採らないが、試すのはかまわない。
+`env` は job の `if`・`strategy`・`with` では使えないので、plan job が knob を確かめて outputs に出し、後の job はそれだけを使う。plan job は、次の場合に失敗し、何も走らせない: 書式の誤り（空白以外の区切り、版の形でない値）、upstream に annotated tag `v<版>` がない、同じ版の候補が2つ、候補が4つ以上、固定の版でも候補でもない版の `MUTATION`、候補を書いて固定の版を書かない `MUTATION`、範囲外の `SEED_RUNS`、`true`・`false` 以外の `TIMING`、`TIMING` が `true` でないのに `PARTS` に `timing`、`MUTATION` が空なのに `PARTS` に `mutation`、`TIMING=true` でソースの候補がない。knob が既定と違えば warning を出す（マージの前に戻すため）。既定は `scripts/toolchain-candidates.py` の `DEFAULTS` にもあり、`scripts/check.sh static`（`scripts/test-toolchain-candidates.py`）は、workflow の knob がそれと同じことを確かめる。そのため、knob を変えたブランチでは、ci.yml の `static` が失敗する。knob を戻すと通る。タグの日付が2週間以内なら warning を出す。ADR-0004 は2週間未満の版を採らないが、試すのはかまわない。
 
 ### job
 
-- plan: 固定の版を先頭（対照）に置き、候補を続ける。ソースの候補は、`git ls-remote https://github.com/verilator/verilator 'refs/tags/v<版>^{}'` で commit を決めてログに出す。この commit を action の入力 `commit` に渡すので、`scripts/verilator-build.sh` がタグの移動に気づく。
+- plan: 固定の版を先頭（対照）に置き、候補を続ける。ソースの候補は、`git ls-remote https://github.com/verilator/verilator 'refs/tags/v<版>^{}'` で今のタグの commit を決め、ログと記録に出す。この commit を action の入力 `commit` に渡すので、この run の間にタグが動けば、`scripts/verilator-build.sh` がビルドのときに気づく。run の前に動いたタグは、新しい commit のまま試される。そこで plan は、commit された `docs/toolchain/<版>/report.md` の記録の commit と違えば warning を出す。版を固定にするときは、記録の commit を `project/toolchain.properties` に書く。
 - build（版ごと）: action で入れる。ソースの候補はここでビルドしてキャッシュに保存するので、後の job は復元するだけになる。fingerprint をログに出す。2回目の push では、fingerprint の `cache:` の行が `restored` になる。
-- test（版 × run）: ci.yml の `scala` ジョブと同じ `scripts/check.sh scala` を、同じ時間の枠（`CHECK_TIMEOUT` 780 秒、step 15 分、job 30 分）で走らせる。候補では、action が `VLIW_VERILATOR_EXPECTED` を設定し、`GITHUB_WORKFLOW_REF` がこの workflow を指すので、読み手はそれを受け付ける。`[toolchain]` の行は、候補では `(env)`、対照では `(pinned)` でなければならず、違えば setup に分ける。
-- timing（`TIMING=true` のとき）: 1つの job に、action で固定の版とソースの候補を1つずつ入れる。固定の版を先に入れる（候補の action が `VLIW_VERILATOR_EXPECTED` を設定するため）。ソースのビルドはそれぞれの prefix にあり、apt の版は `/usr/bin` にある。apt の候補は固定の版と同じ job に入れられないので、timing から除く。`Test/compile` を1回してから（時間に入れない）、`scripts/check.sh sbt test` を A B C C B A の順に走らせる。run ごとに、PATH にはその版の prefix だけを置き、候補では `VLIW_VERILATOR_EXPECTED` をその版にする。比は、候補の2回の平均 ÷ 固定の版の2回の平均で、この job のログに出る。report は、比から #121 §5 の条件（最近の `check.sh scala` の最大 555 秒 × 比 × 1.1 が `CHECK_TIMEOUT` の 780 秒を超えるか）も出す。
-- mutation（`MUTATION` の版ごと）: `mutation.yml` を `workflow_call` で呼ぶ（入力 `verilator`・`commit`、固定の版では空）。shard ごとの判定は、その job のログに出る。
-- report（いつも走る）: すべての part を分類し、候補を対照と比べ、表と判定を出し、最後に commit する記録を出す。
+- test（版 × run）: ci.yml の `scala` ジョブと同じ `scripts/check.sh scala` を、同じ時間の枠（`CHECK_TIMEOUT` 780 秒、step 15 分、job 30 分）で走らせる。候補では、action が `VLIW_VERILATOR_EXPECTED` を設定し、`GITHUB_WORKFLOW_REF` がこの workflow を指すので、読み手はそれを受け付ける。`[toolchain]` の行は、候補では `(env)`、対照では `(pinned)` でなければならず、`[sim-seed]` の行は、run 1 では `(default)`、2 以降では `(random)` でなければならない。違えば setup に分ける。失敗した run では、失敗したテストの failure text（下）も、その job のログに出す。
+- timing（`TIMING=true` のとき）: 1つの job に、action で固定の版とソースの候補を1つずつ入れる。固定の版を先に入れる（候補の action が `VLIW_VERILATOR_EXPECTED` を設定するため）。ソースのビルドはそれぞれの prefix にあり、apt の版は `/usr/bin` にある。apt の候補は固定の版と同じ job に入れられないので、timing から除く。`Test/compile` を1回してから（時間に入れない）、`scripts/check.sh sbt test` を A B C C B A の順に走らせる。run ごとに、PATH にはその版の prefix だけを置き、候補では `VLIW_VERILATOR_EXPECTED` をその版にする（seed はどれも既定）。失敗した run の failure text は、この job のログに出る。比は、候補の2回の平均 ÷ 固定の版の2回の平均で、この job のログに出る。report は、比から #121 §5 の条件（最近の `check.sh scala` の最大 555 秒 × 比 × 1.1 が `CHECK_TIMEOUT` の 780 秒を超えるか）も出す。
+- mutation（`MUTATION` の版ごと）: `mutation.yml` を `workflow_call` で呼ぶ（入力 `verilator`・`commit`、固定の版では空）。固定の版も呼んで、同じ run の対照にする。shard ごとの判定は、その job のログに出る。
+- report（いつも走る）: すべての part を分類し、候補を対照と比べ、表と判定を出す。次に mutation の shard の failure text を出し、最後に commit する記録を出す。
 
 build・test・timing の job は、`toolchain-candidates summary: {...}` の1行（JSON）をログに出し、同じものを artifact に上げる。report job は、同じ run の artifact（この要約と mutation の shard のログ）を落として読む。エージェントは artifact を落とせないが、同じ run の job は落とせる。
 
@@ -141,23 +141,34 @@ report は part ごとに、次のどれかに分ける。test は run ごとに
 | 分類 | 意味 | 扱い |
 |---|---|---|
 | success | テストが通った。mutation では、すべての shard のベースラインが通り、すべての mutant が KILLED | 結果 |
-| test-failure | テストが失敗した（失敗した suite の名前つき）。mutation では、SURVIVED の mutant か、ベースライン（mutant なしの run）の失敗 | 結果 |
-| setup | action（apt、キャッシュ、ビルド、`toolchain.sh check`、fingerprint の確認）の失敗、`scripts/check.sh` の中の `toolchain.sh check` の失敗、期待と違う `[toolchain]` の行 | 判定不能 |
-| timeout | `CHECK_TIMEOUT` か、step の `timeout-minutes` で止まった | 判定不能 |
+| test-failure | テストが失敗した（失敗したテストか suite の名前つき）。mutation では、SURVIVED の mutant か、ベースライン（mutant なしの run）の失敗 | 結果 |
+| setup | action（apt、キャッシュ、ビルド、`toolchain.sh check`、fingerprint の確認）の失敗、`scripts/check.sh` の中の `toolchain.sh check` の失敗、期待と違う `[toolchain]` か `[sim-seed]` の行 | 判定不能 |
+| timeout | `CHECK_TIMEOUT` か、step の `timeout-minutes` で止まった（`CHECK_TIMEOUT` の後の exit 137、つまり TERM で止まらず KILL されたものも含む） | 判定不能 |
 | cancelled | 取り消された | 判定不能 |
 | skipped | 走らなかった | 判定不能 |
 | compile | scalac か scalafmt の失敗 | 判定不能 |
-| other | 上のどれでもない（テストの JVM が死んだ、job の要約がない、mutation の ERROR・欠けた shard・判定のない mutant など） | 判定不能 |
+| other | 上のどれでもない（テストの JVM が死んだ、job の要約がない、失敗した suite もテストも名前がない、対照の失敗がすべて環境の失敗、mutation の ERROR・欠けた shard・判定のない mutant など） | 判定不能 |
 
 - 結果として数えるのは success と test-failure だけである。それ以外は「判定不能（やり直し）」で、skipped と cancelled も成功とは数えない。
-- 候補だけが失敗したとき（対照は同じ part で結果があり、その suite は失敗していない）、report は `candidate-only failure` と出す。これを候補の回帰（`REGRESSION`）とするのは、記録を commit してから `PARTS` で同じ part をやり直し、同じ suite がまた候補だけで失敗したときだけである。report job は、commit された `report.md` の各 run の節にある機械用の行（`<!-- toolchain-candidates: {...} -->`）と比べて、それを判定する。
-- 対照も同じ suite で失敗したときは、候補の回帰ではない。対照が判定不能なら、候補を比べる相手がないので、候補の part も判定不能である。
+- 候補と対照は、テストごとに比べる（`<suite> / <test>`。JUnit の報告がテストを名指さない suite だけは、suite で比べる）。同じ suite の別のテストが対照で失敗していても、候補のテストの失敗は消えない。mutation では、SURVIVED の mutant と、ベースラインで失敗したテスト（`baseline: <suite> / <test>`）を比べる。
+- 候補だけが失敗したとき（対照は同じ part で結果があり、そのテストは失敗していない）、report は `candidate-only failure` と出す。これを候補の回帰（`REGRESSION`）とするのは、記録を commit してから `PARTS` で同じ part をやり直し、同じテストがまた候補だけで失敗したときだけである。report job は、commit された `report.md` の各 run の節にある機械用の行（`<!-- toolchain-candidates: {...} -->`）と比べて、それを判定する。
+- 対照も同じテストで失敗したときは、候補の回帰ではない。対照が判定不能なら、候補を比べる相手がないので、候補の part も判定不能である。対照の失敗がすべて環境の失敗（`scripts/mutation-classify.py` の `env:sim-build`・`env:sim-exit` など）なら、候補については何も言えないので、対照を判定不能（other）とする。候補の環境の失敗は、候補の版のせいでありうるので、結果（test-failure）のままにする。
 - 結果は版ごとである。ある版の結果で、別の版を判断しない。
-- 失敗したテストには、`scripts/mutation-classify.py` の分類（assertion、`env:sim-exit`、`env:sim-build` など）も付ける。5.040 以降の失敗の見え方（assertion の `exit(1)`、`Error 134`・`Error 137`）は、判断の run の出力から fixture にする（#121 の M8）。
+- 失敗したテストには、`scripts/mutation-classify.py` の分類（assertion、`env:sim-exit`、`env:sim-build` など）も付ける。5.040 以降の失敗の見え方（assertion の `exit(1)`、`Error 134`・`Error 137`）は、判断の run の failure text から fixture にする（#121 の M8）。
+
+### failure text
+
+失敗した run のうち、`scripts/testdata/mutation-classify/` の fixture に要るファイルを、`===BEGIN failure-text <ラベル>/<ファイル>===` と `===END===` で挟んでログに出す（#121 の M8。5.040 以降の失敗の見え方を fixture にするため）。ファイルは、`verdict`（今の `scripts/mutation-classify.py` の判定）、`exit`、`classification.tsv`、`reports/<project>/TEST-<suite>.xml`（失敗したテストのうち分類ごとに最初の1つだけを残し、長い本文は、12000 文字の後ろを、スタックフレームでない行と各塊の最初のフレームだけにする）、`sbt.log` の最後の 60 行、ChiselSim の `simulation-log.txt`・`compilation-log.txt` の最後の 40 行、mutant の `mutant.diff` である。
+
+- test job（`Summarize` の step）: 失敗した run のテスト。ラベルは `<版>/test-run<run>`。
+- timing job: 失敗した run のテスト。ラベルは `<版>/timing-position<順>`。
+- report job: mutation の版ごとに、失敗したベースライン（mutant なしの run）、KILLED と SURVIVED 以外の判定（verdict と category の組）ごとに最初の mutant、対照と category の違う KILLED ごとに最初の mutant（版ごとに 8 つまで）。ラベルは `<版>/mutation/<run のディレクトリ>`。
+
+fixture にするには、1つのラベルのファイルを `scripts/testdata/mutation-classify/<名前>/` に置き、`expected` に期待する判定（verdict と category）を書く。分類器のコードを直す必要があれば、別の PR（#121 の PR 4）にする。
 
 ### 記録
 
-- `docs/toolchain/<版>/report.md`: 版、入れ方（apt のパッケージ、またはタグ・commit・タグの日付）、run の URL と attempt、PR の head と merge commit、knob、runner（CPU、nproc、image）、part ごとの分類と対照との比較、test の run ごとの seed・分類・終了コード・秒・テストの数・失敗した suite・Verilator のビルドの数・`%Warning-<CODE>` の数、fingerprint（build job のもの。test job の `verilator_bin` の sha256 がそれと同じか）、timing の時間と比、mutation の shard ごとのベースライン・判定の数・やり直し。
+- `docs/toolchain/<版>/report.md`: 版、入れ方（apt のパッケージ、またはタグ・commit・タグの日付）、run の URL と attempt、テストした main の commit（PR では merge commit の第1親）、PR の head と merge commit、knob、runner（CPU、nproc、image）、part ごとの分類と対照との比較、test の run ごとの seed・分類・終了コード・秒・テストの数・失敗した suite・Verilator のビルドの数・`%Warning-<CODE>` の数、fingerprint（build job のもの。test job の `verilator_bin` の sha256 がそれと同じか）、timing の時間と比、mutation の shard ごとのベースライン・判定の数・やり直し。
 - `docs/toolchain/<版>/mutation.tsv`: mutation を走らせ、すべての mutant に判定がそろい、分類が結果（success か test-failure）のときだけ出す。列は `mutant`・`verdict`・`category` で、mutant の名前の順である（[5.020/mutation.tsv](5.020/mutation.tsv) と同じ形）。そろわないときは、report.md にその理由を書く。その場合は、mutation の job のログの `===BEGIN results.tsv ...===` から作る。
 
 ## 版を変える手順

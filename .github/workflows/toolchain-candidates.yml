@@ -32,13 +32,14 @@ concurrency:
   cancel-in-progress: false
 
 # The knobs. The plan job checks them strictly and passes them on: env is not available in a job's
-# `if`, `strategy` or `with`. These are the defaults; restore them before merging.
+# `if`, `strategy` or `with`. These are the defaults (DEFAULTS in scripts/toolchain-candidates.py);
+# restore them before merging: until then, its self-test fails `scripts/check.sh static`.
 env:
   # Candidates, space-separated: a version built from the source at its tag (5.052), or an apt
   # package version (apt:5.020-1). At most 3; the pinned version always runs as the control.
   CANDIDATES: "5.032 5.052"
-  # Versions (the pinned one or candidates) whose mutation check runs: mutation.yml, 8 shards each,
-  # about 7 runner hours per version.
+  # Versions whose mutation check runs: mutation.yml, 8 shards each, about 7 runner hours per
+  # version. With a candidate, the pinned version too, as the control in the same run ("5.020 5.052").
   MUTATION: ""
   # Test runs per version (1 to 10): run 1 with the default seed, later runs with VLIW_SIM_SEED=random.
   SEED_RUNS: "1"
@@ -291,7 +292,11 @@ jobs:
     timeout-minutes: 15
     steps:
       # Also for the records committed from earlier runs, which tell whether a failure reproduces.
+      # Two commits deep: on a pull request, the first parent of the merge commit is the commit of
+      # main that the run tested, which the records name.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
       # Artifacts of this run: the agent cannot download them, but a job of the run can.
       - name: Download the summaries
         continue-on-error: true
@@ -307,12 +312,16 @@ jobs:
         with:
           pattern: mutation-logs-verilator-*
           path: build/candidates/mutation
+      # Prints the failure texts of the mutation shards too (for the fixtures of
+      # scripts/testdata/mutation-classify), before the records.
       - name: Report
         env:
           PLAN: ${{ needs.plan.outputs.plan }}
           NEEDS: ${{ toJSON(needs) }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: >-
+          MAIN_SHA="$(git rev-parse --verify -q 'HEAD^1' || true)"
           python3 -I scripts/toolchain-candidates.py report --summaries build/candidates/summaries
           --mutation build/candidates/mutation
