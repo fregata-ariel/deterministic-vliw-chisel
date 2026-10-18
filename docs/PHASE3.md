@@ -17,7 +17,7 @@
 | 資源条件を揃えた固定パイプラインが ChiselSim で DSL の参照実装と一致し、cycles が同じ数え方で記録されている（#75） | [benchmarks/RESULTS.md](../benchmarks/RESULTS.md)「資源条件を揃えた固定パイプライン（#75）」、ADR-0017。cycles は `CoreDriver` と同じく、start の受理から done までを数える。`crosscheck/FixedPipelineKernelSpec`「every plan is legal and touches the same words as the kernel's VLIW program」と、カーネル・系列ごとの「saxpy8: DSL reference outputs in 26 cycles (...)」など6件（乱数・全0・全1の入力と、FIR の係数を変えた場合）。`BenchmarkSpec`「the fixed pipelines give the recorded outputs in the recorded cycles on ChiselSim」「the fixed pipelines are measured with the Verilator and JDK that the records name」。mutant 5つ（下の「mutation」） | 達成 |
 | 上記のうち、命令列・参照モデル・RTL の一致、`ii` と cycles の記録、固定パイプラインの一致が CI で自動検証される | `scala` ジョブ（scalafmt の検査と `sbt test`）が上の全スペックを実行する。`BenchmarkSpec`「benchmarks/ holds exactly the generated records」が、コミットした記録（RESULTS.md・MODULO.md・REGISTERS.md・MAC.md、`cases/`、`metrics/`）と、ソースから生成し直した内容の一致を確かめる。main 296697a の run 38994779213 で成功した | 達成（注2） |
 | 間欠的な ChiselSim の失敗について、原因、または再現できなかった範囲が記録されている。原因に対処した場合は、その回帰テストも CI に含める（#74） | 原因は Verilator 5.020 の、複数スレッドの verilation の終了時の abort（upstream issue 4931）である。ADR-0013、#74 のコメント「再現試験の結果（2026-10-15）」（Repeat tests の run 38712525034・38713082086。対処の後、全体に相当する実行 112 回で失敗 0）、[hw/README.md](../hw/README.md)。対処は `VliwChiselSim`（1スレッドで verilate し、seed を明示して記録する）。回帰テストは `hw/VliwChiselSimSpec`「Verilator verilates in one thread and builds on all cores」「every simulation records its seed and is built and replayed with the project's settings」と、`static` の「ChiselSim specs mix in VliwChiselSim (#74)」 | 達成 |
-| 最終の main のコミットで mutation ジョブを実行し、そのコミットと結果が記録されている（#71） | 下の「mutation」。53 mutant で、killed 53・survived 0・ERROR 0・stale 0。PR #108 の head b7d044d（tree は 296697a と同じ）での結果の引用で、最終の main（#71 のマージ）や 296697a での再実行ではない | 同じ tree の結果を引用 |
+| 最終の main のコミットで mutation ジョブを実行し、そのコミットと結果が記録されている（#71） | 下の「mutation」。Phase 3 の最後の main 63507ff（#71 の PR #118 のマージ）で、オーナーが workflow_dispatch で起動した run 39053572947。53 mutant で、killed 53・survived 0・ERROR 0・stale 0 | 達成（2026-10-17。#119） |
 
 - 注1: verifier は今、L1〜L11 を検査する。L11（読出しポート）は #69 で決め（ADR-0018）、#77 で verifier に加えた規則で、mvp-0 では常に満たされる。#66 の L1〜L10 を含む
 - 注2: RTL の対応範囲は、全演算の ii 1、LD の latency 2 以上、ST の latency 1、read_ports 3 である。`slow_units`・`ii_units`・rp4 は、参照モデルと verifier だけで確かめた。CI の ignored 14 件はすべてこれである（hw の `AssertionSpec` 6、`CaseSpec` 4、crosscheck の `RtlDifferentialSpec` 1、`ModuloKernelSpec` 3）。RTL のトレースで II を確かめたのも、既定・mvp-1・mac3 の構成だけである
@@ -157,18 +157,15 @@ cycles は start の受理（E_0）から done までである。
 
 | 項目 | 値 |
 |---|---|
-| 引用する run | Mutation check run 38989929697（`.github/workflows/mutation.yml`、event `pull_request`、conclusion success） |
-| 対象のコミット | PR #108 の head `b7d044d7fc9f74a89796317a3b8b55d5c7dc5b2a` |
+| run | Mutation check run 39053572947（`.github/workflows/mutation.yml`、event `workflow_dispatch`、オーナーが 2026-10-17 に起動、conclusion success） |
+| 対象のコミット | main `63507ffef6108715df5ea82822c930e2e981056e`（#71 の PR #118 のマージ。Phase 3 の最後の main） |
 | 分割 | 8 shard（`MUTATION_SHARD` k/8）。shard 1〜5 は 7 個、6〜8 は 6 個。各 shard は、最初に mutant を入れない実行を行う |
 | mutant | 53（verifier 11、参照モデル 13、RTL・decoder 10、固定パイプライン 5、エンコーダ 2、コンパイラ 12）。Phase 2 の末は 15 |
-| 結果 | killed 53、survived 0、ERROR 0、stale 0。8 shard とも success |
-| 時間 | mutation のステップは shard ごとに 35〜69 分。run 全体で約69分 |
+| 結果 | killed 53、survived 0、ERROR 0、stale 0。8 shard とも success。mutant を入れない実行は、どの shard でも1回目で通った |
+| 時間 | mutation のステップは shard ごとに 40〜70 分。run 全体で約70分 |
 
-**最終の main（#71 のマージコミット）でも、コードを変えた最後の main（296697a）でも、再実行ではない。** #71 の作業からは、workflow_dispatch で mutation ジョブを起動できなかった（403）。そのため、同じ tree の結果を引用する。
+#71 の作業の時点では、この記録は、PR #108 の head b7d044d（tree は、コードを変えた最後の main 296697a と同じ）での run 38989929697 の引用だった（同じ 53 mutant で、killed 53・survived 0・ERROR 0・stale 0）。#71 の作業からは workflow_dispatch で起動できなかった（403）ためである。第三者レビュー（#66 のコメント、2026-10-18）は、これでは完了条件を文字どおりには満たさないとした。オーナーは main での再実行を選び、上の run を起動した（#119）。結果は引用した run と同じである。
 
-- 296697a は #108 のマージコミットで、親は 1e80b49 と b7d044d である。2つのコミットの tree は同じ（`c17f4faee8d4bb995fa07f68286363993e3fff0a`）で、`git diff b7d044d 296697a --stat` は空である
-- `pull_request` の run は、PR とその時の main をマージした結果（`refs/pull/108/merge`）を試す。その時の main 1e80b49 は b7d044d の祖先なので、試した tree も同じである
-- #71 の PR は docs（このファイル、ROADMAP.md、DESIGN.md、README.md）だけを変える。マージした後の main でも、コードと mutant は上の run と同じである
 - mutation ジョブは required ではない。手動の実行と、mutant やスクリプトを変えた PR で動く
 
 ## 既知の制約
@@ -192,7 +189,7 @@ cycles は start の受理（E_0）から done までである。
 | RTL の対応範囲は、全演算の ii 1、LD の latency 2 以上、ST の latency 1、read_ports 3 | `slow_units`・`ii_units`・rp4 は参照モデルと verifier だけで確かめた。CI では 14 件を ignored と表示する | rp4 は #57 |
 | RTL で確かめるのは、方式ごとに cycles 最小の系列の記録と、Modulo Scheduling の記録だけ | 戦略を固定した系列の各行は、参照モデルだけで確かめる | — |
 | Verilator は 5.020 のまま | ADR-0013 の対処（1スレッドの verilation）が要る。版の調査（#85〜#100、#74 のコメント）はブランチ `claude/verilator-catalog` にあり、main に未マージ。版を上げるかは決めていない | オーナー判断 |
-| mutation ジョブは required ではない。8 shard で1回約70分かかる | 最後の結果は、コードを変えた最後の main 296697a と同じ tree の、PR #108 の head のもの（上の「mutation」） | 各 Phase の完了レビュー |
+| mutation ジョブは required ではない。8 shard で1回約70分かかる。この作業の session からは workflow_dispatch で起動できない（403） | 最後の結果は、Phase 3 の最後の main 63507ff での run 39053572947（上の「mutation」。オーナーが起動した） | 各 Phase の完了レビュー |
 | mutant は、コンパイラの MAC と読出しポートの部分（融合、L11、3本目の読出しポート、MAC の rs3）を対象にする。Modulo Scheduling の本体（スロットと RecMII の計算、配置、展開）、rematerialization の選び方、`ModuloTrace` は対象にしていない | これらの誤りは、verifier の最終検査と差分テスト（参照モデル・RTL）で検出する。`ModuloTrace` の誤り検出は `ModuloKernelSpec` のテストで確かめる | — |
 | Phase 2 の制約（DSL の出力は書込み専用で、各要素に1回だけ代入する。スロットの下限は、開始・終了と書戻しの衝突を数えない） | そのまま残る | 必要になったときに緩める・改良する |
 | ベンチマークは小さい（8 要素、3×3）。データは Scratchpad に置いたまま | 転送を含む評価は無い | Phase 4（#109） |

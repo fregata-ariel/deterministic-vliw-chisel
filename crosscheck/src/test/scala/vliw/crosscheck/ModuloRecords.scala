@@ -263,8 +263,11 @@ ${lines.mkString("\n")}
 
     val saxpy = series.map { n =>
       ModuloCompiler.compile(LoopBenchmarks.saxpy(n), m) match {
-        case Right(c) => s"| $n | ${c.ii} | ${c.words.size} | ${c.cycles} |"
-        case Left(_)  =>
+        case Right(_) =>
+          // Run on the reference model with the II from the trace check, as the compared loops.
+          val r = record(LoopBenchmarks.saxpy(n), m)
+          s"| $n | ${r.metrics("ii").num.toInt} | ${r.compiled.words.size} | ${r.metrics("cycles").num.toInt} |"
+        case Left(_) =>
           val no = failure(LoopBenchmarks.saxpy(n), m)
           s"| $n | - | - | 不成立: ${reasons(no.attempts)}（II ${no.mii.mii}〜${no.iiMax} のどれにも収まらない） |"
       }
@@ -331,6 +334,8 @@ ${accept.mkString("\n")}
 | n | II | bundle | cycles |
 |---|---|---|---|
 ${saxpy.mkString("\n")}
+
+命令列ができた行の II と cycles は、その命令列を参照モデルで実行し、トレースで確かめた値である。`crosscheck/ModuloKernelSpec` が、同じ命令列を参照モデルと RTL で実行し、出力が DSL の参照実装と、cycles がスケジューラの予測と一致し、トレースの照合で II が確かめられることを確かめる（上の「ループごとの結果」のループと同じ）。
 
 命令領域（${m.instructionMemoryBundles} bundle）に収まる最大の n は $nMax。n = 1 から ${tried(
         m
