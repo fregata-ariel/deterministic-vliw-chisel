@@ -40,12 +40,12 @@ env:
   CANDIDATES: "5.032 5.052"
   # Versions whose mutation check runs: mutation.yml, 8 shards each, about 7 runner hours per
   # version. With a candidate, the pinned version too, as the control in the same run ("5.020 5.052").
-  MUTATION: ""
+  MUTATION: "5.020 5.052"
   # Test runs per version (1 to 10): run 1 with the default seed, later runs with VLIW_SIM_SEED=random.
-  SEED_RUNS: "1"
+  SEED_RUNS: "3"
   # true: also time `sbt test` with the pinned version and the source candidates in one job, in the
   # order A B C C B A.
-  TIMING: "false"
+  TIMING: "true"
   # Empty for every part, or the parts to re-run (test, timing, mutation), e.g. to see whether a
   # candidate's failure reproduces. build always runs.
   PARTS: ""
