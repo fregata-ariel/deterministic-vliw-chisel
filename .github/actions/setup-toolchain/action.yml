@@ -1,0 +1,106 @@
+name: Set up the toolchain
+description: >-
+  Installs the JDK, sbt and the Verilator of project/toolchain.properties, the one place where CI
+  installs them (ADR-0020, #121), checks them and prints their fingerprint. Only
+  .github/workflows/toolchain-candidates.yml may ask for a candidate Verilator instead.
+
+# The inputs choose a candidate. The required CI (ci.yml) gives none (scripts/check.sh static checks
+# that), and any other workflow that gives one fails, as VLIW_VERILATOR_EXPECTED does in
+# scripts/toolchain.sh.
+inputs:
+  verilator:
+    description: >-
+      Empty for the pinned Verilator. A candidate: a version such as 5.052, built from the source at
+      the input commit, or apt:<package version> such as apt:5.020-1.
+    required: false
+    default: ""
+  commit:
+    description: >-
+      For a candidate built from the source: the commit of its tag (40 hexadecimal digits;
+      git ls-remote https://github.com/verilator/verilator 'refs/tags/v<version>^{}').
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: The Verilator version that was installed, e.g. 5.020
+    value: ${{ steps.plan.outputs.version }}
+  id:
+    description: >-
+      The version and where it came from, for names: <version>-apt-<package version> or
+      <version>-<first 12 digits of the commit>
+    value: ${{ steps.plan.outputs.id }}
+
+runs:
+  using: composite
+  steps:
+    # Reads project/toolchain.properties and the inputs; exports VLIW_VERILATOR_EXPECTED for a
+    # candidate of another version.
+    - id: plan
+      name: Choose the toolchain
+      shell: bash
+      env:
+        INPUT_VERILATOR: ${{ inputs.verilator }}
+        INPUT_COMMIT: ${{ inputs.commit }}
+      run: '"$GITHUB_ACTION_PATH/setup-toolchain.sh" plan'
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: ${{ steps.plan.outputs.jdk }}
+        cache: sbt
+    - uses: sbt/setup-sbt@v1
+    # apt exits with 100 if the image has no such version.
+    - name: Install Verilator with apt
+      if: steps.plan.outputs.method == 'apt'
+      shell: bash
+      env:
+        APT: ${{ steps.plan.outputs.apt }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y "verilator=$APT"
+    - id: restore
+      name: Restore the Verilator build
+      if: steps.plan.outputs.method == 'source'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.plan.outputs.prefix }}
+        key: ${{ steps.plan.outputs.key }}
+    - name: Build Verilator from the source
+      if: steps.plan.outputs.method == 'source' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.plan.outputs.version }}
+        COMMIT: ${{ steps.plan.outputs.commit }}
+        PREFIX: ${{ steps.plan.outputs.prefix }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y autoconf flex bison libfl-dev help2man
+        "$GITHUB_ACTION_PATH/../../../scripts/verilator-build.sh" "$VERSION" "$COMMIT" "$PREFIX" "$PREFIX/build-info.txt"
+    # Saved right after the build: the post step of actions/cache saves only when the whole job
+    # succeeds, and a failing test would then build again in the next run.
+    - name: Save the Verilator build
+      if: steps.plan.outputs.method == 'source' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.plan.outputs.prefix }}
+        key: ${{ steps.plan.outputs.key }}
+    # Only <prefix>/bin. A directory such as /usr/bin first on the PATH would also hide the JDK of
+    # setup-java (the catalog's apt job ran with the image's JDK 17 that way).
+    - name: Put the Verilator build on the PATH
+      if: steps.plan.outputs.method == 'source'
+      shell: bash
+      env:
+        PREFIX: ${{ steps.plan.outputs.prefix }}
+      run: printf '%s/bin\n' "$PREFIX" >>"$GITHUB_PATH"
+    - name: Check the toolchain
+      shell: bash
+      env:
+        METHOD: ${{ steps.plan.outputs.method }}
+        VERSION: ${{ steps.plan.outputs.version }}
+        APT: ${{ steps.plan.outputs.apt }}
+        COMMIT: ${{ steps.plan.outputs.commit }}
+        PREFIX: ${{ steps.plan.outputs.prefix }}
+        KEY: ${{ steps.plan.outputs.key }}
+        JDK: ${{ steps.plan.outputs.jdk }}
+        CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+      run: '"$GITHUB_ACTION_PATH/setup-toolchain.sh" verify'

@@ -93,13 +93,13 @@
 - **状態**: 採用（Issue #3）
 - **決定**:
   - 手元とCIの入口を `scripts/check.sh` に一本化する。CIのジョブはこのスクリプトを呼ぶだけにする。
-    - `static`: JSON構文、shellcheck、Python の構文、追跡ファイルの空白エラー、ChiselSim のテストが `VliwChiselSim` を使うこと、mutation の判定と再実行の自己テスト（#74）、`scripts/toolchain.sh` の自己テスト（#121）
+    - `static`: JSON構文、shellcheck、Python の構文、追跡ファイルの空白エラー、ChiselSim のテストが `VliwChiselSim` を使うこと、mutation の判定と再実行の自己テスト（#74）、`scripts/toolchain.sh` の自己テスト（#121）、workflow が Verilator と JDK を `.github/actions/setup-toolchain` でだけ入れることとその自己テスト（#121）
     - `scala`: `sbt scalafmtSbtCheck scalafmtCheckAll test`
   - 起動条件は、`main` へのpush、すべてのPR、手動実行とする。作業ブランチではPRを開いてCIを回す。（当初は全ブランチへのpushで起動し、PRでは二重実行を避けてジョブを`if`で飛ばしていたが、PR上に同名のskippedチェックが並び紛らわしいため変更した。）
   - `permissions: contents: read` にする。`main` 以外では、同じrefの古い実行をキャンセルする。
   - 使用するActionは、公式（`actions/*`）とsbt公式（`sbt/setup-sbt`）のメジャータグで固定する。第三者のActionを追加する場合はcommit SHAで固定する。
-- mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。mutation のスクリプト（`mutation-check.sh`・`mutation-classify.py`）とワークフロー自体を変えたPRでも実行する（#74）。
-- `scala` ジョブ（と `mutation` ジョブ）は Verilator を apt で入れ、`hw` の ChiselSim テストも実行する（#23）。firtool は sbt の依存として取得し、sbt のキャッシュに載る。
+- mutation チェック（`scripts/mutation-check.sh`）は遅いため、別のワークフロー `mutation.yml` で、手動実行とmutantの定義を変えたPRでだけ実行する（#33）。mutation のスクリプト（`mutation-check.sh`・`mutation-classify.py`）とワークフロー自体を変えたPRでも実行する（#74）。ツールチェーン（`project/toolchain.properties`、`.github/actions/setup-toolchain`、`scripts/toolchain.sh`・`scripts/verilator-build.sh`、`Toolchain.scala`・`VliwChiselSim.scala`）を変えたPRでも実行する（#121）。
+- `scala` ジョブ（と `mutation` ジョブ）は Verilator を apt で入れ（ADR-0020 で置き換えた。Verilator と JDK は、CI の action [.github/actions/setup-toolchain](../.github/actions/setup-toolchain/action.yml) が `project/toolchain.properties` の版で入れる。入れ方は [docs/toolchain/README.md](toolchain/README.md) にある）、`hw` の ChiselSim テストも実行する（#23）。firtool は sbt の依存として取得し、sbt のキャッシュに載る。
 - 間欠的な失敗を追えるよう、`scripts/check.sh` は sbt の出力・環境・プロセスの記録・テストの並行性の実効設定を `build/check-logs/` に残し、`scala` ジョブは失敗したときにそれらと ChiselSim の作業ディレクトリ・JUnit レポートを artifact として残す。テストが止まったときは、`check.sh` が `CHECK_TIMEOUT` で sbt を止めて失敗を記録し、ステップの timeout（job より短い）は予備とする。ステップの timeout が止めるのは外側のシェルだけで、sbt は動き続け、失敗の記録も残らないからである。`mutation` ジョブは mutant ごとの判定とログを常に残す。繰り返し実行のワークフロー `repeat-tests.yml` は手動実行だけとする（#74）。
 
 ## ADR-0006: MVPでは合法なプログラムを保守的に限定する
