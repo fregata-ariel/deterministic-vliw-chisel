@@ -134,14 +134,17 @@ expect 1 '^\.github/workflows/ci\.yml: no step uses \./\.github/actions/setup-to
 workflows ci.yml "{ print } $uses { print \"        env:\"; print \"          with: x\"; print \"      - uses: actions/cache@v5\"; print \"        with:\"; print \"          path: x\" }"
 expect 0
 # The variables that override the pinned toolchain, anywhere but in the action,
-# toolchain-candidates.yml, mutation.yml, the readers, the self-tests and the documentation.
-env_msg=' names VLIW_VERILATOR_(EXPECTED|JOBS) outside the action, toolchain-candidates\.yml, mutation\.yml and the readers'
+# toolchain-candidates.yml and its script, mutation.yml, the readers, the self-tests and the
+# documentation.
+env_msg=' names VLIW_VERILATOR_(EXPECTED|JOBS) outside the action, toolchain-candidates\.yml and its script, mutation\.yml and the readers'
 workflows repeat-tests.yml '{ print } /^    runs-on:/ { print "    env:"; print "      VLIW_VERILATOR_EXPECTED: \"5.052\"" }'
 expect 1 "^\\.github/workflows/repeat-tests\\.yml:[0-9]+$env_msg"
 workflows ci.yml '{ print } /^  scala:$/ { print "    env: { VLIW_VERILATOR_JOBS: svsim-default }" }'
 expect 1 "^\\.github/workflows/ci\\.yml:[0-9]+$env_msg"
 with_file scripts/repeat.sh '#!/bin/sh' 'export VLIW_VERILATOR_EXPECTED=5.052'
 expect 1 "^scripts/repeat\\.sh:2$env_msg"
+with_file scripts/toolchain-candidates-x.py 'env["VLIW_VERILATOR_EXPECTED"] = "5.052"'
+expect 1 "^scripts/toolchain-candidates-x\\.py:1$env_msg"
 with_file hw/src/test/scala/vliw/hw/Sim.scala '  // VLIW_VERILATOR_JOBS is read by Toolchain' \
   '  sys.env.get("VLIW_VERILATOR_JOBS")'
 expect 1 "^hw/src/test/scala/vliw/hw/Sim\\.scala:2$env_msg"
@@ -152,7 +155,7 @@ expect 0
 with_file .github/workflows/toolchain-candidates.yml 'env:' '  VLIW_VERILATOR_EXPECTED: "5.052"'
 expect 0
 for path in .github/actions/setup-toolchain/x.sh scripts/toolchain.sh hw/src/test/scala/vliw/hw/Toolchain.scala \
-  scripts/test-x.sh docs/x/y.txt hw/README.md; do
+  scripts/toolchain-candidates.py scripts/test-x.sh scripts/test-x.py docs/x/y.txt hw/README.md; do
   with_file "$path" 'VLIW_VERILATOR_EXPECTED=5.052'
   expect 0
 done

@@ -81,6 +81,9 @@ run_static() {
   step 'setup-toolchain, check-workflows.sh and verilator-build.sh with fakes (scripts/test-setup-toolchain.sh)'
   scripts/test-setup-toolchain.sh
 
+  step 'the steps of toolchain-candidates.yml with fakes (scripts/test-toolchain-candidates.py)'
+  python3 -I scripts/test-toolchain-candidates.py
+
   step 'mutation-check.sh with a fake sbt (scripts/test-mutation-check.sh)'
   scripts/test-mutation-check.sh
 
