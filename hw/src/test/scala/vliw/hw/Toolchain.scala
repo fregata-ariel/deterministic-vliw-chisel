@@ -11,9 +11,9 @@ import scala.util.Try
   * version that the tests expect of it.
   *
   * The file has one strict format, which `scripts/toolchain.sh` reads too: every line is empty, a
-  * comment starting with `#`, or `key=value` with a key of [[Keys]], each exactly once; CR, tabs
-  * and trailing spaces are errors. `ToolchainSpec` checks that both readers accept the same files
-  * and read the same values.
+  * comment starting with `#`, or `key=value` with a key of [[Keys]], each exactly once; CR, tabs,
+  * trailing spaces and NUL are errors. `ToolchainSpec` checks that both readers accept the same
+  * files and read the same values.
   */
 object Toolchain {
   val File: Path = Paths.get("project", "toolchain.properties")
@@ -42,6 +42,8 @@ object Toolchain {
     // A final newline ends the last line rather than starting another.
     val lines = if (pieces.last.isEmpty) pieces.init else pieces
     val errors = Seq.newBuilder[String]
+    // bash's read, in scripts/toolchain.sh, drops NUL bytes: both readers refuse them.
+    if (text.contains(0.toChar)) errors += "NUL byte"
     val values = scala.collection.mutable.LinkedHashMap.empty[String, (Int, String)]
     lines.zip(LazyList.from(1)).foreach { case (line, n) =>
       if (line.contains('\r')) errors += s"line $n: CR"

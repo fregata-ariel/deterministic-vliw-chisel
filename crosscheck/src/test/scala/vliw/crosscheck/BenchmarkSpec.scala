@@ -201,10 +201,11 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     }
   }
 
-  test("the fixed pipelines are measured with the Verilator and JDK that the toolchain expects") {
+  test("the fixed pipelines are measured with the Verilator and JDK that the records name") {
     // ChiselSim runs the Verilator on the PATH. The expected one is the pinned one of
-    // project/toolchain.properties, which RESULTS.md names, unless VLIW_VERILATOR_EXPECTED is set
-    // where ADR-0020 allows it (never in the required checks).
+    // project/toolchain.properties, which RESULTS.md names. VLIW_VERILATOR_EXPECTED overrides it
+    // only where ADR-0020 allows (never in the required checks), and RESULTS.md still names the
+    // pinned one then. docs/PHASE3.md cites this test by its name.
     val expected = Toolchain.expectedVerilator
     assert(
       Toolchain.installedVerilator == expected.version,

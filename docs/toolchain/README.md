@@ -11,7 +11,7 @@ Verilator と JDK の版は、[project/toolchain.properties](../../project/toolc
 | `verilator.commit` | ソースの commit（40 桁の小文字の16進）。ソースから入れるときに書く。`verilator.apt` と、ちょうど一方を書く |
 | `jdk.major` | JDK の major 版（数字） |
 
-行は、空行、`#` で始まるコメント、`key=value`（`^[a-z][a-z0-9.]*=[A-Za-z0-9.+-]*$`）のどれかである。キーは上の4つで、どれも1回だけ書く。重複、CR、タブ、行末の空白は誤りである。コメントは行頭にだけ書ける。
+行は、空行、`#` で始まるコメント、`key=value`（`^[a-z][a-z0-9.]*=[A-Za-z0-9.+-]*$`）のどれかである。キーは上の4つで、どれも1回だけ書く。重複、CR、タブ、行末の空白、NUL は誤りである。コメントは行頭にだけ書ける。
 
 読み手は2つある。テストの `vliw.hw.Toolchain` と `scripts/toolchain.sh` である。`ToolchainSpec` が、両方が同じファイルを受け付け、同じ値を読むことを確かめる。
 
@@ -19,7 +19,7 @@ Verilator と JDK の版は、[project/toolchain.properties](../../project/toolc
 
 ```sh
 scripts/toolchain.sh get verilator.version   # 固定の版
-scripts/toolchain.sh check                   # 固定の版、期待する版、PATH の verilator の場所と版、verilator_bin の sha256
+scripts/toolchain.sh check                   # 固定の版、期待する版、PATH の verilator の場所と版、VERILATOR_ROOT、verilator_bin の場所と sha256
 ```
 
 `check` は、PATH の Verilator が期待する版でなければ、直し方を出して失敗する。`scripts/check.sh` の `scala` と `sbt`、`scripts/mutation-check.sh`、`scripts/repeat-tests.sh` は、sbt の前に `check` を呼ぶ。`check` の出力は `env.txt` に残る。
@@ -42,7 +42,7 @@ sudo apt-get install -y "verilator=$(scripts/toolchain.sh get verilator.apt)"
 scripts/toolchain.sh check
 ```
 
-apt にその版がない環境では、同じ版をソースからビルドし、その `bin` を PATH の先頭に置く。ソースから入れる手順とスクリプトは、固定をソースの commit に移すときに足す（#121）。
+apt にその版がない環境では、同じ版をソースからビルドし、その `bin` を PATH の先頭に置く。ソースからビルドするスクリプト（`scripts/verilator-build.sh`）と手順は、#121 の PR 2 で足す。
 
 JDK は `jdk.major` の版を入れる。CI は Temurin を使う。
 

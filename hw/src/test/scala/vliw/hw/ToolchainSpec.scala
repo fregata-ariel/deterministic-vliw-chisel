@@ -14,7 +14,9 @@ import org.scalatest.funsuite.AnyFunSuite
 class ToolchainSpec extends AnyFunSuite {
   import Toolchain.Expected
 
-  /** A version string, built so that no version is written in the Scala sources (ADR-0020). */
+  /** A Verilator version, built so that no Verilator version is written in the Scala sources
+    * (#121).
+    */
   private def version(major: Int, minor: Int): String = f"$major%d.$minor%03d"
   private val v = version(4, 321)
   private val other = version(4, 322)
@@ -39,6 +41,7 @@ class ToolchainSpec extends AnyFunSuite {
   private def replace(key: String, line: String) =
     file(validLines.map(l => if (l.startsWith(s"$key=")) line else l): _*)
   private def without(key: String) = file(validLines.filterNot(_.startsWith(s"$key=")): _*)
+  private val nul = 0.toChar.toString
 
   private val accepted: Seq[(String, String, Map[String, String])] = Seq(
     ("the minimal file", valid, validValues),
@@ -63,6 +66,8 @@ class ToolchainSpec extends AnyFunSuite {
     "a tab in a comment" -> valid.replace("# comment", "#\tcomment"),
     "a trailing space after a value" -> replace("jdk.major", "jdk.major=17 "),
     "a trailing space after a comment" -> valid.replace("# comment", "# comment "),
+    "a NUL in a value" -> replace("jdk.major", s"jdk.major=1${nul}7"),
+    "a NUL in a comment" -> valid.replace("# comment", s"# com${nul}ment"),
     "a line of spaces" -> (valid + " \n"),
     "spaces around =" -> replace("jdk.major", "jdk.major = 17"),
     "a leading space" -> replace("jdk.major", " jdk.major=17"),
