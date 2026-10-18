@@ -113,3 +113,7 @@ ADR-0020 の決まりを、次の順で行う。
 | 5.020 | apt `5.020-1`（ubuntu-24.04） | #39（#23。CI に apt で入れた） | 2026-10-14 | — |
 
 5.020 は、ubuntu-24.04 の apt にある唯一の版として入った。候補を試す run はない。固定を properties に移したのは #121 の PR 1 で、版は変えていない。CI の入れ方を action の1か所にしたのは #121 の PR 2 で、版も入れ方（apt の 5.020-1）も変えていない。
+
+版ごとの記録は `docs/toolchain/<版>/` に置く。
+
+- [5.020/mutation.tsv](5.020/mutation.tsv): #121 の PR 2 で、action で入れた 5.020（apt の 5.020-1、JDK 21）の mutation の判定（Mutation check の run 39130793620、PR の head 0411409）。53 mutant すべて KILLED（category は assertion）。mutant を入れない実行は、8 shard とも1回目で通った。列は `mutant`・`verdict`・`category` で、job のログに出た `results.tsv` から作った
