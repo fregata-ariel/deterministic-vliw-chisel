@@ -36,7 +36,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | パス | 責務 |
 |---|---|
 | `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)）。ISA mvp-1（MAC）の既定は `config/machine-mvp1.json` |
-| `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定 |
+| `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定（Verilator と JDK は `project/toolchain.properties`） |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1）。`sbt "hw/run"` で `generated/` にSystemVerilogを出力 |
 | `compiler/` | 独立verifier、カーネルDSL、DAG、静的スケジューラ、register allocation、コード生成、ループ IR、Modulo Scheduling（[docs/COMPILER.md](docs/COMPILER.md)） |
@@ -48,17 +48,18 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `scripts/check.sh` | 手元とCIで共通のチェック入口 |
 | `scripts/mutation-check.sh` | mutation チェック（[tests/cases/README.md](tests/cases/README.md#mutation-チェック)） |
 | `scripts/repeat-tests.sh` | テストの繰り返し実行（間欠的な失敗の頻度を測る。#74） |
+| `scripts/toolchain.sh` | `project/toolchain.properties` の値を読み、PATH の Verilator が期待する版かを確かめる（[docs/toolchain/README.md](docs/toolchain/README.md)） |
 | `scripts/verilator-exit-race.py` | Verilator の終了時の abort の頻度を、jobs の設定ごとに測る（[ADR-0013](docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)） |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
 
 ## 開発
 
-必要なもの: JDK 21、sbt、jq、shellcheck、Python 3（`scripts/check.sh static` と mutation チェック）、Verilator（5.020。`hw` の ChiselSim テストに使う）。バージョンと構成の根拠は[ADR-0004](docs/DECISIONS.md#adr-0004-ツールチェーンとバージョン固定)にあります。
+必要なもの: JDK、sbt、jq、shellcheck、Python 3（`scripts/check.sh static` と mutation チェック）、Verilator（`hw` の ChiselSim テストに使う）。JDK と Verilator の版は [project/toolchain.properties](project/toolchain.properties) にあり、`scripts/toolchain.sh check` で手元の Verilator を確かめられます（入れ方は [docs/toolchain/README.md](docs/toolchain/README.md)）。バージョンと構成の根拠は[ADR-0004](docs/DECISIONS.md#adr-0004-ツールチェーンとバージョン固定)と[ADR-0020](docs/DECISIONS.md#adr-0020-verilator-と-jdk-の版を1か所で決め版を変える前に候補を対照と同じ-run-で試す)にあります。
 
 ```sh
 scripts/check.sh          # 全チェック（CIと同じ内容）
-scripts/check.sh static   # JSON構文・shellcheck・Python の構文・空白エラー・VliwChiselSim の使用・mutation の判定の検査
-scripts/check.sh scala    # scalafmt・コンパイル（警告はエラー）・テスト
+scripts/check.sh static   # JSON構文・shellcheck・Python の構文・空白エラー・VliwChiselSim の使用・mutation の判定・toolchain.sh の検査
+scripts/check.sh scala    # scalafmt・コンパイル（警告はエラー）・テスト（sbt の前に scripts/toolchain.sh check）
 scripts/check.sh sbt "hw/testOnly vliw.hw.CaseSpec"  # 任意の sbt コマンドを scala と同じログ付きで実行
 sbt test                  # テストだけを実行
 
@@ -71,7 +72,7 @@ sbt "compiler/run compile saxpy8 fir4x8 matmul3"       # DSL のカーネルを�
 sbt "sim/run tests/cases/isa_example.json --trace out.jsonl --metrics out.json"  # 参照モデルで実行
 ```
 
-`scripts/check.sh` の `scala` と `sbt` は、sbt の出力（`sbt.log`）、環境（JDK・sbt・Verilator の版、CPU・メモリ、同時に動いていたプロセス）、5秒ごとのプロセスとメモリの記録、テストの並行性を決める sbt の実効設定（`show` の出力）を `build/check-logs/<UTC時刻>/`（`CHECK_LOG_DIR` で変更可）に残します。失敗したときは、その時点のプロセス・メモリ・カーネルログと、その実行で書かれた ChiselSim のログ・JUnit レポートを加えます。`CHECK_TIMEOUT`（秒）を与えると、その時間で sbt を止め、失敗として同じ記録を残します。CI の `scala` ジョブは `CHECK_TIMEOUT` を付けて実行し、失敗したときにこれらを artifact として残します（#74）。ChiselSim の乱数の seed と Verilator の設定は [hw/README.md](hw/README.md) を参照してください。
+`scripts/check.sh` の `scala` と `sbt` は、sbt の出力（`sbt.log`）、環境（JDK・sbt の版、`scripts/toolchain.sh check` の出力、CPU・メモリ、同時に動いていたプロセス）、5秒ごとのプロセスとメモリの記録、テストの並行性を決める sbt の実効設定（`show` の出力）を `build/check-logs/<UTC時刻>/`（`CHECK_LOG_DIR` で変更可）に残します。失敗したときは、その時点のプロセス・メモリ・カーネルログと、その実行で書かれた ChiselSim のログ・JUnit レポートを加えます。`CHECK_TIMEOUT`（秒）を与えると、その時間で sbt を止め、失敗として同じ記録を残します。CI の `scala` ジョブは `CHECK_TIMEOUT` を付けて実行し、失敗したときにこれらを artifact として残します（#74）。ChiselSim の乱数の seed と Verilator の設定は [hw/README.md](hw/README.md) を参照してください。
 
 同じチェックアウトで sbt を2つ同時に動かさないでください（`scripts/check.sh` や `scripts/repeat-tests.sh` から起動するものも含みます）。2つめの sbt は、先の sbt のサーバーの起動を検出して `ServerAlreadyBootingException` で終了するか、起動しても同じ `build/chiselsim/<Suite>/<test>/` を使うので、Verilator のビルドが `make: *** [Makefile:12: simulation] Error 2` で失敗します（#74 の `scripts/repeat-tests.sh` の `hw-concurrent` で10回中10回）。並行に動かすときは、`git worktree add` などで別のチェックアウトを使ってください。
 

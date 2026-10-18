@@ -7,6 +7,7 @@
 # (default: build/check-logs/<UTC time>/), so that an intermittent failure can be traced (#74).
 # CHECK_TIMEOUT (seconds) stops sbt after that time and still records the failure; CI sets it below
 # the step's timeout, which would stop only the outer shell.
+# Before sbt, scripts/toolchain.sh check must find the expected Verilator on the PATH (ADR-0020).
 set -euo pipefail
 
 die() { printf 'check: %s\n' "$*" >&2; exit 1; }
@@ -71,6 +72,9 @@ run_static() {
   done
   rm -rf -- "$tmp"
 
+  step 'toolchain.sh with a fake verilator (scripts/test-toolchain.sh)'
+  scripts/test-toolchain.sh
+
   step 'mutation-check.sh with a fake sbt (scripts/test-mutation-check.sh)'
   scripts/test-mutation-check.sh
 
@@ -85,6 +89,8 @@ test_processes() {
     awk 'NR == 1 || /[j]ava|[v]erilator|[m]ake|[c]c1plus|[f]irtool|[s]imulation/' | cut -c1-300
 }
 
+# Arguments: the sbt command and the output of scripts/toolchain.sh check (pinned, expected and
+# installed Verilator).
 record_env() {
   printf 'date: %s\nhead: %s\nchanged files: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse HEAD)" \
     "$(git status --porcelain | wc -l | tr -d ' ')"
@@ -95,7 +101,7 @@ record_env() {
   ulimit -a
   java -version 2>&1
   printf 'sbt command: %s; %s\n' "$(command -v "$1")" "$(grep sbt.version project/build.properties)"
-  verilator --version
+  printf '%s\n' "$2"
   make --version | head -n 1
   "${CXX:-g++}" --version | head -n 1
   printf 'JAVA_OPTS=%s\nSBT_OPTS=%s\n' "${JAVA_OPTS:-}" "${SBT_OPTS:-}"
@@ -143,7 +149,16 @@ run_sbt() {
   local log_dir
   log_dir="${CHECK_LOG_DIR:-build/check-logs/$(date -u +%Y%m%dT%H%M%SZ)}"
   mkdir -p "$log_dir"
-  record_env "$sbt_cmd" >"$log_dir/env.txt" 2>&1 || true
+  # Another Verilator than the expected one (project/toolchain.properties, ADR-0020) would fail
+  # BenchmarkSpec only after minutes of tests, so it stops the run before sbt (#121).
+  local toolchain toolchain_status=0
+  toolchain="$(scripts/toolchain.sh check 2>&1)" || toolchain_status=$?
+  record_env "$sbt_cmd" "$toolchain" >"$log_dir/env.txt" 2>&1 || true
+  if ((toolchain_status != 0)); then
+    printf '%s\n' "$toolchain" >&2
+    die "scripts/toolchain.sh check failed (above), so sbt did not run; logs in $log_dir"
+  fi
+  printf '%s\n' "$toolchain"
   sample_processes "$log_dir/ps.log" >/dev/null 2>&1 &
   local sampler=$!
   # shellcheck disable=SC2064 # expand now: $sampler is local

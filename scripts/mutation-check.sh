@@ -14,7 +14,8 @@
 #   environment ERROR, default 1), MUTATION_BASELINE (0 skips the unmutated run, default 1),
 #   MUTATION_SHARD (k/n: only the mutants at rows k, k+n, k+2n, ... of mutants.tsv, counting
 #   mutant rows from 1; CI runs n shards in parallel).
-# Target files must have no uncommitted changes.
+# Target files must have no uncommitted changes, and scripts/toolchain.sh check must find the
+# expected Verilator on the PATH (exit 2 otherwise, ADR-0020).
 set -euo pipefail
 
 die() { printf 'mutation: %s\n' "$*" >&2; exit 2; }
@@ -28,6 +29,14 @@ command -v timeout >/dev/null 2>&1 || die 'timeout (coreutils) is required'
 # Checked here because these fail every ChiselSim test in the same way, which the baseline only
 # catches when it runs (MUTATION_BASELINE=0 skips it).
 verilator --version >/dev/null 2>&1 || die 'verilator is required by the hw tests (ChiselSim)'
+# Another Verilator than the expected one (project/toolchain.properties, ADR-0020) fails
+# BenchmarkSpec: the baseline would stop the check only after a full run, and with
+# MUTATION_BASELINE=0 every mutant would count as KILLED (#121).
+if ! toolchain="$(scripts/toolchain.sh check 2>&1)"; then
+  printf '%s\n' "$toolchain" >&2
+  die 'scripts/toolchain.sh check failed (above)'
+fi
+printf '%s\n' "$toolchain"
 if [[ -n "${VLIW_SIM_SEED:-}" && "$VLIW_SIM_SEED" != random ]]; then
   if ! [[ "$VLIW_SIM_SEED" =~ ^[1-9][0-9]{0,9}$ ]] || ((VLIW_SIM_SEED > 2147483647)); then
     die "VLIW_SIM_SEED must be 1 to 2147483647 or random: '$VLIW_SIM_SEED'"
@@ -52,7 +61,7 @@ mkdir -p "$log_dir"
     "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   free -m 2>/dev/null || true
   java -version 2>&1
-  verilator --version
+  printf '%s\n' "$toolchain"
   printf 'VLIW_SIM_SEED=%s (unset: the default of vliw.hw.SimSeed)\n' "${VLIW_SIM_SEED:-}"
   printf 'shard: %s/%s\n' "$shard_k" "$shard_n"
 } >"$log_dir/env.txt" 2>&1 || true

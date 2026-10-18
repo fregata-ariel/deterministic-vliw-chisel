@@ -113,3 +113,5 @@ scripts/mutation-check.sh                    # 全mutant
 scripts/mutation-check.sh model-ld-latency   # 指定したmutantだけ
 MUTATION_TIMEOUT=1800 MUTATION_RETRIES=0 scripts/mutation-check.sh   # 1回の sbt の上限（秒）、ERROR の再実行回数
 ```
+
+`scripts/mutation-check.sh` は、始める前に `scripts/toolchain.sh check` で、PATH の Verilator が期待する版であることを確かめ、違えば exit 2 で止まる（[docs/toolchain/README.md](../../docs/toolchain/README.md)）。版がずれると `BenchmarkSpec` が失敗し、ベースラインを飛ばしたとき（`MUTATION_BASELINE=0`）には、すべての mutant が KILLED に見えるからである。`env.txt` には、固定の版、期待する版とその出どころ、PATH の Verilator の場所・版・`verilator_bin` の sha256 を書く。

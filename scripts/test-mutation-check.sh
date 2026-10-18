@@ -11,9 +11,12 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 
-# A repository with the two scripts, one file to mutate and three mutants (one is stale).
-mkdir -p "$work/repo/scripts" "$work/repo/src" "$work/bin"
-cp "$repo_root/scripts/mutation-check.sh" "$repo_root/scripts/mutation-classify.py" "$work/repo/scripts/"
+# A repository with the scripts and the pinned toolchain, one file to mutate and three mutants (one
+# is stale).
+mkdir -p "$work/repo/scripts" "$work/repo/src" "$work/repo/project" "$work/bin"
+cp "$repo_root/scripts/mutation-check.sh" "$repo_root/scripts/mutation-classify.py" \
+  "$repo_root/scripts/toolchain.sh" "$work/repo/scripts/"
+cp "$repo_root/project/toolchain.properties" "$work/repo/project/"
 printf 'x = 1\ny = 2\n' >"$work/repo/src/a.txt"
 {
   printf '# id\tfile\toriginal\tmutated\twhat\n'
@@ -47,17 +50,24 @@ done
 cat "\$src/sbt.log"
 exit "\$(cat "\$src/exit")"
 EOF
-printf '#!/bin/sh\necho "Verilator 5.020 (fake)"\n' >"$work/bin/verilator"
+# The fake verilator reports the pinned version, or FAKE_VERILATOR.
+pinned="$("$repo_root/scripts/toolchain.sh" get verilator.version)"
+cat >"$work/bin/verilator" <<EOF
+#!/bin/sh
+echo "Verilator \${FAKE_VERILATOR:-$pinned} (fake)"
+EOF
 chmod +x "$work/bin/sbt" "$work/bin/verilator"
 
 # Runs mutation-check.sh with the plan $1 and mutants $3...; log directory $2. Sets out and status.
+# The expected Verilator is the pinned one, whatever the environment of the self-test.
 run() {
   local plan="$1" logs="$2"
   shift 2
   rm -f "$work/state"
   status=0
-  out="$(cd "$work/repo" && PATH="$work/bin:$PATH" SBT=sbt FAKE_PLAN="$plan" FAKE_STATE="$work/state" \
-    MUTATION_LOG_DIR="$logs" scripts/mutation-check.sh "$@" 2>&1)" || status=$?
+  out="$(cd "$work/repo" && env -u VLIW_VERILATOR_EXPECTED PATH="$work/bin:$PATH" SBT=sbt \
+    FAKE_PLAN="$plan" FAKE_STATE="$work/state" MUTATION_LOG_DIR="$logs" scripts/mutation-check.sh "$@" 2>&1)" ||
+    status=$?
   git -C "$work/repo" diff --quiet || die "the mutated file was not restored (plan: $plan)"
 }
 expect() { # expect STATUS PATTERN...: the exit status and lines that the output must contain
@@ -102,5 +112,13 @@ for bad in 0/2 3/2 1/0 x 1/2/3; do
   MUTATION_SHARD="$bad" run '' "$work/logs8"
   expect 2 'MUTATION_SHARD must be k/n'
 done
+
+# A Verilator other than the expected one stops the check before sbt, also without the baseline
+# (#121); env.txt records the pinned and the expected version of a run.
+FAKE_VERILATOR=5.999 MUTATION_BASELINE=0 run 'kill' "$work/logs9" m-first
+expect 2 'the Verilator on the PATH is 5\.999, expected '"$pinned"' \(pinned\)' 'toolchain\.sh check failed'
+[[ ! -e "$work/state" ]] || die 'sbt ran although the Verilator is not the expected one'
+grep -q "^expected: verilator $pinned (pinned)\$" "$work/logs4/env.txt" || die 'env.txt has no expected version'
+grep -q "^pinned: verilator $pinned " "$work/logs4/env.txt" || die 'env.txt has no pinned version'
 
 echo 'mutation-check.sh self-test passed'

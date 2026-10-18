@@ -42,6 +42,21 @@ jobs:
         env:
           CHECK_TIMEOUT: "780"
         timeout-minutes: 15
+      # The required check runs with the pinned toolchain only (ADR-0020): each test JVM that
+      # simulates prints a [toolchain] line, which shows (env) if VLIW_VERILATOR_EXPECTED changed
+      # the expected Verilator. check.sh writes the sbt log to build/check-logs/<UTC time>/.
+      - name: Check that the tests ran with the pinned toolchain
+        run: |
+          shopt -s nullglob
+          logs=(build/check-logs/*/sbt.log)
+          [[ ${#logs[@]} -eq 1 ]] || { echo "::error::expected one sbt.log, found ${#logs[@]}"; exit 1; }
+          lines="$(sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "${logs[0]}" | grep '^\[toolchain\] ' || true)"
+          printf '%s\n' "$lines"
+          [[ -n "$lines" ]] || { echo "::error::no [toolchain] line in ${logs[0]}"; exit 1; }
+          if grep -v ' (pinned)$' <<<"$lines"; then
+            echo '::error::a test JVM ran without the pinned toolchain (above)'
+            exit 1
+          fi
       # Traces an intermittent failure (#74): sbt log, environment, process samples, ChiselSim
       # directories (sources, Makefile, compilation-log.txt, seed.txt) and JUnit reports. The
       # Verilator output (C++ and object files) is left out to keep the artifact small.

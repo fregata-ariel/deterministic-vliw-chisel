@@ -1,6 +1,6 @@
 # Hardware
 
-Phase 1のChisel実装先。sbtプロジェクト `hw`、パッケージ `vliw.hw`。依存は `isa`。Chisel 7.15.0、firtool 1.158.0、ChiselSim（Verilator 5.020）。
+Phase 1のChisel実装先。sbtプロジェクト `hw`、パッケージ `vliw.hw`。依存は `isa`。Chisel 7.15.0、firtool 1.158.0、ChiselSim（Verilator。版は [project/toolchain.properties](../project/toolchain.properties)、[docs/toolchain/README.md](../docs/toolchain/README.md)）。
 
 Machine Descriptionの読み込み、RF、Compute slot、Memory slot、Instruction ROM、PC、開始・終了制御を実装する。ChiselSimで`sim/`の参照トレースと結果・commit時刻・doneを比較する。
 
@@ -26,7 +26,9 @@ VLIW_SIM_SEED=123 sbt hw/test      # 1 から 2147483647 の値
 VLIW_SIM_SEED=random sbt hw/test   # テストの JVM ごとに新しい seed（ログに残る）
 ```
 
-Verilator 5.020 は、`+verilator+seed+` がないと毎回同じ状態から乱数を始める（`srand48` を呼ばない）。このため seed を渡さなくても実行ごとの値は同じだが、その値は Verilator の版に依存する。`build/chiselsim/<Suite>/<test>/workdir-verilator/` で `make replay` を実行すると、ビルドし直してから、同じ入力と seed でシミュレーションを再実行する。Makefile は絶対パスを含むので、そのディレクトリでだけ動く。また、ビルドし直すときに、そのディレクトリの `compilation-log.txt`・`simulation-log.txt` を消す。
+`+verilator+seed+` がないときに乱数をどこから始めるかは、Verilator の版で違い、どこにも記録されない。同じ seed でも、版が違えば乱数の値が違うことがある。このため `VliwChiselSim` は、seed をいつも渡し、PATH の Verilator の版と一緒に記録する（`VLIW_SIM_SEED=1 (default) verilator=<版>` の形。[ADR-0020](../docs/DECISIONS.md#adr-0020-verilator-と-jdk-の版を1か所で決め版を変える前に候補を対照と同じ-run-で試す) の R3）。版ごとの挙動は [docs/toolchain/README.md](../docs/toolchain/README.md) を参照する。`build/chiselsim/<Suite>/<test>/workdir-verilator/` で `make replay` を実行すると、ビルドし直してから、同じ入力と seed でシミュレーションを再実行する。Makefile は絶対パスを含むので、そのディレクトリでだけ動く。また、ビルドし直すときに、そのディレクトリの `compilation-log.txt`・`simulation-log.txt` を消す。
+
+`VliwChiselSim` は、テストの JVM ごとに1回、`[toolchain] verilator=<PATH の版> expected=<期待する版> (pinned|env)` の行も sbt のログに出す（`vliw.hw.Toolchain`。[docs/toolchain/README.md](../docs/toolchain/README.md)）。
 
 ## 構成（Phase 1）
 
