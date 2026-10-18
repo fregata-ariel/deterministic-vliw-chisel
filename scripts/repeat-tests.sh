@@ -57,6 +57,9 @@ if [[ "$seed_mode" == run ]] && ((runs > 2147483647)); then die 'too many runs f
 CHECK_TIMEOUT="$(whole "${REPEAT_RUN_TIMEOUT:-1800}")" ||
   die "REPEAT_RUN_TIMEOUT must be a positive whole number of seconds: '${REPEAT_RUN_TIMEOUT:-}'"
 export CHECK_TIMEOUT
+# scripts/check.sh would refuse every run with another Verilator than the expected one
+# (ADR-0020), so refuse it once before the first run.
+scripts/toolchain.sh check >/dev/null || die 'scripts/toolchain.sh check failed (above)'
 mkdir -p "$out"
 rm -rf -- "$out"/run-* "$out/summary.tsv"
 

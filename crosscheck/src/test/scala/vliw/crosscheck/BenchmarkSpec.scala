@@ -10,7 +10,16 @@ import vliw.compiler.dag.{Dag, Fusion}
 import vliw.compiler.dsl.Lowering
 import vliw.compiler.regalloc.RegisterAllocator
 import vliw.compiler.schedule.Priority
-import vliw.hw.{Core, CoreDriver, CoreParams, FixedDriver, FixedOp, FixedPipeline, VliwChiselSim}
+import vliw.hw.{
+  Core,
+  CoreDriver,
+  CoreParams,
+  FixedDriver,
+  FixedOp,
+  FixedPipeline,
+  Toolchain,
+  VliwChiselSim
+}
 import vliw.isa._
 import vliw.sim.ReferenceModel
 
@@ -192,15 +201,19 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     }
   }
 
-  test("the fixed pipelines are measured with the Verilator and JDK that the records name") {
-    // RESULTS.md names the versions that ADR-0004 pins; ChiselSim runs the Verilator on the PATH.
+  test("the fixed pipelines are measured with the Verilator and JDK that the toolchain expects") {
+    // ChiselSim runs the Verilator on the PATH. The expected one is the pinned one of
+    // project/toolchain.properties, which RESULTS.md names, unless VLIW_VERILATOR_EXPECTED is set
+    // where ADR-0020 allows it (never in the required checks).
+    val expected = Toolchain.expectedVerilator
     assert(
-      BenchmarkRecords.verilatorVersion == BenchmarkRecords.PinnedVerilator,
-      s"Verilator ${BenchmarkRecords.verilatorVersion}; the records and ADR-0004 name ${BenchmarkRecords.PinnedVerilator}"
+      Toolchain.installedVerilator == expected.version,
+      s"Verilator ${Toolchain.installedVerilator}; expected ${expected.version} (${expected.source})" +
+        "; see scripts/toolchain.sh check"
     )
     assert(
-      Runtime.version().feature().toString == BenchmarkRecords.PinnedJdk,
-      s"JDK ${Runtime.version().feature()}; the records and ADR-0004 name ${BenchmarkRecords.PinnedJdk}"
+      Runtime.version().feature().toString == Toolchain.jdkMajor,
+      s"JDK ${Runtime.version().feature()}; project/toolchain.properties pins ${Toolchain.jdkMajor}"
     )
   }
 

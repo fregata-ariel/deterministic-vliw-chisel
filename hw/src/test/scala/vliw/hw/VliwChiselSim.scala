@@ -19,9 +19,10 @@ import svsim.verilator.Backend.CompilationSettings.Parallelism
   *
   * ChiselSim builds with `RANDOMIZE_REG_INIT`, `RANDOMIZE_MEM_INIT` and `RANDOM=$urandom`, so
   * registers and memories start from Verilator's random numbers. Registers with a reset lose them
-  * at reset; the register file (no reset) and the memories keep them until written. Without
-  * `+verilator+seed+`, Verilator 5.020 always starts from the same state, which depends on its
-  * version. The seed is therefore passed explicitly and recorded.
+  * at reset; the register file (no reset) and the memories keep them until written. Where the
+  * random numbers start without `+verilator+seed+` depends on the Verilator version, and the same
+  * seed can give other numbers in another version. The seed is therefore passed explicitly and
+  * recorded together with the version of the Verilator that ran (ADR-0020).
   *
   * `VLIW_SIM_SEED` selects it: unset for [[Default]], a number from 1 to 2147483647 (the range that
   * Verilator accepts), or `random` for a new seed per test JVM.
@@ -47,7 +48,10 @@ object SimSeed {
 
   def source: String = raw.fold("default")(r => if (r == "random") "random" else "env")
 
-  def describe: String = s"$EnvVar=$value ($source)"
+  /** The seed, where it comes from and the Verilator on the PATH, e.g. `VLIW_SIM_SEED=1 (default)
+    * verilator=5.020`: the line in `seed.txt` and after `[sim-seed]`.
+    */
+  def describe: String = s"$EnvVar=$value ($source) verilator=${Toolchain.installedVerilator}"
 
   /** Rendered as `+verilator+seed+<n>`. `new PlusArg("verilator+seed", Some(n))` would render as
     * `+verilator+seed=<n>`, which Verilator rejects at startup.
@@ -62,9 +66,9 @@ object SimSeed {
   * all cores (`--verilate-jobs 1 --build-jobs 0`).
   *
   * svsim's default is `-j 0`, which also verilates with one thread per core. Verilator 5.020 (the
-  * version of ADR-0004) then aborts now and then at exit, after a successful build, with
-  * `%Error: Internal Error: attempted to destroy locked Thread Pool` (`make ... Error 255`): the
-  * destructor of its thread pool tries the pool's lock once while a worker can still hold it
+  * pinned version when #74 found this) then aborts now and then at exit, after a successful build,
+  * with `%Error: Internal Error: attempted to destroy locked Thread Pool` (`make ... Error 255`):
+  * the destructor of its thread pool tries the pool's lock once while a worker can still hold it
   * (Verilator issue 4931, mitigated in 5.024 and 5.026, removed in 5.030). With one verilation
   * thread there are no workers and the lock is disabled.
   */
@@ -78,7 +82,8 @@ object SimVerilator {
   *   - the seed of [[SimSeed]], also written to `seed.txt` in the simulation's directory under
   *     `build/chiselsim/` (next to the logs that ChiselSim writes there; the Makefile `replay`
   *     target in that directory uses the same seed);
-  *   - the Verilator jobs of [[SimVerilator]].
+  *   - the Verilator jobs of [[SimVerilator]];
+  *   - the `[toolchain]` line of [[Toolchain]] in the sbt log, once per test JVM.
   *
   * ChiselSim specs mix in this trait instead of ChiselSim (`scripts/check.sh static` checks it).
   */
@@ -89,6 +94,7 @@ trait VliwChiselSim extends ChiselSim { this: TestSuite =>
       val settings = inherited(original)
       val dir = implementation.getDirectory
       SimSeed.announce
+      Toolchain.announce
       Files.createDirectories(dir)
       Files.write(
         dir.resolve("seed.txt"),

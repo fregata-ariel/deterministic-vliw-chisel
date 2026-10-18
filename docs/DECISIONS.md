@@ -23,6 +23,7 @@
 | [0017](#adr-0017-資源条件を揃えた固定パイプラインはスケジュールから生成しcore-の演算器と-scratchpad-をそのまま使う) | 資源条件を揃えた固定パイプラインは、スケジュールから生成し、Core の演算器と Scratchpad をそのまま使う | 採用 | 2026-10-16 |
 | [0018](#adr-0018-mac-は-isa-mvp-1-で入れ読出しポートは3本のまま規則-l11-で数える) | MAC は ISA mvp-1 で入れ、読出しポートは3本のまま規則 L11 で数える | 採用 | 2026-10-16 |
 | [0019](#adr-0019-読む側が1つの-mul-とそれを読む-add-を-mac-に融合しループでは-mii-が上がるときは融合しない) | 読む側が1つの MUL とそれを読む ADD を MAC に融合し、ループでは MII が上がるときは融合しない | 採用 | 2026-10-16 |
+| [0020](#adr-0020-verilator-と-jdk-の版を1か所で決め版を変える前に候補を対照と同じ-run-で試す) | Verilator と JDK の版を1か所で決め、版を変える前に候補を対照と同じ run で試す | 採用 | 2026-10-18 |
 
 ---
 
@@ -65,7 +66,7 @@
 
 | 対象 | バージョン | 固定場所 | 備考 |
 |---|---|---|---|
-| JDK | 21 | `.github/workflows/ci.yml` | CIはTemurin |
+| JDK | 21 | `.github/workflows/ci.yml`。ADR-0020 で `project/toolchain.properties` の `jdk.major` に置き換えた（今の版もそこにある） | CIはTemurin |
 | Scala | 2.13.18 | `build.sbt` | Chisel 7.15.0 のPOMが要求する版 |
 | sbt | 1.12.15 | `project/build.properties` | sbt 2.x はプラグインとChiselの追随を待つ |
 | ScalaTest | 3.2.20 | `build.sbt` | ChiselSimと同じテスト基盤 |
@@ -74,7 +75,7 @@
 | sbt-scalafmt | 2.6.2 | `project/plugins.sbt` | |
 | Chisel | 7.15.0 | `build.sbt` | 2026-09-01公開。7.16.0（2026-10-01公開）は、Phase 1 着手時点（2026-10-14）で2週間に満たなかった |
 | firtool（llvm-firtool） | 1.158.0 | `build.sbt` | Chisel 7.15.0 が要求する版。依存に入れておくと firtool-resolver がjarから取り出すので、実行時のダウンロードが要らない |
-| Verilator | 5.020 | CIでは `apt-get install verilator`（ubuntu-24.04） | ChiselSim のバックエンド。手元でも同じ版を推奨する。複数スレッドの verilation には終了時の不具合があるため、1スレッドで verilate する（ADR-0013） |
+| Verilator | 5.020 | CIでは `apt-get install verilator`（ubuntu-24.04）。ADR-0020 で `project/toolchain.properties` の `verilator.*` に置き換えた（今の版もそこにある） | ChiselSim のバックエンド。手元でも同じ版を推奨する。複数スレッドの verilation には終了時の不具合があるため、1スレッドで verilate する（ADR-0013） |
 
 - **コンパイラ設定**: `-deprecation -feature -unchecked -Xlint -Werror`。警告はすべてエラーとして扱う。
 - **sbtプロジェクト構成**:
@@ -92,7 +93,7 @@
 - **状態**: 採用（Issue #3）
 - **決定**:
   - 手元とCIの入口を `scripts/check.sh` に一本化する。CIのジョブはこのスクリプトを呼ぶだけにする。
-    - `static`: JSON構文、shellcheck、Python の構文、追跡ファイルの空白エラー、ChiselSim のテストが `VliwChiselSim` を使うこと、mutation の判定と再実行の自己テスト（#74）
+    - `static`: JSON構文、shellcheck、Python の構文、追跡ファイルの空白エラー、ChiselSim のテストが `VliwChiselSim` を使うこと、mutation の判定と再実行の自己テスト（#74）、`scripts/toolchain.sh` の自己テスト（#121）
     - `scala`: `sbt scalafmtSbtCheck scalafmtCheckAll test`
   - 起動条件は、`main` へのpush、すべてのPR、手動実行とする。作業ブランチではPRを開いてCIを回す。（当初は全ブランチへのpushで起動し、PRでは二重実行を避けてジョブを`if`で飛ばしていたが、PR上に同名のskippedチェックが並び紛らわしいため変更した。）
   - `permissions: contents: read` にする。`main` 以外では、同じrefの古い実行をキャンセルする。
@@ -216,8 +217,8 @@
 - **理由**:
   - verilation が1スレッドなら worker スレッドがなく、プールのロックも無効になる。このため、この abort は起こらない（5.020 のソースと、スレッド数の測定で確認した）
   - verilation は1回 0.1〜0.2 秒で、ビルドの大半は C++ のコンパイルである。このため、1スレッドにしても時間はほとんど変わらない
-  - Verilator の版は ADR-0004 で固定しており、CI の環境では上げられない
-- **影響**: Verilator を 5.030 以降に上げるときは、この設定を外せるかを確かめる。`scripts/verilator-exit-race.py` で、同じ設計の verilation を繰り返し、構成ごとに abort の回数を数えられる。調べた経過と数値は #74 に記録する。
+  - Verilator の版は ADR-0004 で固定しており、CI の環境では上げられない（ADR-0020 で置き換えた。版は `project/toolchain.properties` の1行で変え、候補は PR から試す）
+- **影響**: Verilator を 5.030 以降に上げるときは、この設定を外せるかを確かめる。`scripts/verilator-exit-race.py` で、同じ設計の verilation を繰り返し、構成ごとに abort の回数を数えられる。調べた経過と数値は #74 に記録する（ADR-0020 で、記録先を #121 と `docs/toolchain/` に移した）。
 
 ## ADR-0014: ループ IR では状態をレジスタで渡し、ループ不変の値と後の反復が再び読む語をレジスタに保持する
 
@@ -355,3 +356,31 @@
 - **影響**:
   - DAG のノードは3オペランドになり、`Dag.split`（rematerialization）、コード生成、ループ IR、`ModuloTrace` が3ソースを扱う（#77）
   - 融合した DAG では依存の鎖が延びるので、依存が律速のカーネルでは MAC で遅くなることがある（直線の `dot16` の試算で、MAC なしの 42 cycles に対し、latency 2 では 37 cycles に縮むが、latency 3 では 52 cycles に延びる）
+
+## ADR-0020: Verilator と JDK の版を1か所で決め、版を変える前に候補を対照と同じ run で試す
+
+- **状態**: 採用（Issue #121。オーナー判断 2026-10-17）
+- **背景**: Verilator の版は、3つの workflow の `apt-get install -y verilator` と、テストの定数（`BenchmarkRecords.PinnedVerilator`）で決まっていた。apt の行は版を指定しない。5.020 になるのは、ubuntu-24.04 の apt に 5.020-1 しかないからである。JDK の版も、3つの workflow に同じ値が書いてあった。版がずれると、`sbt test` は約5分後に `BenchmarkSpec` で初めて失敗した。Verilator を上げれば ADR-0013 の回避策を外せる見込みがある。しかし、今の main のテストは、5.020 以外の版でまだ走らせていない。また、エージェントの session からの workflow_dispatch は 403 になる（[PHASE3.md](PHASE3.md)）。
+- **決定**:
+  - 版は [project/toolchain.properties](../project/toolchain.properties) の1か所に書く。キーは `verilator.version`、`verilator.apt` と `verilator.commit`（apt のパッケージの版か、ソースの commit。ちょうど一方を書く）、`jdk.major` である
+  - 書式は厳しくする。行は、空行、`#` で始まるコメント、`key=value` のどれかとする。キーは決めたものだけで、重複、CR、タブ、行末の空白は誤りとする。読み手はテストの `vliw.hw.Toolchain` と `scripts/toolchain.sh` の2つで、同じファイルから同じ値を読む（`ToolchainSpec` が確かめる）
+  - テストは、PATH の Verilator が期待する版であることと、JDK が `jdk.major` であることを確かめる（`BenchmarkSpec`）。`scripts/check.sh` と `scripts/mutation-check.sh` は、sbt の前に `scripts/toolchain.sh check` で Verilator の版を確かめる
+  - 期待する版は、固定の版とする。`VLIW_VERILATOR_EXPECTED` で上書きできるのは、手元（`GITHUB_ACTIONS` が空）と、候補を試す workflow（`.github/workflows/toolchain-candidates.yml`）だけとする。それ以外で設定するか、空文字列にすると失敗させる。テストの JVM は `[toolchain] verilator=<PATH の版> expected=<期待する版> (pinned|env)` の行を出し、CI の `scala` ジョブは、すべての行が `(pinned)` であることを確かめる
+  - Verilator と JDK を入れる処理は、CI の action の1か所にする（#121 の PR 2）。それまでは、3つの workflow の apt の行と `java-version` が残る。それらが properties と同じ版を入れたことは、テストと `scripts/toolchain.sh check` が確かめる
+  - 候補の版は、固定の版を対照にして、同じ run で PR から試す（#121 の PR 3）
+  - 版の変更と、回避策（ADR-0013 の `--verilate-jobs 1`）の変更は、別の PR にする
+  - R1: 記録（`benchmarks/`）は JVM のコードが計算する。シミュレータは確かめるだけにする
+  - R2: 版を変えて変わってよいのは、`benchmarks/RESULTS.md` のツールの行と、`metrics` の `generator` 欄だけとする。`benchmarks/`・`tests/cases`・`tests/golden` に他の差分が出たら、その版にはしない。候補を緑にするために、記録を作り直さない。ツールの行は、候補を試す実行でも固定の版を書く
+  - R3: 乱数の seed は、Verilator の版と一緒に記録する（`seed.txt` と `[sim-seed]` の行。`VLIW_SIM_SEED=1 (default) verilator=5.020` の形）
+- **理由**:
+  - 版の切り替えと戻しが、properties の1行と、生成し直すツールの行で済む。戻すのは revert 1つである
+  - 書式を厳しくすると、Scala と shell の2つの読み手が、同じファイルから違う値を読むことがない
+  - 版のずれが、sbt の前に、直し方と一緒に分かる。mutation では、ずれた版のために全 mutant が KILLED に見えることもない
+  - 上書きを手元と候補の workflow に限ると、必須の CI は固定の版でしか緑にならない
+  - 候補と対照を同じ run で走らせると、runner や main の違いと、版の違いを分けられる。PR から起動するのは、エージェントの session からは workflow_dispatch ができないからである
+  - 版と回避策を別の PR にすると、失敗したときに、どちらが原因かを分けられる
+  - R1 があるので、版を変えても記録の数値は変わらないはずである。R2 は、それが崩れた版を採らないための決まりである。同じ seed でも、版が違えば乱数の値が違うことがある（5.046 から）。そのため R3 で版を残す
+- **影響**:
+  - ADR-0004 の表の、JDK と Verilator の固定場所を置き換える。この2つは、版を変えても ADR-0004 の表を変えない。版の採り方（リリースから2週間以上経った版）と、他のツールの固定は ADR-0004 のままである。Chisel・firtool・Scala・sbt の版は、今までどおり `build.sbt` と `project/` で決める
+  - ADR-0013 の理由「Verilator の版は ADR-0004 で固定しており、CI の環境では上げられない」を置き換える。版は properties の1行で変えられ、候補は PR から試せる。上げるかどうかは、候補の結果で決める。ADR-0013 の決定（1スレッドの verilation と、seed の明示）はそのままである。回避策を外すときは、別の ADR にする（#121）
+  - 調べた経過と数値の記録先を、ADR-0013 の #74 から、#121 と [docs/toolchain/](toolchain/README.md) に移す。版を変える手順、手元で入れる方法、版の履歴も [docs/toolchain/README.md](toolchain/README.md) に置く。ADR は書き換えないので、手順と履歴は ADR に書かない

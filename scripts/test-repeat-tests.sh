@@ -31,17 +31,23 @@ case "${plan[$((n - 1))]:-missing}" in
   *) echo "fake sbt: no plan for run $n" >&2; exit 99 ;;
 esac
 EOF
-printf '#!/bin/sh\necho "Verilator 5.020 (fake)"\n' >"$work/bin/verilator"
+# The fake verilator reports the pinned version, or FAKE_VERILATOR.
+pinned="$("$repo_root/scripts/toolchain.sh" get verilator.version)"
+cat >"$work/bin/verilator" <<EOF
+#!/bin/sh
+echo "Verilator \${FAKE_VERILATOR:-$pinned} (fake)"
+EOF
 chmod +x "$work/bin/sbt" "$work/bin/verilator"
 
-# Runs repeat-tests.sh MODE RUNS with the plan $1; sets out (its output) and status.
+# Runs repeat-tests.sh MODE RUNS with the plan $1; sets out (its output) and status. The expected
+# Verilator is the pinned one, whatever the environment of the self-test.
 run() {
   local plan="$1"
   shift
   rm -f "$work/state"
   status=0
-  out="$(PATH="$work/bin:$PATH" SBT=sbt FAKE_PLAN="$plan" FAKE_STATE="$work/state" \
-    "$repo_root/scripts/repeat-tests.sh" "$@" 2>&1)" || status=$?
+  out="$(env -u VLIW_VERILATOR_EXPECTED PATH="$work/bin:$PATH" SBT=sbt FAKE_PLAN="$plan" \
+    FAKE_STATE="$work/state" "$repo_root/scripts/repeat-tests.sh" "$@" 2>&1)" || status=$?
 }
 expect() { # expect STATUS PATTERN...: the exit status and lines that the output must contain
   local want="$1" pattern
@@ -70,5 +76,10 @@ expect 2 "RUNS must be a positive whole number: '1.5'"
 REPEAT_RUN_TIMEOUT=0 run 'pass' full 1 "$work/out3"
 expect 2 'REPEAT_RUN_TIMEOUT must be a positive whole number'
 [[ ! -e "$work/state" ]] || die 'sbt ran although the inputs were refused'
+
+# A Verilator other than the expected one is refused before any run (#121).
+FAKE_VERILATOR=5.999 run 'pass' full 1 "$work/out4"
+expect 2 'the Verilator on the PATH is 5\.999, expected '"$pinned"' \(pinned\)' 'toolchain\.sh check failed'
+[[ ! -e "$work/state" ]] || die 'sbt ran although the Verilator is not the expected one'
 
 echo 'repeat-tests.sh self-test passed'

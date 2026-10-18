@@ -7,7 +7,7 @@ import vliw.compiler.{CompiledKernel, KernelCompiler}
 import vliw.compiler.dsl.{Benchmarks, Kernel}
 import vliw.compiler.regalloc.{Attempt, NoFit, RegisterAllocator}
 import vliw.compiler.schedule.{ListScheduler, Priority}
-import vliw.hw.FixedOp
+import vliw.hw.{FixedOp, Toolchain}
 import vliw.isa.{MachineDescription, Slot, TestCase}
 import vliw.sim.{Metrics, ReferenceModel}
 
@@ -155,29 +155,19 @@ object BenchmarkRecords {
       )
     }
 
-  /** The Verilator on the PATH, which ChiselSim runs: "5.020" from "Verilator 5.020 2024-01-01
-    * ...".
-    */
-  lazy val verilatorVersion: String =
-    scala.util
-      .Try(scala.sys.process.Process(Seq("verilator", "--version")).!!.trim.split("\\s+")(1))
-      .getOrElse("not found")
-
-  /** The Verilator and JDK versions that ADR-0004 pins (CI installs them). The records name these;
-    * `BenchmarkSpec` checks that the environment that measures the fixed pipelines has them.
-    */
-  val PinnedVerilator = "5.020"
-  val PinnedJdk = "21"
-
   /** The versions of the tools that build and measure the fixed pipelines under ChiselSim: Chisel,
-    * firtool and Scala from the build, Verilator and the JDK as pinned (ADR-0004).
+    * firtool and Scala from the build, Verilator and the JDK as pinned in
+    * `project/toolchain.properties` (ADR-0020). A run that expects another Verilator
+    * (`VLIW_VERILATOR_EXPECTED`) names the pinned one too, so that benchmarks/ does not change with
+    * it (R2). `BenchmarkSpec` checks that the environment that measures the fixed pipelines has the
+    * expected versions.
     */
   def tools: Seq[(String, String)] = Seq(
     "Chisel" -> chisel3.BuildInfo.version,
     "firtool" -> chisel3.BuildInfo.firtoolVersion.getOrElse("unknown"),
-    "Verilator" -> PinnedVerilator,
+    "Verilator" -> Toolchain.pinnedVerilator,
     "Scala" -> scala.util.Properties.versionNumberString,
-    "JDK" -> PinnedJdk
+    "JDK" -> Toolchain.jdkMajor
   )
 
   /** The fixed-pipeline section of RESULTS.md (#75). */

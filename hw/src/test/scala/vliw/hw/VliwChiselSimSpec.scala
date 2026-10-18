@@ -27,6 +27,11 @@ class VliwChiselSimSpec extends AnyFunSuite with VliwChiselSim {
     def read(name: String) =
       new String(Files.readAllBytes(dir.resolve(name)), StandardCharsets.UTF_8)
     assert(read("seed.txt") == SimSeed.describe + "\n")
+    // The seed with the version of the Verilator that ran (ADR-0020, R3).
+    assert(
+      read("seed.txt") == s"VLIW_SIM_SEED=${SimSeed.value} (${SimSeed.source}) verilator=" +
+        s"${Toolchain.installedVerilator}\n"
+    )
 
     // The Makefile in the work directory holds the commands that svsim ran: `simulation` builds,
     // `replay` runs the simulation again with the same arguments as this run.
