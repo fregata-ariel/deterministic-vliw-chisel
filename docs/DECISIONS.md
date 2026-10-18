@@ -359,7 +359,7 @@
 
 ## ADR-0020: Verilator と JDK の版を1か所で決め、版を変える前に候補を対照と同じ run で試す
 
-- **状態**: 採用（Issue #121。オーナー判断 2026-10-17 は #121 の §2（目標の版、Issue にすること、`--verilate-jobs 1` を外す条件）。JDK の版も同じ properties で決めるのは #121 の §8 の 4 の推奨で、オーナーの確認を待つ）
+- **状態**: 採用（Issue #121。オーナー判断: 2026-10-17 に #121 の §2（目標の版、Issue にすること、`--verilate-jobs 1` を外す条件）、2026-10-18 に §8 の 4（JDK の版も同じ properties で決める））
 - **背景**: Verilator の版は、3つの workflow の `apt-get install -y verilator` と、テストの定数（`BenchmarkRecords.PinnedVerilator`）で決まっていた。apt の行は版を指定しない。5.020 になるのは、ubuntu-24.04 の apt に 5.020-1 しかないからである。JDK の版も、3つの workflow に同じ値が書いてあった。版がずれると、`sbt test` は約5分後に `BenchmarkSpec` で初めて失敗した。Verilator を上げれば ADR-0013 の回避策を外せる見込みがある。しかし、今の main のテストは、5.020 以外の版でまだ走らせていない。また、エージェントの session からの workflow_dispatch は 403 になる（[PHASE3.md](PHASE3.md)）。
 - **決定**:
   - 版は [project/toolchain.properties](../project/toolchain.properties) の1か所に書く。キーは `verilator.version`、`verilator.apt` と `verilator.commit`（apt のパッケージの版か、ソースの commit。ちょうど一方を書く）、`jdk.major` である
