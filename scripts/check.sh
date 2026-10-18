@@ -75,7 +75,7 @@ run_static() {
   step 'toolchain.sh with a fake verilator (scripts/test-toolchain.sh)'
   scripts/test-toolchain.sh
 
-  step 'workflows install the toolchain only with .github/actions/setup-toolchain (ADR-0020)'
+  step 'workflows install the toolchain only with .github/actions/setup-toolchain, and only the candidates override it (ADR-0020)'
   scripts/check-workflows.sh
 
   step 'setup-toolchain, check-workflows.sh and verilator-build.sh with fakes (scripts/test-setup-toolchain.sh)'

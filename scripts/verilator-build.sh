@@ -21,6 +21,10 @@
 set -euo pipefail
 
 die() { printf 'verilator-build: %s\n' "$*" >&2; exit 2; }
+# The verilator script runs the verilator_bin under VERILATOR_ROOT when that is set, and the binary
+# that VERILATOR_BIN names: the version check after `make install` must run the one built here.
+# Verilator's install guide unsets VERILATOR_ROOT for a build into a prefix, too.
+unset VERILATOR_ROOT VERILATOR_BIN
 
 [[ $# -ge 3 && $# -le 4 ]] || die 'usage: scripts/verilator-build.sh VERSION COMMIT PREFIX [INFO_FILE]'
 version="$1" commit="$2" prefix="$3"

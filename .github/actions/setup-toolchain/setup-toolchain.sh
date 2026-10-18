@@ -11,9 +11,9 @@
 #        setup-toolchain.sh [--file PATH] verify
 #          checks what was installed against the choice (the outputs of plan, given as METHOD,
 #          VERSION, APT, COMMIT, PREFIX, KEY and JDK; CACHE_HIT from the cache step): the
-#          scripts/toolchain.sh check of VERSION, the verilator on the PATH, the JDK's major
-#          version and VLIW_VERILATOR_EXPECTED. Writes the fingerprint to the job log and
-#          GITHUB_STEP_SUMMARY, and then fails if a check failed.
+#          scripts/toolchain.sh check of VERSION, the verilator on the PATH and the verilator_bin
+#          that it runs, the JDK's major version and VLIW_VERILATOR_EXPECTED. Writes the
+#          fingerprint to the job log and GITHUB_STEP_SUMMARY, and then fails if a check failed.
 # --file reads another file in the format of project/toolchain.properties (the self-test,
 # scripts/test-setup-toolchain.sh).
 # Like the other scripts, this runs on bash 3.2 (macOS).
@@ -115,6 +115,15 @@ verify() {
     want="$prefix/bin/verilator"
   fi
   [[ "$path" == "$want" ]] || problems+=("the verilator on the PATH is '${path:-none}', not $want")
+  # The verilator script runs the verilator_bin under VERILATOR_ROOT when that is set (the action
+  # never sets it), else the one next to it; scripts/toolchain.sh check prints which.
+  [[ -z "${VERILATOR_ROOT+set}" ]] ||
+    problems+=("VERILATOR_ROOT is set ($VERILATOR_ROOT): $want would run the verilator_bin under it, not the installed one")
+  local bin
+  bin="$(sed -n 's/^verilator_bin: //p' <<<"$check" | head -n 1)"
+  if [[ "$path" == "$want" && ! "$bin" -ef "${want%/*}/verilator_bin" ]]; then
+    problems+=("the verilator_bin that $want runs is '${bin:-not found}', not ${want%/*}/verilator_bin")
+  fi
 
   # The line 'openjdk version "21.0.8" 2025-07-15 LTS', after any "Picked up JAVA_TOOL_OPTIONS: ...";
   # JDK 8 and older are "1.<major>".

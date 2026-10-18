@@ -83,7 +83,9 @@ jobs:
           cat "$dir/results.tsv" 2>/dev/null || echo '(no results.tsv)'
           printf '===END===\n'
           # The unmutated run and its retries (a retry passing hides a first run that failed).
+          printf '===BEGIN baseline shard=%s verilator=%s===\n' "$SHARD" "$VERILATOR"
           for verdict in "$dir"/_baseline*/verdict; do
             [[ -f "$verdict" ]] || continue
             printf '%s\t%s\n' "$(basename "$(dirname "$verdict")")" "$(cut -f1-3 "$verdict")"
           done
+          printf '===END===\n'

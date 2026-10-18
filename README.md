@@ -50,7 +50,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `scripts/repeat-tests.sh` | テストの繰り返し実行（間欠的な失敗の頻度を測る。#74） |
 | `scripts/toolchain.sh` | `project/toolchain.properties` の値を読み、PATH の Verilator が期待する版かを確かめる（[docs/toolchain/README.md](docs/toolchain/README.md)） |
 | `scripts/verilator-build.sh` | Verilator の1つの版を、タグの commit を確かめてからソースでビルドする（[docs/toolchain/README.md](docs/toolchain/README.md)） |
-| `scripts/check-workflows.sh` | workflow が Verilator と JDK を `.github/actions/setup-toolchain` でだけ入れることを確かめる（`scripts/check.sh static`） |
+| `scripts/check-workflows.sh` | workflow が Verilator と JDK を `.github/actions/setup-toolchain` でだけ入れることと、版の上書き（`VLIW_VERILATOR_EXPECTED`・`VLIW_VERILATOR_JOBS`）を候補の workflow と読み手だけが使うことを確かめる（`scripts/check.sh static`） |
 | `scripts/verilator-exit-race.py` | Verilator の終了時の abort の頻度を、jobs の設定ごとに測る（[ADR-0013](docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)） |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
 | `.github/actions/setup-toolchain/` | CI で JDK・sbt・Verilator を `project/toolchain.properties` の版で入れる action（[docs/toolchain/README.md](docs/toolchain/README.md#ci-で入れる)） |
