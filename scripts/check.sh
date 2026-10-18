@@ -37,8 +37,8 @@ run_static() {
     jq empty "$file" || die "invalid JSON: $file"
   done
 
-  step 'shellcheck (scripts/*.sh)'
-  shellcheck scripts/*.sh
+  step 'shellcheck (scripts/*.sh, .github/actions/*/*.sh)'
+  shellcheck scripts/*.sh .github/actions/*/*.sh
 
   step 'whitespace errors in tracked files'
   # Compare the empty tree with the working tree so every tracked file is checked.
@@ -74,6 +74,12 @@ run_static() {
 
   step 'toolchain.sh with a fake verilator (scripts/test-toolchain.sh)'
   scripts/test-toolchain.sh
+
+  step 'workflows install the toolchain only with .github/actions/setup-toolchain (ADR-0020)'
+  scripts/check-workflows.sh
+
+  step 'setup-toolchain, check-workflows.sh and verilator-build.sh with fakes (scripts/test-setup-toolchain.sh)'
+  scripts/test-setup-toolchain.sh
 
   step 'mutation-check.sh with a fake sbt (scripts/test-mutation-check.sh)'
   scripts/test-mutation-check.sh

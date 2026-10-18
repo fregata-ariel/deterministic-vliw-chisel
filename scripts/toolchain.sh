@@ -206,7 +206,7 @@ check() {
         if [[ -n "$apt" ]]; then
           how="install it with 'sudo apt-get install verilator=$apt' (Ubuntu 24.04)"
         else
-          how="build it from commit $commit"
+          how="build it with 'scripts/verilator-build.sh $pinned $commit PREFIX'"
         fi
         printf 'toolchain: to fix: %s and put it first on the PATH (docs/toolchain/README.md).\n' "$how"
         printf 'toolchain: to try another version locally: put it first on the PATH and set %s\n' \

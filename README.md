@@ -49,16 +49,19 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 | `scripts/mutation-check.sh` | mutation チェック（[tests/cases/README.md](tests/cases/README.md#mutation-チェック)） |
 | `scripts/repeat-tests.sh` | テストの繰り返し実行（間欠的な失敗の頻度を測る。#74） |
 | `scripts/toolchain.sh` | `project/toolchain.properties` の値を読み、PATH の Verilator が期待する版かを確かめる（[docs/toolchain/README.md](docs/toolchain/README.md)） |
+| `scripts/verilator-build.sh` | Verilator の1つの版を、タグの commit を確かめてからソースでビルドする（[docs/toolchain/README.md](docs/toolchain/README.md)） |
+| `scripts/check-workflows.sh` | workflow が Verilator と JDK を `.github/actions/setup-toolchain` でだけ入れることを確かめる（`scripts/check.sh static`） |
 | `scripts/verilator-exit-race.py` | Verilator の終了時の abort の頻度を、jobs の設定ごとに測る（[ADR-0013](docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)） |
 | `.github/workflows/ci.yml` | GitHub Actions CI |
+| `.github/actions/setup-toolchain/` | CI で JDK・sbt・Verilator を `project/toolchain.properties` の版で入れる action（[docs/toolchain/README.md](docs/toolchain/README.md#ci-で入れる)） |
 
 ## 開発
 
-必要なもの: JDK、sbt、jq、shellcheck、Python 3（`scripts/check.sh static` と mutation チェック）、Verilator（`hw` の ChiselSim テストに使う）。JDK と Verilator の版は [project/toolchain.properties](project/toolchain.properties) にあり、`scripts/toolchain.sh check` で手元の Verilator を確かめられます（入れ方は [docs/toolchain/README.md](docs/toolchain/README.md)）。バージョンと構成の根拠は[ADR-0004](docs/DECISIONS.md#adr-0004-ツールチェーンとバージョン固定)と[ADR-0020](docs/DECISIONS.md#adr-0020-verilator-と-jdk-の版を1か所で決め版を変える前に候補を対照と同じ-run-で試す)にあります。
+必要なもの: JDK、sbt、jq、shellcheck、Python 3（`scripts/check.sh static` と mutation チェック）、Verilator（`hw` の ChiselSim テストに使う）。JDK と Verilator の版は [project/toolchain.properties](project/toolchain.properties) にあり、`scripts/toolchain.sh check` で手元の Verilator を確かめられます（入れ方は [docs/toolchain/README.md](docs/toolchain/README.md)。apt にない版は `scripts/verilator-build.sh` でビルドできます）。CI では、action `.github/actions/setup-toolchain` が JDK・sbt・Verilator をこの版で入れます。バージョンと構成の根拠は[ADR-0004](docs/DECISIONS.md#adr-0004-ツールチェーンとバージョン固定)と[ADR-0020](docs/DECISIONS.md#adr-0020-verilator-と-jdk-の版を1か所で決め版を変える前に候補を対照と同じ-run-で試す)にあります。
 
 ```sh
 scripts/check.sh          # 全チェック（CIと同じ内容）
-scripts/check.sh static   # JSON構文・shellcheck・Python の構文・空白エラー・VliwChiselSim の使用・mutation の判定・toolchain.sh の検査
+scripts/check.sh static   # JSON構文・shellcheck・Python の構文・空白エラー・VliwChiselSim の使用・mutation の判定・toolchain.sh と setup-toolchain の検査・workflow の検査
 scripts/check.sh scala    # scalafmt・コンパイル（警告はエラー）・テスト（sbt の前に scripts/toolchain.sh check）
 scripts/check.sh sbt "hw/testOnly vliw.hw.CaseSpec"  # 任意の sbt コマンドを scala と同じログ付きで実行
 sbt test                  # テストだけを実行

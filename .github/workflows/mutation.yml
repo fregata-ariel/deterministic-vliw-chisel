@@ -1,14 +1,34 @@
 name: Mutation check
 
-# Slow (one full test run per mutant), so it runs on demand and when the mutants change.
+# Slow (one full test run per mutant), so it runs on demand, when the mutants or their scripts
+# change, and when the toolchain or the way it is installed changes (#121). The workflow
+# toolchain-candidates.yml (#121's PR 3) is to call it with a candidate Verilator: the inputs of
+# .github/actions/setup-toolchain, which refuses them in a run of any other workflow.
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      verilator:
+        description: >-
+          A candidate Verilator (a version, or apt:<package version>); empty for the pinned one
+        type: string
+        default: ""
+      commit:
+        description: The commit of the tag of a candidate built from the source
+        type: string
+        default: ""
   pull_request:
     paths:
       - scripts/mutants.tsv
       - scripts/mutation-check.sh
       - scripts/mutation-classify.py
       - .github/workflows/mutation.yml
+      - project/toolchain.properties
+      - .github/actions/setup-toolchain/**
+      - scripts/toolchain.sh
+      - scripts/verilator-build.sh
+      - hw/src/test/scala/vliw/hw/VliwChiselSim.scala
+      - hw/src/test/scala/vliw/hw/Toolchain.scala
 
 permissions:
   contents: read
@@ -25,14 +45,13 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
+      # The JDK, sbt and Verilator of project/toolchain.properties (ADR-0020), or the candidate of
+      # the inputs. Without a cache, each shard builds a Verilator pinned to a commit itself.
+      - id: toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
-          distribution: temurin
-          java-version: "21"
-          cache: sbt
-      - uses: sbt/setup-sbt@v1
-      - name: Install Verilator (ChiselSim backend)
-        run: sudo apt-get update && sudo apt-get install -y verilator && verilator --version
+          verilator: ${{ inputs.verilator }}
+          commit: ${{ inputs.commit }}
       # Runs the tests once without a mutant first, then each mutant (KILLED, SURVIVED or ERROR, #74).
       - run: scripts/mutation-check.sh
         # Shorter than the job, so that a hang still leaves time to upload the logs.
@@ -41,12 +60,30 @@ jobs:
           MUTATION_LOG_DIR: build/mutation-logs
           MUTATION_SHARD: ${{ matrix.shard }}/8
       # Always: results.tsv and, per mutant, the sbt log, the JUnit reports, the classification and
-      # the ChiselSim logs of failed builds.
+      # the ChiselSim logs of failed builds. The name carries the Verilator, since a run of
+      # toolchain-candidates.yml calls this workflow once per version.
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutation-logs-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
+          name: mutation-logs-verilator-${{ steps.toolchain.outputs.id || 'none' }}-shard${{ matrix.shard }}-attempt${{ github.run_attempt }}
           path: build/mutation-logs/
           if-no-files-found: ignore
           retention-days: 14
+      # The verdicts in the job log too: the agent's session cannot download artifacts, but it can
+      # read the logs of a job (#121).
+      - name: Print the results
+        if: always()
+        env:
+          SHARD: ${{ matrix.shard }}/8
+          VERILATOR: ${{ steps.toolchain.outputs.id || 'none' }}
+        run: |
+          dir=build/mutation-logs
+          printf '===BEGIN results.tsv shard=%s verilator=%s===\n' "$SHARD" "$VERILATOR"
+          cat "$dir/results.tsv" 2>/dev/null || echo '(no results.tsv)'
+          printf '===END===\n'
+          # The unmutated run and its retries (a retry passing hides a first run that failed).
+          for verdict in "$dir"/_baseline*/verdict; do
+            [[ -f "$verdict" ]] || continue
+            printf '%s\t%s\n' "$(basename "$(dirname "$verdict")")" "$(cut -f1-3 "$verdict")"
+          done

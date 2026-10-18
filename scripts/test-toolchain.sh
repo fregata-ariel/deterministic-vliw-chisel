@@ -90,6 +90,13 @@ run FAKE_VERILATOR=5.999 check
 expect 1 "^verilator --version: Verilator 5\\.999 \\(fake\\)$" \
   "^toolchain: the Verilator on the PATH is 5\\.999, expected $pinned \\(pinned\\)$" \
   '^toolchain: to fix: .* first on the PATH' '^toolchain: to try another version locally: .*VLIW_VERILATOR_EXPECTED'
+# Pinned to a commit, the fix is a build with scripts/verilator-build.sh.
+commit=5c5314b39cd888f427807d626e1502cbf222c292
+printf 'verilator.version=%s\nverilator.apt=\nverilator.commit=%s\njdk.major=21\n' "$pinned" "$commit" \
+  >"$work/source.properties"
+run FAKE_VERILATOR=5.999 --file "$work/source.properties" check
+expect 1 "^pinned: verilator $pinned \\(commit $commit\\), jdk 21 \\(" \
+  "^toolchain: to fix: build it with 'scripts/verilator-build\\.sh $pinned $commit PREFIX' and put it first on the PATH"
 run FAKE_VERILATOR=fail check
 expect 1 '^verilator --version: failed: fake: cannot run$' \
   "^toolchain: no Verilator runs from the PATH, expected $pinned"

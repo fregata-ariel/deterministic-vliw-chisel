@@ -1,6 +1,6 @@
 # Hardware
 
-Phase 1のChisel実装先。sbtプロジェクト `hw`、パッケージ `vliw.hw`。依存は `isa`。Chisel 7.15.0、firtool 1.158.0、ChiselSim（Verilator。版は [project/toolchain.properties](../project/toolchain.properties)、[docs/toolchain/README.md](../docs/toolchain/README.md)）。
+Phase 1のChisel実装先。sbtプロジェクト `hw`、パッケージ `vliw.hw`。依存は `isa`。Chisel 7.15.0、firtool 1.158.0、ChiselSim（Verilator。版は [project/toolchain.properties](../project/toolchain.properties)。CI では action `.github/actions/setup-toolchain` がその版を入れる。手元で入れる方法は [docs/toolchain/README.md](../docs/toolchain/README.md)）。
 
 Machine Descriptionの読み込み、RF、Compute slot、Memory slot、Instruction ROM、PC、開始・終了制御を実装する。ChiselSimで`sim/`の参照トレースと結果・commit時刻・doneを比較する。
 
