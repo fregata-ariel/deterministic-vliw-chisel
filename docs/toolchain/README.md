@@ -187,7 +187,7 @@ ADR-0020 の決まりを、次の順で行う。
 | 版 | 入れ方 | PR | 日付 | run |
 |---|---|---|---|---|
 | 5.020 | apt `5.020-1`（ubuntu-24.04） | #39（#23。CI に apt で入れた） | 2026-10-14 | — |
-| 5.052 | ソース（タグ `v5.052`、commit `ea338be98e1e838d3518809ce8899f85a009963c`） | PR A（#121） | 2026-10-19 | [39175083401](https://github.com/fregata-ariel/deterministic-vliw-chisel/actions/runs/39175083401)（判断の run） |
+| 5.052 | ソース（タグ `v5.052`、commit `ea338be98e1e838d3518809ce8899f85a009963c`） | #126（#121 の PR A） | 2026-10-19 | [39175083401](https://github.com/fregata-ariel/deterministic-vliw-chisel/actions/runs/39175083401)（判断の run） |
 
 5.020 は、ubuntu-24.04 の apt にある唯一の版として入った。候補を試す run はない。固定を properties に移したのは #121 の PR 1 で、版は変えていない。CI の入れ方を action の1か所にしたのは #121 の PR 2 で、版も入れ方（apt の 5.020-1）も変えていない。
 
