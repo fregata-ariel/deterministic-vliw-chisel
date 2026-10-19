@@ -6,8 +6,10 @@
 #   - ci.yml (the required checks) uses that action, and with no `with:`, since its inputs choose a
 #     candidate version
 #   - VLIW_VERILATOR_EXPECTED and VLIW_VERILATOR_JOBS, which override the pinned toolchain, appear in
-#     the tracked files only in the action, toolchain-candidates.yml, mutation.yml, the readers
-#     (scripts/toolchain.sh, vliw.hw.Toolchain), the self-tests and the documentation
+#     the tracked files only in the action, toolchain-candidates.yml and its script
+#     (scripts/toolchain-candidates.py, whose timing step sets the expected version per run),
+#     mutation.yml, the readers (scripts/toolchain.sh, vliw.hw.Toolchain), the self-tests and the
+#     documentation
 # The checks read the text and do not parse YAML. Comment lines are skipped (#, and // or * in
 # Scala). A line continued with a backslash counts as one line with the next, and so do the lines of
 # a folded block scalar (`run: >-`), which YAML joins with spaces.
@@ -137,19 +139,21 @@ awk -v name="${ci#"$root"/}" -v action="$action" -v q="'" '
 ' "$ci" || status=1
 
 # The variables that override the pinned toolchain: only the action exports them (for a candidate),
-# only toolchain-candidates.yml and mutation.yml (which it calls) may run with them, and only the
-# readers read them. Elsewhere, a required check could pass with another toolchain.
+# only toolchain-candidates.yml (and its script, which sets them for each timed run) and
+# mutation.yml (which it calls) may run with them, and only the readers read them. Elsewhere, a
+# required check could pass with another toolchain.
 top="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || die "$root is not a git work tree"
 [[ "$(cd "$top" && pwd -P)" == "$(cd "$root" && pwd -P)" ]] || die "$root is not the top of its git work tree"
 allowed=(
   ':(exclude,glob).github/actions/setup-toolchain/**'
   ':(exclude).github/workflows/toolchain-candidates.yml'
+  ':(exclude)scripts/toolchain-candidates.py'
   ':(exclude).github/workflows/mutation.yml'
   ':(exclude)scripts/toolchain.sh'
   ':(exclude)hw/src/test/scala/vliw/hw/Toolchain.scala'
   ':(exclude)hw/src/test/scala/vliw/hw/ToolchainSpec.scala'
   ':(exclude)scripts/check-workflows.sh'
-  ':(exclude,glob)scripts/test-*.sh'
+  ':(exclude,glob)scripts/test-*'
   ':(exclude,glob)docs/**'
   ':(exclude,glob)**/*.md'
 )
@@ -161,7 +165,7 @@ if [[ -n "$lines" ]]; then
     match($0, /^[^:]*:[0-9]+:/) {
       text = substr($0, RLENGTH + 1)
       if (text ~ /^[ \t]*(#|\/\/|\/?\*)/) next
-      printf "%s names %s outside the action, toolchain-candidates.yml, mutation.yml and the readers: only a run of the candidates may override the pinned toolchain (ADR-0020): %s\n", substr($0, 1, RLENGTH - 1), (text ~ /VLIW_VERILATOR_JOBS/ ? "VLIW_VERILATOR_JOBS" : "VLIW_VERILATOR_EXPECTED"), text
+      printf "%s names %s outside the action, toolchain-candidates.yml and its script, mutation.yml and the readers: only a run of the candidates may override the pinned toolchain (ADR-0020): %s\n", substr($0, 1, RLENGTH - 1), (text ~ /VLIW_VERILATOR_JOBS/ ? "VLIW_VERILATOR_JOBS" : "VLIW_VERILATOR_EXPECTED"), text
       bad = 1
     }
     END { exit bad }

@@ -1,0 +1,327 @@
+name: Toolchain candidates
+
+# Tries candidate Verilator versions with the pinned one (project/toolchain.properties) as the
+# control in the same run (ADR-0020, #121's PR 3), and prints the records of each version to the
+# report job's log. Not a required check.
+#
+# The agent's session cannot dispatch workflows, re-run jobs or download artifacts, but it can read
+# job logs. So a run starts from a push to a pull request, the knobs are the env below, and every
+# job prints what it found: on the PR branch, edit the knobs, push, read the log of the report job,
+# commit the records it prints, and restore the defaults before merging (docs/toolchain/README.md).
+# The logic is in scripts/toolchain-candidates.py, which scripts/check.sh static tests.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/toolchain-candidates.yml
+      - project/toolchain.properties
+      - .github/actions/setup-toolchain/**
+      - scripts/verilator-build.sh
+      - scripts/toolchain.sh
+      - scripts/toolchain-candidates.py
+      - hw/src/test/scala/vliw/hw/Toolchain.scala
+      - hw/src/test/scala/vliw/hw/VliwChiselSim.scala
+  # For the owner after merging; it reads the same knobs.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A push during a run waits for it instead of cancelling it (do not push during a decision run).
+concurrency:
+  group: toolchain-candidates-${{ github.ref }}
+  cancel-in-progress: false
+
+# The knobs. The plan job checks them strictly and passes them on: env is not available in a job's
+# `if`, `strategy` or `with`. These are the defaults (DEFAULTS in scripts/toolchain-candidates.py);
+# restore them before merging: until then, its self-test fails `scripts/check.sh static`.
+env:
+  # Candidates, space-separated: a version built from the source at its tag (5.052), or an apt
+  # package version (apt:5.020-1). At most 3; the pinned version always runs as the control.
+  CANDIDATES: "5.032 5.052"
+  # Versions whose mutation check runs: mutation.yml, 8 shards each, about 7 runner hours per
+  # version. With a candidate, the pinned version too, as the control in the same run ("5.020 5.052").
+  MUTATION: ""
+  # Test runs per version (1 to 10): run 1 with the default seed, later runs with VLIW_SIM_SEED=random.
+  SEED_RUNS: "1"
+  # true: also time `sbt test` with the pinned version and the source candidates in one job, in the
+  # order A B C C B A.
+  TIMING: "false"
+  # Empty for every part, or the parts to re-run (test, timing, mutation), e.g. to see whether a
+  # candidate's failure reproduces. build always runs.
+  PARTS: ""
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      versions: ${{ steps.plan.outputs.versions }}
+      runs: ${{ steps.plan.outputs.runs }}
+      test: ${{ steps.plan.outputs.test }}
+      timing: ${{ steps.plan.outputs.timing }}
+      timing_versions: ${{ steps.plan.outputs.timing_versions }}
+      timing_count: ${{ steps.plan.outputs.timing_count }}
+      mutation: ${{ steps.plan.outputs.mutation }}
+    steps:
+      - uses: actions/checkout@v5
+      # The pinned version first, then the candidates; the commit of each tag (git ls-remote), and
+      # its date (GitHub's API, only for a warning).
+      - id: plan
+        run: python3 -I scripts/toolchain-candidates.py plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Installs each version once, so that the later jobs restore a source build from the cache.
+  build:
+    needs: plan
+    name: build ${{ matrix.entry.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.plan.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Note the start of the job
+        run: date -u +%s >"$RUNNER_TEMP/job-start"
+      # Empty inputs for the pinned version. For a candidate of another version, the action exports
+      # VLIW_VERILATOR_EXPECTED, which the readers accept in this workflow only.
+      - id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          verilator: ${{ matrix.entry.verilator }}
+          commit: ${{ matrix.entry.commit }}
+      - name: Summarize
+        if: always()
+        env:
+          ENTRY: ${{ toJSON(matrix.entry) }}
+          SETUP: ${{ steps.toolchain.outcome }}
+          OUT: build/candidates/summary/build-${{ matrix.entry.version }}-attempt${{ github.run_attempt }}.json
+        run: python3 -I scripts/toolchain-candidates.py summary build --entry "$ENTRY" --setup "$SETUP" --out "$OUT"
+      - name: Upload the summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-candidates-summary-build-${{ matrix.entry.version }}-attempt${{ github.run_attempt }}
+          path: build/candidates/summary/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The tests of ci.yml's scala job, with each version, SEED_RUNS times.
+  test:
+    needs: [plan, build]
+    # Also after a failed build: this job then builds again, and a failure counts as setup.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.test == 'true' }}
+    name: test ${{ matrix.entry.version }} run ${{ matrix.run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.plan.outputs.versions) }}
+        run: ${{ fromJSON(needs.plan.outputs.runs) }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Note the start of the job
+        run: date -u +%s >"$RUNNER_TEMP/job-start"
+      - id: toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          verilator: ${{ matrix.entry.verilator }}
+          commit: ${{ matrix.entry.commit }}
+      # Run 1 is ci.yml's run (the default seed); the later runs try other initial values.
+      - name: Use a random seed
+        if: matrix.run > 1
+        run: echo VLIW_SIM_SEED=random >>"$GITHUB_ENV"
+      # As in ci.yml's scala job (CHECK_TIMEOUT, the step's timeout), with the output and the exit
+      # status kept for the summary.
+      - id: test
+        run: python3 -I scripts/toolchain-candidates.py run build/candidates/test -- scripts/check.sh scala
+        env:
+          CHECK_TIMEOUT: "780"
+          CHECK_LOG_DIR: build/check-logs/test
+        timeout-minutes: 15
+      # The class of the run, the [toolchain] lines ((pinned) for the control, (env) for a
+      # candidate), seeds, test counts, failed suites, %Warning counts, CPU and fingerprint.
+      - name: Summarize
+        if: always()
+        env:
+          ENTRY: ${{ toJSON(matrix.entry) }}
+          RUN: ${{ matrix.run }}
+          SETUP: ${{ steps.toolchain.outcome }}
+          STEP: ${{ steps.test.outcome }}
+          CHECK_TIMEOUT: "780"
+          OUT: build/candidates/summary/test-${{ matrix.entry.version }}-run${{ matrix.run }}-attempt${{ github.run_attempt }}.json
+        run: >-
+          python3 -I scripts/toolchain-candidates.py summary test --entry "$ENTRY" --run "$RUN" --setup "$SETUP"
+          --step "$STEP" --dir build/candidates/test --out "$OUT"
+      - name: Upload the summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-candidates-summary-test-${{ matrix.entry.version }}-run${{ matrix.run }}-attempt${{ github.run_attempt }}
+          path: build/candidates/summary/
+          if-no-files-found: ignore
+          retention-days: 14
+      # As ci.yml's: the sbt log, environment, process samples and ChiselSim directories.
+      - name: Upload logs on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-candidates-logs-test-${{ matrix.entry.version }}-run${{ matrix.run }}-attempt${{ github.run_attempt }}
+          path: |
+            build/check-logs/
+            build/chiselsim/
+            !build/chiselsim/**/verilated-sources/
+            */target/test-reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # One job, so that the times compare on one runner: the pinned version and each candidate built
+  # from the source, installed by the action once each (each source build has a prefix of its own;
+  # an apt package stays in /usr/bin), then `sbt test` in the order A B C C B A.
+  timing:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.timing == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      VERSIONS: ${{ needs.plan.outputs.timing_versions }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Note the start of the job
+        run: date -u +%s >"$RUNNER_TEMP/job-start"
+      # The pinned version first: a candidate's action exports VLIW_VERILATOR_EXPECTED, with which the
+      # pinned version's check would fail. The timing step sets the PATH and that variable per run.
+      - id: slot0
+        uses: ./.github/actions/setup-toolchain
+      - name: Note the pinned verilator
+        env:
+          VERSION: ${{ steps.slot0.outputs.version }}
+        run: printf '%s\t%s\n' "$VERSION" "$(command -v verilator)" >>"$RUNNER_TEMP/timing-installed.tsv"
+      - id: slot1
+        if: fromJSON(needs.plan.outputs.timing_count) > 1
+        uses: ./.github/actions/setup-toolchain
+        with:
+          verilator: ${{ fromJSON(needs.plan.outputs.timing_versions)[1].verilator }}
+          commit: ${{ fromJSON(needs.plan.outputs.timing_versions)[1].commit }}
+      - name: Note the verilator of candidate 1
+        if: steps.slot1.outcome == 'success'
+        env:
+          VERSION: ${{ steps.slot1.outputs.version }}
+        run: printf '%s\t%s\n' "$VERSION" "$(command -v verilator)" >>"$RUNNER_TEMP/timing-installed.tsv"
+      - id: slot2
+        if: fromJSON(needs.plan.outputs.timing_count) > 2
+        uses: ./.github/actions/setup-toolchain
+        with:
+          verilator: ${{ fromJSON(needs.plan.outputs.timing_versions)[2].verilator }}
+          commit: ${{ fromJSON(needs.plan.outputs.timing_versions)[2].commit }}
+      - name: Note the verilator of candidate 2
+        if: steps.slot2.outcome == 'success'
+        env:
+          VERSION: ${{ steps.slot2.outputs.version }}
+        run: printf '%s\t%s\n' "$VERSION" "$(command -v verilator)" >>"$RUNNER_TEMP/timing-installed.tsv"
+      - id: slot3
+        if: fromJSON(needs.plan.outputs.timing_count) > 3
+        uses: ./.github/actions/setup-toolchain
+        with:
+          verilator: ${{ fromJSON(needs.plan.outputs.timing_versions)[3].verilator }}
+          commit: ${{ fromJSON(needs.plan.outputs.timing_versions)[3].commit }}
+      - name: Note the verilator of candidate 3
+        if: steps.slot3.outcome == 'success'
+        env:
+          VERSION: ${{ steps.slot3.outputs.version }}
+        run: printf '%s\t%s\n' "$VERSION" "$(command -v verilator)" >>"$RUNNER_TEMP/timing-installed.tsv"
+      # Test/compile once (not timed), then each run with CHECK_TIMEOUT=1500; prints each version's
+      # mean time over the pinned version's.
+      - id: timing
+        run: >-
+          python3 -I scripts/toolchain-candidates.py timing --versions "$VERSIONS"
+          --installed "$RUNNER_TEMP/timing-installed.tsv" --dir build/candidates/timing
+        timeout-minutes: 220
+      - name: Summarize
+        if: always()
+        env:
+          SETUP: >-
+            ${{ steps.slot0.outcome }} ${{ steps.slot1.outcome }} ${{ steps.slot2.outcome }}
+            ${{ steps.slot3.outcome }}
+          STEP: ${{ steps.timing.outcome }}
+          OUT: build/candidates/summary/timing-attempt${{ github.run_attempt }}.json
+        run: >-
+          python3 -I scripts/toolchain-candidates.py summary timing --versions "$VERSIONS" --setup "$SETUP"
+          --step "$STEP" --dir build/candidates/timing --out "$OUT"
+      - name: Upload the summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-candidates-summary-timing-attempt${{ github.run_attempt }}
+          path: build/candidates/summary/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload logs on failure
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: toolchain-candidates-logs-timing-attempt${{ github.run_attempt }}
+          path: build/candidates/timing/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # mutation.yml once per version of MUTATION; its jobs print results.tsv and the baseline verdicts
+  # of each shard, and name their artifacts after the Verilator (the action's id).
+  mutation:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.mutation != '[]' }}
+    name: mutation ${{ matrix.entry.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        entry: ${{ fromJSON(needs.plan.outputs.mutation) }}
+    uses: ./.github/workflows/mutation.yml
+    with:
+      verilator: ${{ matrix.entry.verilator }}
+      commit: ${{ matrix.entry.commit }}
+
+  # Classifies every part, compares each candidate with the control, and prints the records last.
+  report:
+    needs: [plan, build, test, timing, mutation]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Also for the records committed from earlier runs, which tell whether a failure reproduces.
+      # Two commits deep: on a pull request, the first parent of the merge commit is the commit of
+      # main that the run tested, which the records name.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+      # Artifacts of this run: the agent cannot download them, but a job of the run can.
+      - name: Download the summaries
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: toolchain-candidates-summary-*
+          merge-multiple: true
+          path: build/candidates/summaries
+      - name: Download the mutation logs
+        if: needs.plan.outputs.mutation != '' && needs.plan.outputs.mutation != '[]'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mutation-logs-verilator-*
+          path: build/candidates/mutation
+      # Prints the failure texts of the mutation shards too (for the fixtures of
+      # scripts/testdata/mutation-classify), before the records.
+      - name: Report
+        env:
+          PLAN: ${{ needs.plan.outputs.plan }}
+          NEEDS: ${{ toJSON(needs) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          MAIN_SHA="$(git rev-parse --verify -q 'HEAD^1' || true)"
+          python3 -I scripts/toolchain-candidates.py report --summaries build/candidates/summaries
+          --mutation build/candidates/mutation
