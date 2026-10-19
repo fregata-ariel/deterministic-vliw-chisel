@@ -6,8 +6,10 @@ every malformed knob, and that the workflow's knobs are the defaults), the class
 check.sh's output and of a test job, the summaries of the build and test jobs (with their JUnit
 reports and failure texts), the order and environment of the timing runs, and the report with its
 records and failure texts, including mutation logs, the comparison with the control test by test,
-and records committed from an earlier run. The fakes pin 5.020 with apt in a file of their own, so
-that changing project/toolchain.properties stays a one-line change.
+and records committed from an earlier run. The fakes pin 5.020 with apt in a file of their own, and
+the cases set knobs of their own, so that changing project/toolchain.properties stays a one-line
+change and changing the defaults touches only the workflow and DEFAULTS; one case checks that the
+defaults are valid with the real pin and try a candidate besides it.
 """
 
 import datetime
@@ -33,6 +35,10 @@ COMMIT_032 = "8ff77e9d47351b0a59114929880687839a51840b"
 COMMIT_052 = "ea338be98e1e838d3518809ce8899f85a009963c"
 TAG_052 = "efa4927be48e75c3cd08fc848b198d1d9d237f00"
 PINNED = {"verilator.version": "5.020", "verilator.apt": "5.020-1", "verilator.commit": "", "jdk.major": "21"}
+# A pin built from the source at a commit (as after #121's PR A).
+PINNED_SOURCE = {"verilator.version": "5.052", "verilator.apt": "", "verilator.commit": COMMIT_052, "jdk.major": "21"}
+# The knobs of the cases (the knobs of #121's PR 3), not DEFAULTS: against DEFAULTS, the plan warns.
+CASE_KNOBS = {"CANDIDATES": "5.032 5.052", "MUTATION": "", "SEED_RUNS": "1", "TIMING": "false", "PARTS": ""}
 NOW = datetime.datetime(2026, 10, 18, tzinfo=datetime.timezone.utc)
 failures = []
 
@@ -44,7 +50,7 @@ def check(condition, what):
 
 
 def knobs(**overrides):
-    env = dict(tc.DEFAULTS)
+    env = dict(CASE_KNOBS)
     env.update(overrides)
     return env
 
@@ -59,16 +65,20 @@ def tag_date(tag):
     return {TAG_052: "2026-10-10T08:00:00Z", "1" * 40: "2025-01-01T00:00:00Z"}.get(tag)
 
 
-def plan_of(**overrides):
-    return tc.make_plan(knobs(**overrides), PINNED, ls_remote, tag_date, NOW)
+def plan_of(pinned=PINNED, **overrides):
+    return tc.make_plan(knobs(**overrides), pinned, ls_remote, tag_date, NOW)
 
 
-def plan_error(**overrides):
+def plan_error(pinned=PINNED, **overrides):
     try:
-        plan_of(**overrides)
+        plan_of(pinned, **overrides)
     except tc.Failure as e:
         return str(e)
     return ""
+
+
+def not_defaults(plan):
+    return [w for w in plan["warnings"] if "not the defaults" in w]
 
 
 def test_plan():
@@ -78,8 +88,8 @@ def test_plan():
                        ("5.052", "candidate", "5.052", COMMIT_052)], f"default versions: {versions}")
     check(plan["parts"] == {"test": True, "timing": False, "mutation": False}, f"default parts: {plan['parts']}")
     check(plan["seed_runs"] == 1 and plan["timing"] == [] and plan["mutation"] == [], "default runs and parts")
-    check(not plan["warnings"][1:] and any("2026-10-10, 7 days ago" in w for w in plan["warnings"]),
-          f"a tag younger than two weeks warns: {plan['warnings']}")
+    own = [w for w in plan["warnings"] if w not in not_defaults(plan)]
+    check(len(own) == 1 and "2026-10-10, 7 days ago" in own[0], f"a tag younger than two weeks warns: {plan['warnings']}")
     check(plan["versions"][1]["tag_date"] == "2025-01-01", "the tag date of 5.032")
     out = tc.plan_outputs(plan)
     check(json.loads(out["versions"])[0] == {"version": "5.020", "kind": "pinned", "method": "apt", "verilator": "",
@@ -123,6 +133,30 @@ def test_plan():
     plan = plan_of(CANDIDATES="5.052 apt:5.032-1", TIMING="true")
     check(plan["timing"] == ["5.020", "5.052"] and any("leaves out apt:5.032-1" in n for n in plan["notes"]),
           f"timing without apt: {plan['timing']}")
+
+    # A pin built from the source, with the version to roll back to (apt's 5.020-1) as a candidate.
+    plan = plan_of(PINNED_SOURCE, CANDIDATES="apt:5.020-1")
+    out = tc.plan_outputs(plan)
+    check(json.loads(out["versions"]) == [
+        {"version": "5.052", "kind": "pinned", "method": "source", "verilator": "", "commit": ""},
+        {"version": "5.020", "kind": "candidate", "method": "apt", "verilator": "apt:5.020-1", "commit": ""}]
+          and plan["pinned"]["source_commit"] == COMMIT_052 and not plan["notes"],
+          f"a source pin with an apt candidate: {out['versions']} {plan['notes']}")
+    check(plan_of(PINNED_SOURCE, CANDIDATES="apt:5.020-1", MUTATION="5.020 5.052")["mutation"] == ["5.052", "5.020"],
+          "MUTATION: an apt candidate after the source pin")
+    plan = plan_of(PINNED_SOURCE, CANDIDATES="apt:5.020-1 5.032", TIMING="true")
+    check(plan["timing"] == ["5.052", "5.032"] and any("leaves out apt:5.020-1" in n for n in plan["notes"]),
+          f"timing with a source pin leaves out apt: {plan['timing']} {plan['notes']}")
+    check("TIMING=true needs a candidate built from the source"
+          in plan_error(PINNED_SOURCE, CANDIDATES="apt:5.020-1", TIMING="true"), "TIMING with an apt candidate alone")
+    # The defaults are valid with the pin of project/toolchain.properties, and try a candidate besides
+    # it: the version to roll back to (#121 §5). The upstream has every tag.
+    try:
+        plan = tc.make_plan(dict(tc.DEFAULTS), tc.read_pinned(), lambda refs: {r: "4" * 40 for r in refs},
+                            lambda tag: "2020-01-01T00:00:00Z", NOW)
+        check(len(plan["versions"]) > 1, f"the defaults with the real pin try no candidate: {plan['notes']}")
+    except tc.Failure as e:
+        check(False, f"the defaults with the real pin: {e}")
 
     # Every malformed knob fails, with all errors at once.
     cases = [

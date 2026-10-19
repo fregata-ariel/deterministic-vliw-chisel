@@ -61,7 +61,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPSTREAM = "https://github.com/verilator/verilator"
 KNOBS = ("CANDIDATES", "MUTATION", "SEED_RUNS", "TIMING", "PARTS")
 # The values on main (.github/workflows/toolchain-candidates.yml): restore them before merging.
-DEFAULTS = {"CANDIDATES": "5.032 5.052", "MUTATION": "", "SEED_RUNS": "1", "TIMING": "false", "PARTS": ""}
+DEFAULTS = {"CANDIDATES": "apt:5.020-1", "MUTATION": "", "SEED_RUNS": "1", "TIMING": "false", "PARTS": ""}
 PART_NAMES = ("test", "timing", "mutation")
 # The timing job has one setup step for the pinned version and one for each candidate.
 MAX_CANDIDATES = 3
