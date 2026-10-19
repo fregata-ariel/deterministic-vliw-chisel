@@ -61,14 +61,16 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPSTREAM = "https://github.com/verilator/verilator"
 KNOBS = ("CANDIDATES", "MUTATION", "SEED_RUNS", "TIMING", "PARTS")
 # The values on main (.github/workflows/toolchain-candidates.yml): restore them before merging.
-DEFAULTS = {"CANDIDATES": "5.032 5.052", "MUTATION": "", "SEED_RUNS": "1", "TIMING": "false", "PARTS": ""}
+DEFAULTS = {"CANDIDATES": "apt:5.020-1", "MUTATION": "", "SEED_RUNS": "1", "TIMING": "false", "PARTS": ""}
 PART_NAMES = ("test", "timing", "mutation")
 # The timing job has one setup step for the pinned version and one for each candidate.
 MAX_CANDIDATES = 3
 MAX_SEED_RUNS = 10
 # ADR-0004 adopts only versions released at least two weeks ago.
 ADOPT_DAYS = 14
-# #121 §3: the slowest of the 40 recent successful `check.sh scala` steps of ci.yml, in seconds.
+# #121 §3: the slowest of the 40 recent successful `check.sh scala` steps of ci.yml, in seconds. They
+# ran with 5.020 as the pin: replace this with 5.052's before the next timing decision
+# (docs/toolchain/README.md, the timing job).
 RECENT_MAX_SECONDS = 555
 RESULTS = ("success", "test-failure")
 SUMMARY_PREFIX = "toolchain-candidates summary: "
@@ -369,8 +371,9 @@ def make_plan(env, pinned, ls_remote, tag_date, now, records=lambda version: [])
     if run_timing:
         for c in candidates:
             if c["method"] == "apt":
-                notes.append(f"timing leaves out {c['verilator']}: one job cannot hold a package of another"
-                             " version next to the pinned version")
+                notes.append(f"timing leaves out {c['verilator']}: a package of another version would replace a"
+                             " pinned package, or come after the prefix of a pinned source build on the PATH,"
+                             " which the check of setup-toolchain rejects")
         if len(timed) < 2:
             errors.append("TIMING=true needs a candidate built from the source; CANDIDATES names none")
 

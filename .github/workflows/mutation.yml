@@ -37,7 +37,8 @@ jobs:
   mutation:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
-    # One full test run takes about 5.5 minutes on CI, so the mutants are split into shards that run
+    # One full test run takes about 5.5 minutes on CI with Verilator 5.020, and 1.24 times as long
+    # with 5.052 (#121, docs/toolchain/5.052/report.md), so the mutants are split into shards that run
     # in parallel, each with its own unmutated run first (MUTATION_SHARD in scripts/mutation-check.sh).
     strategy:
       fail-fast: false

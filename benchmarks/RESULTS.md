@@ -189,5 +189,5 @@ FIR の係数は layout の定数の語（`fir4x8` ではアドレス 11、12、
 | 項目 | 値 |
 |---|---|
 | machine | `vliw2-i32-sp2` revision 2、`sha256:a4af6064e049415dc9822614264a01f06b6e1be39c86bc41c5fcdda3e7d89e21` |
-| ツール | Chisel 7.15.0、firtool 1.158.0、Verilator 5.020、Scala 2.13.18、JDK 21 |
+| ツール | Chisel 7.15.0、firtool 1.158.0、Verilator 5.052、Scala 2.13.18、JDK 21 |
 | 計測 | ChiselSim（Verilator、`VliwChiselSim`）。`FixedDriver` が start から done までを数える |

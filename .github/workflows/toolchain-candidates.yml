@@ -36,10 +36,11 @@ concurrency:
 # restore them before merging: until then, its self-test fails `scripts/check.sh static`.
 env:
   # Candidates, space-separated: a version built from the source at its tag (5.052), or an apt
-  # package version (apt:5.020-1). At most 3; the pinned version always runs as the control.
-  CANDIDATES: "5.032 5.052"
+  # package version (apt:5.020-1). At most 3; the pinned version always runs as the control. The
+  # default tries the version to roll back to, as it would be installed (#121 §5).
+  CANDIDATES: "apt:5.020-1"
   # Versions whose mutation check runs: mutation.yml, 8 shards each, about 7 runner hours per
-  # version. With a candidate, the pinned version too, as the control in the same run ("5.020 5.052").
+  # version. With a candidate, the pinned version too, as the control in the same run ("5.052 5.020").
   MUTATION: ""
   # Test runs per version (1 to 10): run 1 with the default seed, later runs with VLIW_SIM_SEED=random.
   SEED_RUNS: "1"

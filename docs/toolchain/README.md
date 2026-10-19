@@ -34,15 +34,7 @@ seed の記録（`seed.txt` と `[sim-seed]` の行）にも、PATH の Verilato
 
 ## 手元で入れる
 
-今の固定は apt のパッケージである（`verilator.apt`）。Ubuntu 24.04 では、次のように入れる。
-
-```sh
-sudo apt-get update
-sudo apt-get install -y "verilator=$(scripts/toolchain.sh get verilator.apt)"
-scripts/toolchain.sh check
-```
-
-apt にその版がない環境（Ubuntu 24.04 以外や macOS）では、同じ版をソースからビルドし、その `bin` を PATH の先頭に置く。
+今の固定はソースの commit である（`verilator.commit`）。その版をソースからビルドし、その `bin` を PATH の先頭に置く。
 
 ```sh
 version="$(scripts/toolchain.sh get verilator.version)"
@@ -60,7 +52,15 @@ scripts/toolchain.sh check
 - tcmalloc と jemalloc は使わない（Debian のパッケージと同じ）。版の違いが、Verilator 自身のソースの違いだけになるようにするためである。
 - `<prefix>` には、テストが使わない `verilator_bin_dbg` と `share/verilator/examples` を残さない（CI のキャッシュを小さくするため）。
 - 結果（版、commit、タグの commit、秒数、コンパイラの警告の数、入った版）は `<prefix>.build-info.txt` に、ログは `<prefix>.build-info.log` に残る。4つ目の引数で、結果のファイルの場所を変えられる。
-- 時間は、4コアの手元で約 270 秒（v5.020）、CI で 200〜370 秒である。
+- 時間は、4コアの手元で約 270 秒（v5.020）と約 450 秒（v5.052）、CI で 200〜370 秒である。
+
+固定が apt のパッケージの版（`verilator.apt`。5.020 の固定は apt の 5.020-1 だった）なら、Ubuntu 24.04 では apt でも入れられる。apt にその版がない環境（Ubuntu 24.04 以外や macOS）では、上のようにソースからビルドする。
+
+```sh
+sudo apt-get update
+sudo apt-get install -y "verilator=$(scripts/toolchain.sh get verilator.apt)"
+scripts/toolchain.sh check
+```
 
 ソースからビルドした 5.020 と apt の 5.020-1 は、`verilator --version` の末尾（`rev v5.020` と `rev (Debian 5.020-1)`）と `verilator_bin` の sha256 が違う。版は同じなので、`scripts/toolchain.sh check` は通る。
 
@@ -81,14 +81,14 @@ CI は、JDK・sbt・Verilator を [.github/actions/setup-toolchain](../../.gith
 
 `ci.yml` の `scala` ジョブの枠は 30 分である。ソースから入れる版でキャッシュがないときは、同じ job の中でビルドする。ビルドを別の job にして `needs` でつなぐと、その job が失敗したとき `scala` は skipped になり、GitHub は skipped を成功と扱うので、必須の check が通ってしまう。
 
-`mutation.yml` は、ツールチェーンを変えた PR（properties、action、`scripts/toolchain.sh`、`scripts/verilator-build.sh`、`Toolchain.scala`、`VliwChiselSim.scala`）でも走る。キャッシュがないときは shard ごとにビルドする。artifact の名前には Verilator の版と入れ方が入る（`mutation-logs-verilator-5.020-apt-5.020-1-shard1-attempt1` など）。エージェントの session は artifact を落とせないので、shard ごとの `results.tsv` とベースライン（mutant なしの run とそのやり直し）の判定を、job のログの最後にも出す（それぞれ `===BEGIN results.tsv ...===`、`===BEGIN baseline ...===` から `===END===` まで）。候補を試す workflow（下の[候補を試す](#候補を試す)）は、`workflow_call` の入力 `verilator`・`commit` で、版ごとに mutation を呼ぶ。
+`mutation.yml` は、ツールチェーンを変えた PR（properties、action、`scripts/toolchain.sh`、`scripts/verilator-build.sh`、`Toolchain.scala`、`VliwChiselSim.scala`）でも走る。キャッシュがないときは shard ごとにビルドする。artifact の名前には Verilator の版と入れ方が入る（ソースなら `mutation-logs-verilator-5.052-ea338be98e1e-shard1-attempt1`、apt なら `mutation-logs-verilator-5.020-apt-5.020-1-shard1-attempt1` など）。エージェントの session は artifact を落とせないので、shard ごとの `results.tsv` とベースライン（mutant なしの run とそのやり直し）の判定を、job のログの最後にも出す（それぞれ `===BEGIN results.tsv ...===`、`===BEGIN baseline ...===` から `===END===` まで）。候補を試す workflow（下の[候補を試す](#候補を試す)）は、`workflow_call` の入力 `verilator`・`commit` で、版ごとに mutation を呼ぶ。
 
 ## 別の版を手元で試す
 
 その版の `verilator` を PATH の先頭に置き（ソースからなら、上の `scripts/verilator-build.sh` でビルドする）、`VLIW_VERILATOR_EXPECTED` にその版を書く。
 
 ```sh
-VLIW_VERILATOR_EXPECTED=5.052 scripts/check.sh scala
+VLIW_VERILATOR_EXPECTED=5.020 scripts/check.sh scala
 ```
 
 `VLIW_VERILATOR_EXPECTED` を受け付けるのは、手元（`GITHUB_ACTIONS` が空）と、候補を試す workflow（`.github/workflows/toolchain-candidates.yml`。下の[候補を試す](#候補を試す)）だけである。それ以外の CI で設定すると、`scripts/toolchain.sh check` とテストが失敗する。空文字列も誤りである。
@@ -105,8 +105,8 @@ PR の差分が、この workflow、`project/toolchain.properties`、action（`.
 
 | knob | 既定 | 値 |
 |---|---|---|
-| `CANDIDATES` | `"5.032 5.052"` | 候補を空白で区切る。`5.052` はタグ `v5.052` のソースからビルドし、`apt:5.020-1` は apt のパッケージを入れる。3つまで。固定の版はいつも対照として先頭で走るので、候補に書いても1回だけ走る。同じ候補を2回書いても1回だけ走る |
-| `MUTATION` | `""` | mutation を走らせる版（固定の版か候補を、版の番号で書く）。候補を書くときは、同じ run の対照として固定の版も書く（例: `"5.020 5.052"`）。1つの版で 8 shard、約 7 runner 時間かかる |
+| `CANDIDATES` | `"apt:5.020-1"` | 候補を空白で区切る。`5.052` はタグ `v5.052` のソースからビルドし、`apt:5.020-1` は apt のパッケージを入れる。3つまで。固定の版はいつも対照として先頭で走るので、候補に書いても1回だけ走る。同じ候補を2回書いても1回だけ走る。既定は、戻す先の 5.020 を、入れ方（apt の 5.020-1）も含めて試し続けるためのもの（#121 §5） |
+| `MUTATION` | `""` | mutation を走らせる版（固定の版か候補を、版の番号で書く）。候補を書くときは、同じ run の対照として固定の版も書く（例: `"5.052 5.020"`）。1つの版で 8 shard、約 7 runner 時間かかる |
 | `SEED_RUNS` | `"1"` | 版ごとの test の回数（1〜10）。run 1 は既定の seed、2 以降は `VLIW_SIM_SEED=random`（JVM ごとに新しい seed） |
 | `TIMING` | `"false"` | `true` なら、固定の版とソースの候補を1つの job に入れ、A B C C B A の順に `sbt test` を走らせて時間を比べる |
 | `PARTS` | `""` | 空ならすべての part を走らせる。`test`・`timing`・`mutation` を空白で区切って書くと、その part だけを走らせる（やり直し）。build はいつも走る |
@@ -118,7 +118,7 @@ PR の差分が、この workflow、`project/toolchain.properties`、action（`.
 - plan: 固定の版を先頭（対照）に置き、候補を続ける。ソースの候補は、`git ls-remote https://github.com/verilator/verilator 'refs/tags/v<版>^{}'` で今のタグの commit を決め、ログと記録に出す。この commit を action の入力 `commit` に渡すので、この run の間にタグが動けば、`scripts/verilator-build.sh` がビルドのときに気づく。run の前に動いたタグは、新しい commit のまま試される。そこで plan は、commit された `docs/toolchain/<版>/report.md` の記録の commit と違えば warning を出す。版を固定にするときは、記録の commit を `project/toolchain.properties` に書く。
 - build（版ごと）: action で入れる。ソースの候補はここでビルドしてキャッシュに保存するので、後の job は復元するだけになる。fingerprint をログに出す。2回目の push では、fingerprint の `cache:` の行が `restored` になる。
 - test（版 × run）: ci.yml の `scala` ジョブと同じ `scripts/check.sh scala` を、同じ時間の枠（`CHECK_TIMEOUT` 960 秒、step 18 分、job 30 分）で走らせる。候補では、action が `VLIW_VERILATOR_EXPECTED` を設定し、`GITHUB_WORKFLOW_REF` がこの workflow を指すので、読み手はそれを受け付ける。`[toolchain]` の行は、候補では `(env)`、対照では `(pinned)` でなければならず、`[sim-seed]` の行は、run 1 では `(default)`、2 以降では `(random)` でなければならない。違えば setup に分ける。失敗した run では、失敗したテストの failure text（下）も、その job のログに出す。
-- timing（`TIMING=true` のとき）: 1つの job に、action で固定の版とソースの候補を1つずつ入れる。固定の版を先に入れる（候補の action が `VLIW_VERILATOR_EXPECTED` を設定するため）。ソースのビルドはそれぞれの prefix にあり、apt の版は `/usr/bin` にある。apt の候補は固定の版と同じ job に入れられないので、timing から除く。`Test/compile` を1回してから（時間に入れない）、`scripts/check.sh sbt test` を A B C C B A の順に走らせる。run ごとに、PATH にはその版の prefix だけを置き、候補では `VLIW_VERILATOR_EXPECTED` をその版にする（seed はどれも既定）。失敗した run の failure text は、この job のログに出る。比は、候補の2回の平均 ÷ 固定の版の2回の平均で、この job のログに出る。report は、比から #121 §5 の条件（最近の `check.sh scala` の最大 555 秒 × 比 × 1.1 が `CHECK_TIMEOUT`（960 秒）を超えるか）も出す。
+- timing（`TIMING=true` のとき）: 1つの job に、action で固定の版とソースの候補を1つずつ入れる。固定の版を先に入れる（候補の action が `VLIW_VERILATOR_EXPECTED` を設定するため）。ソースのビルドはそれぞれの prefix にあり、apt の版は `/usr/bin` にある。apt の候補は、timing から除く。固定の版が apt なら、そのパッケージを置き換えてしまい、固定の版がソースなら、`/usr/bin` は PATH でその prefix の後ろになるので、action の確認（PATH の最初の `verilator` が `/usr/bin/verilator` か）に通らない。`Test/compile` を1回してから（時間に入れない）、`scripts/check.sh sbt test` を A B C C B A の順に走らせる。run ごとに、PATH にはその版の prefix だけを置き、候補では `VLIW_VERILATOR_EXPECTED` をその版にする（seed はどれも既定）。失敗した run の failure text は、この job のログに出る。比は、候補の2回の平均 ÷ 固定の版の2回の平均で、この job のログに出る。report は、比から #121 §5 の条件（最近の `check.sh scala` の最大 555 秒 × 比 × 1.1 が `CHECK_TIMEOUT`（960 秒）を超えるか）も出す。555 秒（`scripts/toolchain-candidates.py` の `RECENT_MAX_SECONDS`）は、固定の版が 5.020 だったときの ci.yml の最近の 40 回の最大である（#121 §3）。5.052 を固定にした後は、比は 5.052 に対するものになるので、次に timing で版を判断する前に、main の CI で 5.052 が 40 回ほど緑になってから、その最大でこの数と `RECENT_MAX_SECONDS` を一緒に置き換える（判断の run では、5.052 の test job の最大は 696 秒だった）。
 - mutation（`MUTATION` の版ごと）: `mutation.yml` を `workflow_call` で呼ぶ（入力 `verilator`・`commit`、固定の版では空）。固定の版も呼んで、同じ run の対照にする。shard ごとの判定は、その job のログに出る。
 - report（いつも走る）: すべての part を分類し、候補を対照と比べ、表と判定を出す。次に mutation の shard の failure text を出し、最後に commit する記録を出す。
 
@@ -126,7 +126,7 @@ build・test・timing の job は、`toolchain-candidates summary: {...}` の1�
 
 ### 手順
 
-1. PR のブランチで、workflow の `env` の knob を書き換えて push する。最初の push は既定の knob でよい（固定の版と 5.032・5.052 の test を1回ずつ）。判断の run は `CANDIDATES="5.032 5.052"`、`MUTATION="5.020 5.052"`、`SEED_RUNS="3"`、`TIMING="true"` にする。run の間は、そのブランチに push しない。concurrency は前の run を取り消さないが、次の run を待たせる。
+1. PR のブランチで、workflow の `env` の knob を書き換えて push する。最初の push は、`CANDIDATES` に試す版を書くだけでよい（固定の版と候補の test を1回ずつ）。判断の run は、`MUTATION` に固定の版と目標の版を書き、`SEED_RUNS="3"`、`TIMING="true"` にする（#121 の PR 3 では、固定の版が 5.020 で、`CANDIDATES="5.032 5.052"`、`MUTATION="5.020 5.052"`）。run の間は、そのブランチに push しない。concurrency は前の run を取り消さないが、次の run を待たせる。
 2. report job のログを読む。版 × part の表と、part ごとの判定（`verdicts:`）が出る。
 3. ログの最後の `===BEGIN docs/toolchain/<版>/<ファイル>===` から `===END===` までを、それぞれそのファイルとして commit する。`report.md` が既にあれば、新しい記録の `## run` の行から下だけを、その下に足す（前の run の節は消さない）。`mutation.tsv` は置き換え、前のものと違えば、その差を確かめる。
 4. 判定不能の part があれば、`PARTS` にその part を書いて push し、やり直す。候補だけの失敗も、記録を commit してから、同じようにやり直す。
@@ -177,20 +177,24 @@ ADR-0020 の決まりを、次の順で行う。
 
 1. 候補の版を、固定の版を対照にして、同じ run で PR から試す（[候補を試す](#候補を試す)）。結果を `docs/toolchain/<版>/` に残す。
 2. `benchmarks/`・`tests/cases`・`tests/golden` に、ツールの行と `metrics` の `generator` 欄のほかの差分が出た版は採らない。候補を緑にするために記録を作り直さない（R2）。
-3. 版を変える PR は、`project/toolchain.properties`、生成し直した `benchmarks/RESULTS.md` のツールの行（`sbt "crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords"`）、下の履歴の1行だけを変える。回避策（ADR-0013 の `--verilate-jobs 1`）には触れない。
-4. その PR の CI と mutation が緑で、`[toolchain]` の行がすべて `(pinned)` であることを確かめてから、マージする。
+3. 版を変える PR は、`project/toolchain.properties`、生成し直した `benchmarks/RESULTS.md` のツールの行（`sbt "crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords"`）、下の履歴の1行、候補を試す workflow の既定の候補（戻す先の版。`toolchain-candidates.yml` の `CANDIDATES`、`scripts/toolchain-candidates.py` の `DEFAULTS`、上の knob の表の説明。#121 §5）だけを変える。固定の入れ方が変わるとき（5.052 では apt からソースへ）は、[手元で入れる](#手元で入れる)の説明も変える。回避策（ADR-0013 の `--verilate-jobs 1`）には触れない。
+4. その PR の CI と mutation が緑で、`[toolchain]` の行がすべて `(pinned)` であることを確かめてから、マージする。履歴の行の PR の欄には、PR を開いたらその番号を書く。日付の欄は、5.020 の行と同じく main で固定が変わる日（マージの日）で、マージの前の最後の push で書く。
 5. 回避策を外すのは、版が main で安定した後の、別の PR にする。
-6. 戻すのは、版を変えた PR の revert 1つである。
+6. 戻すのは、版を変えた PR の revert 1つである。revert が当たらず手で戻すときは、properties と一緒に既定の候補（`CANDIDATES` と `DEFAULTS`）も、固定の版でない版にする（revert なら、版を変える前の値に戻る）。`scripts/test-toolchain-candidates.py` は、既定の候補が固定の版のほかの版を試すことを確かめるので、properties だけを戻すと `scripts/check.sh static` が失敗する。
 
 ## 履歴
 
 | 版 | 入れ方 | PR | 日付 | run |
 |---|---|---|---|---|
 | 5.020 | apt `5.020-1`（ubuntu-24.04） | #39（#23。CI に apt で入れた） | 2026-10-14 | — |
+| 5.052 | ソース（タグ `v5.052`、commit `ea338be98e1e838d3518809ce8899f85a009963c`） | #126（#121 の PR A） | 2026-10-19 | [39175083401](https://github.com/fregata-ariel/deterministic-vliw-chisel/actions/runs/39175083401)（判断の run） |
 
 5.020 は、ubuntu-24.04 の apt にある唯一の版として入った。候補を試す run はない。固定を properties に移したのは #121 の PR 1 で、版は変えていない。CI の入れ方を action の1か所にしたのは #121 の PR 2 で、版も入れ方（apt の 5.020-1）も変えていない。
+
+5.052 は、判断の run（5.020 を対照に、5.032 と 5.052 を試した。下の記録）の結果から、オーナーが 2026-10-19 に選んだ。commit は、判断の run がビルドしたものと同じである。その run で 5.052 の `sbt test` は 5.020 の 1.235 倍かかったので、版を上げる前に、別の PR（#125）で時間の枠を広げた（ADR-0020 の 2026-10-19 の補足）。回避策（ADR-0013 の `--verilate-jobs 1`）は変えていない。戻す先の 5.020 は、候補を試す workflow の既定の候補（`CANDIDATES="apt:5.020-1"`）として、入れ方も含めて試し続ける（#121 §5）。timing の #121 §5 の条件の 555 秒は 5.020 の数のままなので、次に timing で版を判断する前に、5.052 の数に置き換える（上の[job](#job)の timing）。
 
 版ごとの記録は `docs/toolchain/<版>/` に置く。
 
 - [5.020/mutation.tsv](5.020/mutation.tsv): #121 の PR 2 で、action で入れた 5.020（apt の 5.020-1、JDK 21）の mutation の判定（Mutation check の run 39130793620、PR の head 0411409）。53 mutant すべて KILLED（category は assertion）。mutant を入れない実行は、8 shard とも1回目で通った。列は `mutant`・`verdict`・`category` で、job のログに出た `results.tsv` から作った
 - 判断の run（#121 の PR 3。Toolchain candidates の run 39175083401、knob は `CANDIDATES="5.032 5.052"`・`MUTATION="5.020 5.052"`・`SEED_RUNS="3"`・`TIMING="true"`）: [5.020/report.md](5.020/report.md)、[5.032/report.md](5.032/report.md)、[5.052/report.md](5.052/report.md)、[5.052/mutation.tsv](5.052/mutation.tsv)。report job が出した記録を、そのまま commit した。どの版も test（seed 3 回）・timing が success で、5.052 の mutation は 5.020 と同じ判定（53 mutant すべて KILLED）。timing の比は 5.032 が 1.052、5.052 が 1.235。5.020 の mutation の判定は、上の PR 2 の run と同じだった
+- #126（#121 の PR A。5.052 を固定にした PR の branch）の run（Toolchain candidates の run 39201497326、knob は `CANDIDATES="apt:5.020-1"`・`SEED_RUNS="10"`）: [5.052/report.md](5.052/report.md) と [5.020/report.md](5.020/report.md) の2つ目の節。固定の版（5.052）と戻す先（apt の 5.020-1）の test が、どちらも 10 回とも success。`scripts/check.sh scala` の step は、5.052 で 426〜701 秒、5.020 で 360〜576 秒だった
