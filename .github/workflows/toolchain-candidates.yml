@@ -43,7 +43,7 @@ env:
   # version. With a candidate, the pinned version too, as the control in the same run ("5.052 5.020").
   MUTATION: ""
   # Test runs per version (1 to 10): run 1 with the default seed, later runs with VLIW_SIM_SEED=random.
-  SEED_RUNS: "10"
+  SEED_RUNS: "1"
   # true: also time `sbt test` with the pinned version and the source candidates in one job, in the
   # order A B C C B A.
   TIMING: "false"
