@@ -68,7 +68,9 @@ MAX_CANDIDATES = 3
 MAX_SEED_RUNS = 10
 # ADR-0004 adopts only versions released at least two weeks ago.
 ADOPT_DAYS = 14
-# #121 §3: the slowest of the 40 recent successful `check.sh scala` steps of ci.yml, in seconds.
+# #121 §3: the slowest of the 40 recent successful `check.sh scala` steps of ci.yml, in seconds. They
+# ran with 5.020 as the pin: replace this with 5.052's before the next timing decision
+# (docs/toolchain/README.md, the timing job).
 RECENT_MAX_SECONDS = 555
 RESULTS = ("success", "test-failure")
 SUMMARY_PREFIX = "toolchain-candidates summary: "
@@ -369,8 +371,9 @@ def make_plan(env, pinned, ls_remote, tag_date, now, records=lambda version: [])
     if run_timing:
         for c in candidates:
             if c["method"] == "apt":
-                notes.append(f"timing leaves out {c['verilator']}: one job cannot hold a package of another"
-                             " version next to the pinned version")
+                notes.append(f"timing leaves out {c['verilator']}: a package of another version would replace a"
+                             " pinned package, or come after the prefix of a pinned source build on the PATH,"
+                             " which the check of setup-toolchain rejects")
         if len(timed) < 2:
             errors.append("TIMING=true needs a candidate built from the source; CANDIDATES names none")
 
