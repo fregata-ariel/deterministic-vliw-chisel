@@ -179,7 +179,7 @@ ADR-0020 の決まりを、次の順で行う。
 2. `benchmarks/`・`tests/cases`・`tests/golden` に、ツールの行と `metrics` の `generator` 欄のほかの差分が出た版は採らない。候補を緑にするために記録を作り直さない（R2）。
 3. 版を変える PR は、`project/toolchain.properties`、生成し直した `benchmarks/RESULTS.md` のツールの行（`sbt "crosscheck/Test/runMain vliw.crosscheck.BenchmarkRecords"`）、下の履歴の1行、候補を試す workflow の既定の候補（戻す先の版。`toolchain-candidates.yml` の `CANDIDATES`、`scripts/toolchain-candidates.py` の `DEFAULTS`、上の knob の表の説明。#121 §5）だけを変える。固定の入れ方が変わるとき（5.052 では apt からソースへ）は、[手元で入れる](#手元で入れる)の説明も変える。回避策（ADR-0013 の `--verilate-jobs 1`）には触れない。
 4. その PR の CI と mutation が緑で、`[toolchain]` の行がすべて `(pinned)` であることを確かめてから、マージする。履歴の行の PR の欄には、PR を開いたらその番号を書く。日付の欄は、5.020 の行と同じく main で固定が変わる日（マージの日）で、マージの前の最後の push で書く。
-5. 回避策を外すのは、版が main で安定した後の、別の PR にする。
+5. 回避策を外すのは、版が main で安定した後の、別の PR にする。5.052 では外しても速くならなかったので（[5.052/jobs.md](5.052/jobs.md)）、当面は外さない（2026-10-19 のオーナー判断、ADR-0013 の補足）。外すかどうかは、並列処理が効く場合を調べる #127 の結果で決める。
 6. 戻すのは、版を変えた PR の revert 1つである。revert が当たらず手で戻すときは、properties と一緒に既定の候補（`CANDIDATES` と `DEFAULTS`）も、固定の版でない版にする（revert なら、版を変える前の値に戻る）。`scripts/test-toolchain-candidates.py` は、既定の候補が固定の版のほかの版を試すことを確かめるので、properties だけを戻すと `scripts/check.sh static` が失敗する。
 
 ## 履歴
@@ -198,3 +198,4 @@ ADR-0020 の決まりを、次の順で行う。
 - [5.020/mutation.tsv](5.020/mutation.tsv): #121 の PR 2 で、action で入れた 5.020（apt の 5.020-1、JDK 21）の mutation の判定（Mutation check の run 39130793620、PR の head 0411409）。53 mutant すべて KILLED（category は assertion）。mutant を入れない実行は、8 shard とも1回目で通った。列は `mutant`・`verdict`・`category` で、job のログに出た `results.tsv` から作った
 - 判断の run（#121 の PR 3。Toolchain candidates の run 39175083401、knob は `CANDIDATES="5.032 5.052"`・`MUTATION="5.020 5.052"`・`SEED_RUNS="3"`・`TIMING="true"`）: [5.020/report.md](5.020/report.md)、[5.032/report.md](5.032/report.md)、[5.052/report.md](5.052/report.md)、[5.052/mutation.tsv](5.052/mutation.tsv)。report job が出した記録を、そのまま commit した。どの版も test（seed 3 回）・timing が success で、5.052 の mutation は 5.020 と同じ判定（53 mutant すべて KILLED）。timing の比は 5.032 が 1.052、5.052 が 1.235。5.020 の mutation の判定は、上の PR 2 の run と同じだった
 - #126（#121 の PR A。5.052 を固定にした PR の branch）の run（Toolchain candidates の run 39201497326、knob は `CANDIDATES="apt:5.020-1"`・`SEED_RUNS="10"`）: [5.052/report.md](5.052/report.md) と [5.020/report.md](5.020/report.md) の2つ目の節。固定の版（5.052）と戻す先（apt の 5.020-1）の test が、どちらも 10 回とも success。`scripts/check.sh scala` の step は、5.052 で 426〜701 秒、5.020 で 360〜576 秒だった
+- [5.052/jobs.md](5.052/jobs.md): 5.052 で、`-j 0` と `--verilate-jobs 1` の verilate を手元で比べた記録（2026-10-19、#121）。スレッドの数、生成される C++、時間、並列に動く段階、大きな設計での効き、機械の CPU の構成。速くならず、回避策は当面残す
