@@ -37,10 +37,12 @@ jobs:
       - uses: ./.github/actions/setup-toolchain
       - run: scripts/check.sh scala
         # check.sh stops sbt itself after CHECK_TIMEOUT and records the failure. The step timeout is
-        # only a backstop: it stops the outer shell and leaves sbt running.
+        # only a backstop: it stops the outer shell and leaves sbt running. 960 s leaves room for
+        # Verilator 5.052, whose sbt test takes about 1.24 times as long as 5.020's (#121,
+        # docs/toolchain/5.052/report.md).
         env:
-          CHECK_TIMEOUT: "780"
-        timeout-minutes: 15
+          CHECK_TIMEOUT: "960"
+        timeout-minutes: 18
       # The required check runs with the pinned toolchain only (ADR-0020): each test JVM that
       # simulates prints a [toolchain] line, which shows (env) if VLIW_VERILATOR_EXPECTED changed
       # the expected Verilator. check.sh writes the sbt log to build/check-logs/<UTC time>/.

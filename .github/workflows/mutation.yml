@@ -36,7 +36,7 @@ permissions:
 jobs:
   mutation:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     # One full test run takes about 5.5 minutes on CI, so the mutants are split into shards that run
     # in parallel, each with its own unmutated run first (MUTATION_SHARD in scripts/mutation-check.sh).
     strategy:
@@ -54,8 +54,9 @@ jobs:
           commit: ${{ inputs.commit }}
       # Runs the tests once without a mutant first, then each mutant (KILLED, SURVIVED or ERROR, #74).
       - run: scripts/mutation-check.sh
-        # Shorter than the job, so that a hang still leaves time to upload the logs.
-        timeout-minutes: 110
+        # Shorter than the job, so that a hang still leaves time to upload the logs. 140 minutes: a
+        # shard of Verilator 5.052 took up to 84 minutes (#121, docs/toolchain/5.052/report.md).
+        timeout-minutes: 140
         env:
           MUTATION_LOG_DIR: build/mutation-logs
           MUTATION_SHARD: ${{ matrix.shard }}/8

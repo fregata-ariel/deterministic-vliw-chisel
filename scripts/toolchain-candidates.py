@@ -1485,7 +1485,7 @@ class Report:
         for (part, _, _), s in self.summaries.items():
             if part == "test" and str(s.get("check_timeout", "")).isdigit():
                 return int(s["check_timeout"])
-        return 780
+        return 960
 
     # --- the job log ------------------------------------------------------------------------------
     def print_log(self, out=print):
