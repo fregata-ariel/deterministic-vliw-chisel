@@ -12,6 +12,10 @@ with ZipFile(out / 'index.docx') as doc:
     images = [n for n in doc.namelist() if n.startswith('word/media/')]
     assert len(images) == 14, images
     xml = ET.fromstring(doc.read('word/document.xml'))
+    # Leave room for captions on a portrait page; width alone cannot prevent a tall plot clipping.
+    ns = {'wp': 'http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing'}
+    for size in xml.findall('.//wp:extent', ns):
+        assert int(size.attrib['cy']) <= 8.5 * 914400, 'diagram exceeds the printable page height'
     text = ''.join(xml.itertext())
     for heading in ('E0 発行', 'E2 乗算', 'E4 加算', 'E5 保存', 'E7 終了'):
         assert heading in text, heading
