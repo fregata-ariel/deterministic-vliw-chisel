@@ -397,7 +397,7 @@
   - main 787ae6d の複製で、Verilator 5.052 を使って試した。最初の reset の境界で、RF に書込みが起きる。書戻しの予約表と `loadStage` には reset があるが、その境界ではまだ初期値を持っており、RF への書込みは reset 中も止まらないからである。全 1 では、番号のすべての bit が 1 のレジスタ（16本なら r15、8本なら r7）に両方のポートが書き、Memory のポートの値が残る（既定の構成では X から作った値で、試行では 0。LD の latency が 3 の構成では予約表の初期値の FFFFFFFF だった）。全 0 では何も書かない。乱数では、行き先も値も乱数で、busy・pc・プログラム長の初期値しだいで、その境界に命令が1つ発行され、ST が Scratchpad に書くこともある。どの場合も書くのは未定義の位置だけで、ホストは reset の後に入力を書く（`CoreDriver.start`）。そのため、合法なプログラムの結果は変わらない
   - busy の reset を外す誤り（`Core` と `FixedPipeline` の `RegInit(false.B)` を `Reg(Bool())` にする）を、それまでのテストは見逃した（seed 1 で、2つとも SURVIVED）。全 1 の初期値では、どちらも assertion で止まった（Core は `L2 (program shape) at pc 0`、固定パイプラインは `HOST (the host changed state while the pipeline is busy)`）
   - 全 0・全 1 の値は、幅のある 32 bit の値でなければならない。`RANDOM=0` と `RANDOM='1` では、メモリの初期化のブロックで Verilator が `WIDTHCONCAT`・`WIDTHEXPAND` の警告を出し、ビルドが失敗した。`32'h0` と `32'hFFFFFFFF` は通る
-  - 全部のテストを、すべてのビルドを全 1 に、次に全 0 にして走らせた（それぞれ 111 ビルド）。失敗したのは、初期値の記録が `urandom` であることを確かめる1か所だけだった
+  - 既定（乱数）のビルドをすべて全 1 に、次に全 0 に替えて、全部のテストを走らせた（111 ビルドのうち 103。テストが選んだモードのビルドはそのまま）。失敗したのは、初期値の記録が `urandom` であることを確かめる1か所だけだった
 - **決定**:
   - 初期値を、全 0（`zeros`、`RANDOM=32'h0`）・全 1（`ones`、`RANDOM=32'hFFFFFFFF`）・乱数（`urandom`、`RANDOM=$urandom`。ChiselSim の既定）の3つから、ビルドごとに選べるようにする（`vliw.hw.InitMode`）。`simulateInit(mode)` は、`Settings.default` の `randomization` の `randomValue` を替える（Chisel の公開の API）。`simulate` は乱数のままで、今までのテストはすべてこれを使う
   - `VliwChiselSim` は、すべてのビルドで次を確かめ、満たさなければ、そのテストをビルドの前に、ディレクトリ名を付けて失敗させる
@@ -405,7 +405,7 @@
     - 生成した SystemVerilog（`primary-sources/*.sv`）のすべての `reg` とメモリが、`` `ifndef SYNTHESIS `` の内側の初期化のブロックで、`RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT` の下で、`` `RANDOM `` から作った値だけで初期化される（`SvInitCheck`）
   - モードは、`seed.txt` の隣の `init.txt` に記録する（`init=ones RANDOM=32'hFFFFFFFF` の形）。`seed.txt` と `[sim-seed]` の行の形（ADR-0020 の R3）は変えない
   - テストが選んだモードは、JVM 全体の設定より優先する。後で JVM 全体の設定を足すときは、既定の `urandom` だけを置き換える。この ADR では足さない
-  - 必須の CI で走る `crosscheck/InitStateSpec` を足す（ビルド 7 回）。Core は、既定の構成（mvp-0）を全 0 と全 1 で、`machine-mvp1.json`・`mvp1_mac3.json` と `RtlDifferentialSpec` の2構成を全 1 で走らせる。それぞれ1つの DUT で、L8 だけに反するカナリア（未定義のレジスタと、各 bank の未定義の語を読み、初期値を commit する）、`RtlDifferentialSpec` と同じ seed の合法なプログラム 50 個の参照モデルとの突き合わせ、書かれない位置の確認を行う。番号のすべての bit が 1 のレジスタは、最初の reset の境界で書かれることがあるので、最初の実行の後の値から変わらないことだけを確かめる。固定パイプライン（saxpy8）は全 1 で走らせる。乱数は、ほかのすべてのテストが受け持つ
+  - 必須の CI で走る `crosscheck/InitStateSpec` を足す（ビルド 7 回）。Core は、既定の構成（mvp-0）を全 0 と全 1 で、`machine-mvp1.json`・`mvp1_mac3.json` と `RtlDifferentialSpec` の2構成を全 1 で走らせる。それぞれ1つの DUT で、L8 だけに反するカナリア（未定義のレジスタと、各 bank の未定義の語を読み、初期値を commit する。add のカナリアは 1 + 初期値）、`RtlDifferentialSpec` と同じ seed の合法なプログラム 50 個の参照モデルとの突き合わせ、書かれない位置の確認を行う。番号のすべての bit が 1 のレジスタは、最初の reset の境界で書かれることがあるので、最初の実行の後の値から変わらないことだけを確かめる。固定パイプライン（saxpy8）は全 1 で走らせる。乱数は、ほかのすべてのテストが受け持つ
   - mutant を2つ足す（`hw-busy-no-reset`、`fixed-busy-no-reset`）。`scripts/mutants.tsv` の最後に足し、今までの mutant の shard を変えない。`scripts/mutation-check.sh` は、`mutants.tsv` にない id を与えられたら、sbt の前に exit 2 で止まる
   - オーナー判断（2026-10-20。#129 の M7 の推奨どおり）
     1. `docs/ISA.md` には、この変更で注記を足さない。`ISA.md` は mvp-0 の記述を変えないとしており、「前の実行の後に残った値も未定義」とする文は、実行と実行の間の契約を新しく決めることになる。RTL についての事実（ホストは reset の後に書くこと、最初の reset の境界の書込み）は、`hw/README.md` とこの ADR に書く
@@ -415,14 +415,14 @@
   - 全 0・全 1 は、決まった形の初期状態を、seed によらず作る。全 1 では、reset のない busy が 1 から始まるので、busy の reset を外す誤りがいつも見える。乱数では、busy の初期値の bit が 1 になる seed でだけ見える（試行では、Core の 11 の設計と固定パイプラインの 10 の設計のすべてで、busy の初期値は seed 1〜4 で 0、seed 5〜8 で 1 だった。`VLIW_SIM_SEED=random` なら JVM ごとに約半分の確率になる）
   - 全 0・全 1 のビルドの C++ には乱数の関数の呼出しがないので、値は seed にも Verilator の版にもよらない
   - `simulate` は呼ぶたびにビルドし直すので、モード1つにつきビルドが1回増える。実行時に切り替える方式（plusarg）にしても、ビルドは減らない。define を外して `+verilator+rand+reset` で初期化する方式は、メモリのすべての語が同じ値になり、今のすべてのテストのビルドも変わるので採らない
-  - モードを選んでも、それが設計に届かなければ、テストは黙って通る。そのため、届いたことをテスト自身が確かめる（define の検査、生成した SystemVerilog の検査、カナリア、書かれない位置の値）。初期化の書き方が Chisel や firtool で変われば、すべてのテストが同じ理由で失敗する。firtool の版を上げる PR（ADR-0004）で、検査を合わせて直す
+  - モードを選んでも、それが設計に届かなければ、テストは黙って通る。そのため、届いたことをテスト自身が確かめる（define の検査、生成した SystemVerilog の検査、カナリア、書かれない位置の値）。ただし全 0 では、カナリアと書かれない位置の値は、Verilator の既定の初期値と同じである（ビルドは `+verilator+rand+reset+` を与えないので、初期化のブロックが働かなくても、すべての変数が 0 から始まる）。そのため全 0 では、この2つは届いたことを示さない。全 0 で届いたことは、define の検査、SystemVerilog の検査と、同じ設計で同じ仕組みを通る全 1 のテストで確かめる。初期化の書き方が Chisel や firtool で変われば、すべてのテストが同じ理由で失敗する。firtool の版を上げる PR（ADR-0004）で、検査を合わせて直す
   - モードを絞る理由: 全 0 では、制御のレジスタ（busy・done・pc・プログラム長・書戻しの予約表・`loadStage`）が reset の値と同じになるので、新しく試せるのは reset のない状態だけである。mvp-1 の制御も同じ `Core.scala` なので、全 0 は既定の Core の1つで足りる。固定パイプラインの値のレジスタは書く前に読まれず（`FixedPlan.bind` が値の寿命で割り当てる）、全 0 は reset と同じになるので、全 0 では走らせない。乱数のプログラムを全部（400 個）は走らせない。プログラムが使うのは、入力として宣言した r0〜r3 と [0..3] だけで、未定義の値を読まないので、初期値によって結果は変わらないからである。代わりに、書かれない位置の確認を必須にする
   - `init.txt` を `seed.txt` と分けると、ADR-0020 の R3 の形と、それを読む `scripts/repeat-tests.sh`・`scripts/toolchain-candidates.py` を変えずに済む
   - mutant を `mutants.tsv` の最後に足すと、今までの 53 mutant の shard（`MUTATION_SHARD`）が変わらない
   - 足さない mutant: `WriteReservations` の reset を外すもの（Chisel の `Reg` は reset の間も数え下げるので、プログラムが始まる前に 0 になり、このテストの手順では元と区別できない）と、データ経路で初期値を読むもの（乱数の初期値で、比べる値1つあたり約 2^-32 の見逃ししかない）
   - mutation-check.sh は、`mutants.tsv` にない id を与えると、どの行も走らせずに成功していた（`killed: 0, survived: 0, error: 0, stale: 0`、exit 0）。そのため、「SURVIVED になる」ことを確かめたつもりで、何も走っていないことがありえた
 - **影響**:
-  - `sbt test` のビルドは 8 回増える（`InitStateSpec` で 7、`VliwChiselSimSpec` で 1）。手元（4 コア、Verilator 5.052）では、`InitStateSpec` が 44.7 秒、`VliwChiselSimSpec` の新しいビルドのテストが 5.6 秒で、JUnit の時間の合計は、main の3回（797 秒、776 秒、795 秒）に対して 819 秒だった。CI の時間は、PR の `scala` の run で確かめる（最大 × 1.1 が `CHECK_TIMEOUT` の 960 秒より小さいこと）
+  - `sbt test` のビルドは 8 回増える（`InitStateSpec` で 7、`VliwChiselSimSpec` で 1）。手元（4 コア、Verilator 5.052）では、`InitStateSpec` が 44.7 秒、`VliwChiselSimSpec` の新しいビルドのテストが 5.6 秒だった。JUnit の時間の合計は、この変更で 819 秒（`scripts/check.sh all`）と 807 秒（2つの mutant が KILLED になることを確かめた mutation-check の、mutant なしの1回）だった。main は 797 秒である。これは、main に `mutants.tsv` の2行だけを足した複製で、2つの mutant が SURVIVED になることを確かめた mutation-check の、mutant なしの1回である（同じ run で mutant を入れた2回は 776 秒・795 秒で、すべてのテストが通ったが、RTL を変えているので main の値には数えない）。CI の時間は、PR の `scala` の run で確かめる（最大 × 1.1 が `CHECK_TIMEOUT` の 960 秒より小さいこと）
   - 限界: 全 0・全 1 は、すべての bit が同じ状態である。1つの初期化の語の中の欄はいつも等しくなるので、欄の違いが要る状態（例: reset の境界の `pc < プログラム長`、#112 の DMA の head と tail、カウンタと上限の組）は作れない。必須の CI でそれを見るのは seed 1 の乱数だけで、seed 1 では reset の境界で命令は発行されない。また、X の値（使っていない読出しポートの値、`banks_256x32.sv` と `imem_256x64.sv` の `32'bx`・`64'bx`）は Verilator の `--x-assign` に従い、モードに従わない。svsim にはこれを変える設定がない。合法な Core の経路は X を使わず、使うのは reset の境界の LD の書戻しだけである
   - #110・#112 で状態を足すときは、足すレジスタとメモリを「reset あり」か「reset なし（書く前に読まれない理由を添える）」に分けて書く。reset のない状態を増やすなら、`InitStateSpec` で確かめる位置を足す。最初の reset の境界の書込みを RTL で止めるかも、そこで決める（オーナー判断の 2）
   - JVM 全体で初期値を替える設定（`repeat-tests` と `toolchain-candidates` で、全部のテストを全 0・全 1 で走らせるためのもの）は、別の PR にする

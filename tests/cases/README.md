@@ -73,7 +73,7 @@
 | `crosscheck/ModuloKernelSpec` | ループのベンチマークを Modulo Scheduling（#68）で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出し、トレースから読んだ II が記録した II と一致すること（`ModuloTrace`）。ISA mvp-1 では、ループごとの融合の判定（`mvp1_mac3.json` の `dot8` は MII が上がるので融合しない）、II と cycles、融合したループの MAC の命令を確かめる（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`） |
 | `crosscheck/FixedPipelineKernelSpec` | ベンチマークの固定パイプライン（#75）を ChiselSim で実行し、乱数・全0・全1の入力で DSL の参照実装と同じ出力を、計画どおりの cycles と発行・書戻しの cycle で出すこと。FIR の係数を変えても同じ回路で正しいこと（係数可変） |
 | `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json` と `mvp1_mac3.json`）。RTL のタイミングが入力値に依存しないこと |
-| `crosscheck/InitStateSpec` | すべてのレジスタとメモリを全 0・全 1 から始めた RTL（`simulateInit`、#129）で、L8 だけに反するカナリア（未定義のレジスタと、各 bank の未定義の語を読む）がその値を commit すること、`RtlDifferentialSpec` の合法なプログラム 50 個のトレース・cycles・定義された最終値が参照モデルと一致すること、プログラムが書かない語とレジスタが初期値のままであること（既定の構成は全 0 と全 1、mvp-1 の2構成と `RtlDifferentialSpec` の2構成は全 1）。saxpy8 の固定パイプラインを全 1 で、計画どおりの出力・cycles・発行と書戻しの cycle と、書かない語の値。乱数の初期値は、ほかのすべてのテストが受け持つ |
+| `crosscheck/InitStateSpec` | すべてのレジスタとメモリを全 0・全 1 から始めた RTL（`simulateInit`、#129）で、L8 だけに反するカナリア（未定義のレジスタと、各 bank の未定義の語を読む）が初期値（add のカナリアは 1 + 初期値）を commit すること、`RtlDifferentialSpec` の合法なプログラム 50 個のトレース・cycles・定義された最終値が参照モデルと一致すること、プログラムが書かない語と r4〜最後から2番目のレジスタが初期値のままであること（番号のすべての bit が 1 のレジスタは、最初の reset の境界で書かれることがあるので、最初の実行の後の値から変わらないこと）。既定の構成は全 0 と全 1、mvp-1 の2構成と `RtlDifferentialSpec` の2構成は全 1 で走らせる。saxpy8 の固定パイプラインを全 1 で、計画どおりの出力・cycles・発行と書戻しの cycle と、書かない語の値。乱数の初期値は、ほかのすべてのテストが受け持つ |
 
 RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
 

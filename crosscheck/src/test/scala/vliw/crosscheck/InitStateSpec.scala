@@ -23,12 +23,18 @@ import vliw.isa._
   * from all zeros or all ones (firtool's `RANDOM`, [[vliw.hw.InitMode]]); the random initial state
   * is that of every other test, at `VLIW_SIM_SEED`. On one core per design and mode:
   *   1. canaries, programs that are illegal only by L8, read an undefined register and an undefined
-  *      word of each bank, and commit the pattern: the mode reached the design;
+  *      word of each bank, and commit the pattern (the add canary 1 + the pattern): in ones, the
+  *      mode reached the design;
   *   1. 50 random legal programs of [[RtlDifferentialSpec]] give the reference model's traces,
   *      cycles and defined final values;
   *   1. every word and register that nothing wrote still holds the pattern. The register whose
   *      index bits are all 1 can be written at the first reset edge (ADR-0021), so it only has to
   *      keep the value it had after the first run.
+  *
+  * In zeros, the canaries and the unwritten values cannot show that the mode reached the design:
+  * the build passes no `+verilator+rand+reset+`, so Verilator's default initialisation also starts
+  * every variable at 0. For zeros that rests on the define check, [[vliw.hw.SvInitCheck]] and the
+  * ones test of the same design, which takes the same path.
   *
   * Zeros runs on the default Core only: there every control register (busy, done, pc, length, the
   * write-back schedules, loadStage) starts at its reset value, so zeros tests only the state
