@@ -1,0 +1,44 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vlat_spacing",
+  "description": "新しい演算のレイテンシーを変えた構成（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3）。結果は s+L から見える（VSUB は LD.W の結果をちょうど s+3 で読む）",
+  "machine": "tests/machines/mvp2_vlat.json",
+  "program": [
+    "@0: vadd r8:r9, r2:r3, r2:r3 | ld.w r6:r7, [0] ; E_2 and E_3",
+    "@1: vmul r4:r5, r1, r2:r3                       ; E_4",
+    "@2: nop",
+    "@3: vsub r10:r11, r8:r9, r6:r7                  ; E_5",
+    "@4: nop",
+    "@5: vmac r12:r13, r1, r4:r5, r10:r11            ; E_8",
+    "@6: nop",
+    "@7: nop",
+    "@8: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 10,
+      "r3": 20
+    },
+    "memory": {
+      "0": 1,
+      "1": 2
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 9,
+    "registers": {
+      "r4": 20,
+      "r5": 40,
+      "r6": 1,
+      "r7": 2,
+      "r8": 20,
+      "r9": 40,
+      "r10": 19,
+      "r11": 38,
+      "r12": 59,
+      "r13": 118
+    }
+  }
+}

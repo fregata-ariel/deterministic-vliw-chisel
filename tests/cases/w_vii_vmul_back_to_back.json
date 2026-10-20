@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vii_vmul_back_to_back",
+  "description": "VMUL の II が2の構成で、VMUL を連続するサイクルに発行する（L9）。VMUL は MUL と別の演算器を持つ",
+  "machine": "tests/machines/mvp2_vii.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3",
+    "@1: vmul r6:r7, r1, r2:r3",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r3": 3
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L9"
+      ]
+    }
+  }
+}

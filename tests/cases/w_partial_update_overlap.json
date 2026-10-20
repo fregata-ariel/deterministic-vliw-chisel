@@ -1,0 +1,29 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_partial_update_overlap",
+  "description": "組の部分更新も、区間が重なれば L4。VMUL r4:r5 の r5 の区間 [0, 2) と LD r5 の [1, 3) が重なる",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3",
+    "@1: nop | ld r5, [0]",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r3": 3
+    },
+    "memory": {
+      "0": 4
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L4"
+      ]
+    }
+  }
+}

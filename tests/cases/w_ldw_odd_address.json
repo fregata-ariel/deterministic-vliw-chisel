@@ -1,0 +1,44 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_ldw_odd_address",
+  "description": "LD.W・ST.W の番地は奇数でもよい。レーン0 は語 a、レーン1 は語 a+1。a = 17 では、語 17 は bank 1 の行 8、語 18 は bank 0 の次の行 9 にある。偶数の a は同じ行の bank 0 と bank 1。ST.W の2語を LD で1語ずつ読み直す",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [17] ; r2 = [17] (bank 1, row 8), r3 = [18] (bank 0, row 9)",
+    "@1: nop | ld.w r4:r5, [40] ; r4 = [40] (bank 0, row 20), r5 = [41] (bank 1, row 20)",
+    "@2: nop",
+    "@3: nop | st.w [33], r2:r3 ; [33] = r2 (bank 1, row 16), [34] = r3 (bank 0, row 17)",
+    "@4: nop | st.w [42], r4:r5",
+    "@5: nop | ld r6, [33]",
+    "@6: nop | ld r7, [34]",
+    "@7: nop",
+    "@8: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "17": "0x11111111",
+      "18": "0x22222222",
+      "40": 7,
+      "41": 9
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 9,
+    "registers": {
+      "r2": "0x11111111",
+      "r3": "0x22222222",
+      "r4": 7,
+      "r5": 9,
+      "r6": "0x11111111",
+      "r7": "0x22222222"
+    },
+    "memory": {
+      "33": "0x11111111",
+      "34": "0x22222222",
+      "42": 7,
+      "43": 9
+    }
+  }
+}

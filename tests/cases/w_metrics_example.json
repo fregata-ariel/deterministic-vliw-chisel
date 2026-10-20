@@ -1,0 +1,38 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_metrics_example",
+  "description": "docs/METRICS.md の vliw-metrics/3 の例: 奇数の番地の LD.W、LD、r1 のブロードキャストの VMUL、ST.W",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [17]",
+    "@1: nop | ld r1, [0]",
+    "@2: nop",
+    "@3: vmul r4:r5, r1, r2:r3",
+    "@4: nop",
+    "@5: nop | st.w [20], r4:r5",
+    "@6: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 3,
+      "17": 5,
+      "18": "0xFFFFFFFF"
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 7,
+    "registers": {
+      "r1": 3,
+      "r2": 5,
+      "r3": "0xFFFFFFFF",
+      "r4": 15,
+      "r5": "0xFFFFFFFD"
+    },
+    "memory": {
+      "20": 15,
+      "21": "0xFFFFFFFD"
+    }
+  }
+}

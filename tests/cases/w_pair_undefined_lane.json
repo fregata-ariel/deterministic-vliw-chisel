@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_pair_undefined_lane",
+  "description": "L8 はレジスタごと: 組の欄 r2:r3 の r3 に入力宣言が無い",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vadd r4:r5, r2:r3, r6:r7",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1,
+      "r6": 2,
+      "r7": 3
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L8"
+      ]
+    }
+  }
+}

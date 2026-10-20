@@ -1,0 +1,24 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_ldw_undefined_word",
+  "description": "L8 は語ごと: LD.W [8] は語 8 と 9 を読み、9 は入力宣言が無い（L8）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [8]",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "8": 1
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L8"
+      ]
+    }
+  }
+}

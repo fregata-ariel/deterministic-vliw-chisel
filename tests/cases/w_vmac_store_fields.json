@@ -1,0 +1,29 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vmac_store_fields",
+  "description": "L11 は欄の数（形 F）。読出しポートが3本の構成では、VMAC（欄3）と ST（欄1）を同じ bundle に置けない（欄4）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vmac r4:r5, r2, r6:r7, r8:r9 | st [0], r1",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r6": 3,
+      "r7": 4,
+      "r8": 5,
+      "r9": 6
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L11"
+      ]
+    }
+  }
+}

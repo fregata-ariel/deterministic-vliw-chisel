@@ -32,13 +32,40 @@ class MetricsSpec extends AnyFunSuite {
   /** Register reads of a bundle, counted by operand field as docs/ISA.md rule L11 counts them. */
   private def readFields(b: Bundle): Int = {
     val compute = b.compute match {
-      case _: ComputeOp.Add | _: ComputeOp.Sub | _: ComputeOp.Mul                               => 2
-      case _: ComputeOp.Mac                                                                     => 3
-      case ComputeOp.Nop | ComputeOp.Halt                                                       => 0
-      case op @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
-        fail(s"$op: the metrics of ISA mvp-2 come with #110 stage 2")
+      case _: ComputeOp.Add | _: ComputeOp.Sub | _: ComputeOp.Mul    => 2
+      case _: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul => 2
+      case _: ComputeOp.Mac | _: ComputeOp.VMac                      => 3
+      case ComputeOp.Nop | ComputeOp.Halt                            => 0
     }
-    compute + (if (b.memory.isInstanceOf[MemoryOp.St]) 1 else 0)
+    val memory = b.memory match {
+      case _: MemoryOp.St | _: MemoryOp.StW => 1
+      case _                                => 0
+    }
+    compute + memory
+  }
+
+  /** The 32-bit registers a bundle reads, one entry per field and register (ISA mvp-2: a pair field
+    * reads r(p) and r(p+1), a broadcast rs1 one register).
+    */
+  private def readRegisters(b: Bundle): Seq[Int] = {
+    def pair(p: Int) = Seq(p, p + 1)
+    val compute = b.compute match {
+      case ComputeOp.Add(_, x, y)         => Seq(x, y)
+      case ComputeOp.Sub(_, x, y)         => Seq(x, y)
+      case ComputeOp.Mul(_, x, y)         => Seq(x, y)
+      case ComputeOp.Mac(_, x, y, z)      => Seq(x, y, z)
+      case ComputeOp.VAdd(_, x, y)        => pair(x) ++ pair(y)
+      case ComputeOp.VSub(_, x, y)        => pair(x) ++ pair(y)
+      case ComputeOp.VMul(_, x, y, bc)    => (if (bc) Seq(x) else pair(x)) ++ pair(y)
+      case ComputeOp.VMac(_, x, y, z, bc) => (if (bc) Seq(x) else pair(x)) ++ pair(y) ++ pair(z)
+      case ComputeOp.Nop | ComputeOp.Halt => Nil
+    }
+    val memory = b.memory match {
+      case MemoryOp.St(_, r)  => Seq(r)
+      case MemoryOp.StW(_, r) => pair(r)
+      case _                  => Nil
+    }
+    compute ++ memory
   }
 
   /** Every key path of a record, in the order they are written; arrays are not entered. */
@@ -157,16 +184,15 @@ class MetricsSpec extends AnyFunSuite {
         val bundles = new BundleCodec(c.machine).decodeAll(c.words).toOption.get
         val issue = m("issue")
         val ops = issue("by_operation")
-        val macs = ops.obj.get("MAC").fold(0.0)(_.num)
-        // Every issued operation completes before done, so each one commits exactly once.
-        assert(
-          m("writeback")("compute")("commits").num ==
-            ops("ADD").num + ops("SUB").num + ops("MUL").num + macs,
-          c.name
-        )
-        assert(m("writeback")("memory")("commits").num == ops("LD").num, c.name)
-        assert(m("scratchpad")("writes").num == ops("ST").num, c.name)
-        assert(m("scratchpad")("reads").num == ops("LD").num, c.name)
+        def n(op: String) = ops.obj.get(op).fold(0.0)(_.num)
+        // Every issued operation completes before done, so each one commits exactly once. A vector
+        // operation or LD.W commits two registers in one use of its port; ST.W writes two words.
+        val scalar = n("ADD") + n("SUB") + n("MUL") + n("MAC")
+        val vector = n("VADD") + n("VSUB") + n("VMUL") + n("VMAC")
+        assert(m("writeback")("compute")("commits").num == scalar + vector, c.name)
+        assert(m("writeback")("memory")("commits").num == n("LD") + n("LD.W"), c.name)
+        assert(m("scratchpad")("writes").num == n("ST") + 2 * n("ST.W"), c.name)
+        assert(m("scratchpad")("reads").num == n("LD") + 2 * n("LD.W"), c.name)
         assert(m("cycles").num == bundles.size, c.name)
         val compute = issue("compute")
         assert(
@@ -176,10 +202,41 @@ class MetricsSpec extends AnyFunSuite {
         val perBank = m("scratchpad")("banks").arr
         assert(perBank.size == c.machine.banks, c.name)
         assert(
-          perBank.map(b => b("reads").num + b("writes").num).sum == ops("LD").num + ops("ST").num,
+          perBank.map(b => b("reads").num + b("writes").num).sum ==
+            m("scratchpad")("reads").num + m("scratchpad")("writes").num,
           c.name
         )
-        if (c.machine.isaVersion == IsaVersion.Mvp1) {
+        if (c.machine.isaVersion == IsaVersion.Mvp2) {
+          assert(m("metrics").str == "vliw-metrics/3", c.name)
+          assert(ops.obj.keys.toSeq == Mvp2Operations, c.name)
+          assert(m("writeback")("compute")("registers").num == scalar + 2 * vector, c.name)
+          assert(m("writeback")("memory")("registers").num == n("LD") + 2 * n("LD.W"), c.name)
+          val sp = m("scratchpad")
+          assert(sp("read_operations").num == n("LD") + n("LD.W"), c.name)
+          assert(sp("write_operations").num == n("ST") + n("ST.W"), c.name)
+          val reads = issue("register_reads")
+          val byReads = reads("bundles_by_reads").obj.toSeq.map { case (k, v) => (k, v.num) }
+          assert(
+            byReads == (0 to c.machine.readPorts)
+              .map(k => k.toString -> bundles.count(readFields(_) == k).toDouble),
+            c.name
+          )
+          assert(reads("reads").num == bundles.map(readFields).sum, c.name)
+          val registers = bundles.flatMap(readRegisters)
+          assert(reads("registers").num == registers.size, c.name)
+          val rfBanks = reads("banks").arr.map(b => (b("bank").num.toInt, b("registers").num))
+          assert(
+            rfBanks == Seq(0, 1).map(k => (k, registers.count(_ % 2 == k).toDouble)),
+            c.name
+          )
+          val rs3WithStore = bundles.count {
+            case Bundle(_: ComputeOp.Mac | _: ComputeOp.VMac, _: MemoryOp.St | _: MemoryOp.StW) =>
+              true
+            case _ => false
+          }
+          assert(issue("rs3_with_store").num == rs3WithStore, c.name)
+          assert(!issue.obj.contains("mac_with_st"), c.name)
+        } else if (c.machine.isaVersion == IsaVersion.Mvp1) {
           assert(m("metrics").str == "vliw-metrics/2", c.name)
           val reads = issue("register_reads")
           val byReads = reads("bundles_by_reads").obj.toSeq.map { case (k, n) => (k, n.num) }
@@ -235,20 +292,154 @@ class MetricsSpec extends AnyFunSuite {
     assert(a == b, "metrics of a fixed schedule must not change with the data")
   }
 
-  test("ISA mvp-2 is refused until #110 stage 2 (vliw-metrics/3), not written as /1") {
-    val mvp2 = MachineDescription
-      .load(MachineDescription.Mvp2Path)
-      .fold(es => fail(es.mkString), identity)
-    val run = ReferenceModel.run(isaCase.machine, isaCase.words, isaCase.inputs).toOption.get
-    val expected = "ISA mvp-2 is not implemented in the metrics yet (#110 stage 2)"
-    assert(
-      intercept[UnsupportedOperationException](Metrics.format(mvp2)).getMessage.startsWith(expected)
+  // ISA mvp-2 (#110 stage 2): vliw-metrics/3.
+
+  private val mvp2 = MachineDescription
+    .load(MachineDescription.Mvp2Path)
+    .fold(es => fail(es.mkString), identity)
+
+  private val Mvp2Operations =
+    Seq(
+      "ADD",
+      "SUB",
+      "MUL",
+      "MAC",
+      "VADD",
+      "VSUB",
+      "VMUL",
+      "VMAC",
+      "LD",
+      "ST",
+      "LD.W",
+      "ST.W",
+      "HALT"
     )
-    assert(
-      intercept[UnsupportedOperationException](Metrics.of(mvp2, isaCase.words, run, "w")).getMessage
-        .startsWith(expected)
-    )
-    assert(Metrics.format(mvp1) == "vliw-metrics/2")
+
+  /** The example of docs/METRICS.md "vliw-metrics/3": M[0] = 3, M[17] = 5, M[18] = 2^32 - 1. */
+  private def mvp2Record = recordOf(
+    mvp2,
+    "nop | ld.w r2:r3, [17]\nnop | ld r1, [0]\nnop\nvmul r4:r5, r1, r2:r3\nnop\n" +
+      "nop | st.w [20], r4:r5\nhalt",
+    Map.empty,
+    Map(0 -> 3L, 17 -> 5L, 18 -> 0xffffffffL)
+  )
+
+  test("the format follows the ISA version: /1, /2 and /3") {
     assert(Metrics.format(isaCase.machine) == "vliw-metrics/1")
+    assert(Metrics.format(mvp1) == "vliw-metrics/2")
+    assert(Metrics.format(mvp2) == "vliw-metrics/3")
+  }
+
+  test("mvp-2: the example of docs/METRICS.md, every count derived by hand") {
+    val m = mvp2Record
+    assert(m("metrics").str == "vliw-metrics/3" && m("isa").str == "mvp-2")
+    assert(
+      m("machine")("id").str == "vliw2-i32-sp2-mac-w2" && m("machine")("hash").str == mvp2.hash
+    )
+    assert(m("program")("bundles").num == 7 && m("cycles").num == 7)
+    val issue = m("issue")
+    // Compute slot: VMUL, HALT and 5 NOPs. Memory slot: LD.W, LD and ST.W, 4 NOPs.
+    assert(issue("compute")("operations").num == 1 && issue("compute")("nop").num == 5)
+    assert(issue("compute")("nop_rate").num == 0.714286)
+    assert(issue("memory")("operations").num == 3 && issue("memory")("nop").num == 4)
+    assert(issue("memory")("nop_rate").num == 0.571429)
+    val ops = issue("by_operation").obj.toSeq.map { case (k, v) => (k, v.num.toInt) }
+    val one = Set("VMUL", "LD", "LD.W", "ST.W", "HALT")
+    assert(ops == Mvp2Operations.map(k => (k, if (one(k)) 1 else 0)))
+    // Fields: vmul reads r1 (broadcast) and r2:r3, st.w reads r4:r5. Registers: r1, r2, r3, r4, r5;
+    // RF bank 0 holds r2 and r4, bank 1 r1, r3 and r5.
+    val reads = issue("register_reads")
+    assert(reads("read_ports").num == 3 && reads("reads").num == 3 && reads("registers").num == 5)
+    assert(
+      reads("banks").arr.map(b => (b("bank").num, b("registers").num)) == Seq((0, 2), (1, 3))
+    )
+    val byReads = reads("bundles_by_reads").obj.toSeq.map { case (k, v) => (k, v.num) }
+    assert(byReads == Seq("0" -> 5.0, "1" -> 1.0, "2" -> 1.0, "3" -> 0.0))
+    assert(issue("rs3_with_store").num == 0 && !issue.obj.contains("mac_with_st"))
+    // Write-back: one operation (VMUL, 2 registers) on the compute port; LD.W (2) and LD (1) on the
+    // memory port.
+    val wb = m("writeback")
+    assert(wb("compute")("commits").num == 1 && wb("compute")("registers").num == 2)
+    assert(wb("compute")("utilization").num == 0.142857)
+    assert(wb("memory")("commits").num == 2 && wb("memory")("registers").num == 3)
+    assert(wb("memory")("utilization").num == 0.285714)
+    // Words 17, 18 and 0 read, words 20 and 21 written; 17 and 21 are in bank 1.
+    val sp = m("scratchpad")
+    assert(sp("read_operations").num == 2 && sp("write_operations").num == 1)
+    assert(
+      sp("reads").num == 3 && sp("writes").num == 2 && sp("accesses_per_cycle").num == 0.714286
+    )
+    val banks = sp("banks").arr.map { b =>
+      (b("bank").num, b("reads").num, b("writes").num, b("accesses_per_cycle").num)
+    }
+    assert(banks == Seq((0, 2, 1, 0.428571), (1, 1, 1, 0.285714)))
+    assert(m("ii").isNull && m("rtl").isNull)
+  }
+
+  test("vliw-metrics/3 has the keys of docs/METRICS.md, whatever the machine") {
+    val vectorOps = Seq("VADD", "VSUB", "VMUL", "VMAC")
+    val reads = Seq("read_ports", "reads", "registers", "banks", "bundles_by_reads")
+      .map("issue.register_reads." + _)
+    val expected = paths(mvp1Record).flatMap {
+      case p @ "issue.by_operation.MAC" => p +: vectorOps.map("issue.by_operation." + _)
+      case p @ "issue.by_operation.ST"  =>
+        Seq(p, "issue.by_operation.LD.W", "issue.by_operation.ST.W")
+      case "issue.register_reads.read_ports" | "issue.register_reads.reads" => Nil
+      case "issue.register_reads.bundles_by_reads"                          => reads
+      case "issue.mac_with_st"             => Seq("issue.rs3_with_store")
+      case p @ "writeback.compute.commits" => Seq(p, "writeback.compute.registers")
+      case p @ "writeback.memory.commits"  => Seq(p, "writeback.memory.registers")
+      case "scratchpad.reads"              =>
+        Seq("scratchpad.read_operations", "scratchpad.write_operations", "scratchpad.reads")
+      case p => Seq(p)
+    }
+    assert(paths(mvp2Record) == expected)
+    // W-reg has the LD.W and ST.W keys too, with 0.
+    val mw1 = MachineDescription
+      .load(Paths.get("tests", "machines", "mvp2_mw1.json"))
+      .fold(es => fail(es.mkString), identity)
+    val w = recordOf(
+      mw1,
+      "vadd r4:r5, r2:r3, r2:r3 | ld r6, [0]\nnop\nhalt",
+      Map(2 -> 1L, 3 -> 2L),
+      Map(0 -> 3L)
+    )
+    assert(paths(w) == paths(mvp2Record))
+    assert(
+      w("issue")("by_operation")("LD.W").num == 0 && w("issue")("by_operation")("ST.W").num == 0
+    )
+  }
+
+  test("mvp-2: VMAC or MAC with ST or ST.W, counted on 4 read ports") {
+    val rp4 = MachineDescription
+      .load(Paths.get("tests", "machines", "mvp2_rp4.json"))
+      .fold(es => fail(es.mkString), identity)
+    val w = recordOf(
+      rp4,
+      "vmac r4:r5, r2, r6:r7, r8:r9 | st.w [0], r10:r11\nmac r12, r1, r2, r3 | st [2], r1\n" +
+        "vmac r4:r5, r2, r6:r7, r8:r9 | ld.w r10:r11, [4]\nnop\nhalt",
+      (1 to 11).map(r => r -> r.toLong).toMap,
+      Map(4 -> 1L, 5 -> 2L)
+    )
+    val issue = w("issue")
+    assert(issue("rs3_with_store").num == 2)
+    val reads = issue("register_reads")
+    // Fields 4, 4, 3, 0, 0; registers 1 + 2 + 2 + 2, 4, 1 + 2 + 2.
+    assert(reads("reads").num == 11 && reads("registers").num == 16)
+    val byReads = reads("bundles_by_reads").obj.toSeq.map { case (k, v) => (k, v.num) }
+    assert(byReads == Seq("0" -> 2.0, "1" -> 0.0, "2" -> 0.0, "3" -> 1.0, "4" -> 2.0))
+  }
+
+  test("mvp-2: the record does not depend on input values") {
+    val src = "vmac r4:r5, r1, r2:r3, r6:r7 | ld.w r8:r9, [3]\nnop\nnop | st.w [5], r4:r5\nhalt"
+    val a =
+      recordOf(mvp2, src, Map(1 -> 1L, 2 -> 2L, 3 -> 3L, 6 -> 4L, 7 -> 5L), Map(3 -> 6L, 4 -> 7L))
+    val b = recordOf(
+      mvp2,
+      src,
+      Map(1 -> 0xffffffffL, 2 -> 9L, 3 -> 0L, 6 -> 123L, 7 -> 0x80000000L),
+      Map(3 -> 0L, 4 -> 0xffffffffL)
+    )
+    assert(a == b)
   }
 }

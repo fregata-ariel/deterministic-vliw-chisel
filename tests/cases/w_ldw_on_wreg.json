@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_ldw_on_wreg",
+  "description": "W-reg（max_words_per_access 1）では LD.W の opcode 3 は未知で、L1（0x3a08800000000000）",
+  "machine": "tests/machines/mvp2_mw1.json",
+  "program_hex": [
+    "3a08800000000000",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_lanes",
+  "description": "VADD・VSUB・VMUL・VMAC はレーンごとに 2^32 を法とする。レーン0 の桁上がり・借り・積の上位 bit はレーン1 に入らない。VMAC の加数は同じレーンの rs3 である",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vadd r4:r5, r0:r1, r2:r3          ; (2^32-1) + 1 = 0 and 1 + (2^32-1) = 0, no carry across",
+    "@1: vsub r10:r11, r2:r3, r0:r1        ; 1 - (2^32-1) = 2 and (2^32-1) - 1",
+    "@2: vmul r12:r13, r6:r7, r8:r9        ; 2^31 * 2 = 0 and 3 * (2^31-1) = 2^31 - 3",
+    "@3: nop",
+    "@4: vmac r14:r15, r6:r7, r8:r9, r10:r11 ; 0 + 2 = 2 and (2^31-3) + (2^32-2)",
+    "@5: nop",
+    "@6: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r0": "0xFFFFFFFF",
+      "r1": 1,
+      "r2": 1,
+      "r3": "0xFFFFFFFF",
+      "r6": "0x80000000",
+      "r7": 3,
+      "r8": 2,
+      "r9": "0x7FFFFFFF"
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 7,
+    "registers": {
+      "r4": 0,
+      "r5": 0,
+      "r10": 2,
+      "r11": "0xFFFFFFFE",
+      "r12": 0,
+      "r13": "0x7FFFFFFD",
+      "r14": 2,
+      "r15": "0x7FFFFFFB"
+    }
+  }
+}

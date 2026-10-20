@@ -1,0 +1,47 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_mw1_gather",
+  "description": "W-reg（max_words_per_access 1）: LD.W・ST.W は無いので、スカラーの LD 2つで組を集め、VMUL・VMAC の結果をスカラーの ST 2つで書く",
+  "machine": "tests/machines/mvp2_mw1.json",
+  "program": [
+    "@0: nop                   | ld r2, [0]",
+    "@1: nop                   | ld r3, [1]",
+    "@2: nop                   | ld r4, [2]",
+    "@3: vmul r6:r7, r1, r2:r3 | ld r5, [3] ; both at E_5, on two ports",
+    "@4: nop",
+    "@5: vmac r8:r9, r1, r4:r5, r6:r7",
+    "@6: nop",
+    "@7: nop                   | st [4], r8",
+    "@8: nop                   | st [5], r9",
+    "@9: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2
+    },
+    "memory": {
+      "0": 1,
+      "1": 2,
+      "2": 3,
+      "3": 4
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 10,
+    "registers": {
+      "r2": 1,
+      "r3": 2,
+      "r4": 3,
+      "r5": 4,
+      "r6": 2,
+      "r7": 4,
+      "r8": 8,
+      "r9": 12
+    },
+    "memory": {
+      "4": 8,
+      "5": 12
+    }
+  }
+}

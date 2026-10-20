@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_ldw_out_of_range",
+  "description": "LD.W [511] はエンコードできるが、512語の machine では語 512 が範囲外（L7）。語 512 は入力宣言できず、書く ST も無いので、未定義値でもある（L8）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [511]",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "511": 1
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L7",
+        "L8"
+      ]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_ldw_last_words",
+  "description": "512語の machine で、LD.W [510] は語 510 と 511 を読む（合法の端）。ST.W [508] は語 508 と 509 に書く",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [510]",
+    "@1: nop",
+    "@2: nop | st.w [508], r2:r3",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "510": 5,
+      "511": 6
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 4,
+    "registers": {
+      "r2": 5,
+      "r3": 6
+    },
+    "memory": {
+      "508": 5,
+      "509": 6
+    }
+  }
+}

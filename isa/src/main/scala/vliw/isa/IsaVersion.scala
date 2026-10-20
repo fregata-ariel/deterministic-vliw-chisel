@@ -32,10 +32,4 @@ object IsaVersion {
     Option.when(machine.isaVersion == Mvp2)(
       s"ISA mvp-2 is not implemented in $component yet (#110 $stage); machine ${machine.machineId}"
     )
-
-  /** [[notImplemented]] as an exception, for code whose result has no place for the reason. */
-  def requireImplemented(machine: MachineDescription, component: String, stage: String): Unit =
-    notImplemented(machine, component, stage).foreach { reason =>
-      throw new UnsupportedOperationException(reason)
-    }
 }

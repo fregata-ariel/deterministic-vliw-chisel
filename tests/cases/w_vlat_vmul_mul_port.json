@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vlat_vmul_mul_port",
+  "description": "VMUL のレイテンシーが3の構成では、VMUL(s) と MUL(s+1) が E_(s+3) で Compute ポートに衝突する（L5）",
+  "machine": "tests/machines/mvp2_vlat.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3",
+    "@1: mul r6, r1, r2",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r3": 3
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L5"
+      ]
+    }
+  }
+}

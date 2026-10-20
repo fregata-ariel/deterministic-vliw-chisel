@@ -139,12 +139,12 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 
 ## 実装ごとの対応範囲
 
-machine description の契約は3段に分かれる。ローダが受け付ける構成は、すべて verifier と参照モデルで扱える（mvp-2 は #110 の第2段までは除く。下）。RTL はその一部だけを実装し、範囲外の構成は組み立て時に理由付きで拒否する（[ADR-0009](DECISIONS.md)）。
+machine description の契約は3段に分かれる。ローダが受け付ける構成は、すべて verifier と参照モデルで扱える（mvp-2 は #110 の第2段から。下）。RTL はその一部だけを実装し、範囲外の構成は組み立て時に理由付きで拒否する（[ADR-0009](DECISIONS.md)）。
 
 | 段 | 判定する場所 | 範囲 |
 |---|---|---|
 | 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
-| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77）。mvp-2 は #110 の第2段で扱う（下） |
+| 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77）。mvp-2 は #110 の第2段で加えた（下） |
 | RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体。mvp-1 では、加えて `read_ports` が3（読出し4本の RTL は #57 で足す。ADR-0018）。mvp-2 は #110 の第3段で扱う（下） |
 | 固定パイプライン（#75） | `FixedParams`（`hw`） | RTL と同じ。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017） |
 
@@ -168,7 +168,7 @@ mvp-2（W）の範囲は次のとおりで、#110 の各段で実装する（○
 | LD.W の latency が2未満、ST・ST.W の latency が1でない | ○ | ○（第2段） | × | 上の LD・ST と同じ理由 |
 | 固定パイプライン（#75） | — | — | × | MAC と同じ扱い（[PHASE3.md](PHASE3.md)） |
 
-その段が入るまでは、mvp-2 の machine を mvp-1 として扱わずに、理由付きで拒否する。mvp-1 として扱うと、黙って誤るからである（RTL は W の命令語を未知の opcode として実行し、メトリクスは `vliw-metrics/1` を書き、コンパイラは mvp-2 の名前で mvp-1 の命令列を作る）。`ReferenceModel`・`Metrics`（`sim`）と `Verifier`（`compiler`）は例外を投げ（第2段まで。`compiler/run verify` と `sim/run` は、呼ぶ前に同じ理由を表示して、入力の誤りの終了コード2で終わる）、`KernelCompiler.prepare`・`ModuloCompiler.prepare` は理由を返し（第4〜5段まで）、`CoreParams.unsupported` は理由を返す（第3段まで。`FixedParams` も同じ理由で拒否する）。第3段では、`CoreParams.unsupported` と `computeLatencies` を、決まった演算の一覧ではなく machine の全演算で数えるように直す（今のままだと、新しい演算の ii が1でなくても受け付け、`maxLatency` が小さくなり得る）。
+その段が入るまでは、mvp-2 の machine を mvp-1 として扱わずに、理由付きで拒否する。mvp-1 として扱うと、黙って誤るからである（RTL は W の命令語を未知の opcode として実行し、コンパイラは mvp-2 の名前で mvp-1 の命令列を作る）。`KernelCompiler.prepare`・`ModuloCompiler.prepare` は理由を返し（第4〜5段まで）、`CoreParams.unsupported` は理由を返す（第3段まで。`FixedParams` も同じ理由で拒否する）。`ReferenceModel`・`Metrics`（`sim`）と `Verifier`（`compiler`）、`compiler/run verify` と `sim/run` は、第1段では例外を投げるか入力の誤り（終了コード2）で終わっていたが、第2段で mvp-2 を扱うようになった（`Metrics` は `vliw-metrics/3` を書く）。第3段では、`CoreParams.unsupported` と `computeLatencies` を、決まった演算の一覧ではなく machine の全演算で数えるように直す（今のままだと、新しい演算の ii が1でなくても受け付け、`maxLatency` が小さくなり得る）。
 
 `CoreParams.check` は、範囲外の設定を理由付きですべて返す。`sbt "hw/run [dir] [machine.json]"` は理由を表示して終了し、`CoreParams` を直接作ると組み立て時に例外になる。
 

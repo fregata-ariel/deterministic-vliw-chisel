@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_broadcast_on_vadd",
+  "description": "B（bit 11）は VMUL・VMAC だけにある。VADD の bit 11 は予約で、1なら L1（0x0000000054260800）",
+  "machine": "config/machine-mvp2.json",
+  "program_hex": [
+    "0000000054260800",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

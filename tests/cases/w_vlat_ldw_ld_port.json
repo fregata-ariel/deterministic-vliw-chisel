@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vlat_ldw_ld_port",
+  "description": "LD.W のレイテンシーが3の構成では、LD.W(s) と LD(s+1) が E_(s+3) で Memory ポートに衝突する（L5）",
+  "machine": "tests/machines/mvp2_vlat.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [0]",
+    "@1: nop | ld r4, [2]",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 1,
+      "1": 2,
+      "2": 3
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L5"
+      ]
+    }
+  }
+}

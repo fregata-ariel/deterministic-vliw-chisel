@@ -1,0 +1,28 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vii_ldw_next_row_in_flight",
+  "description": "ST のレイテンシーが2の構成で、奇数の番地の LD.W [17] のレーン1（語 18。bank 0 の次の行 9）が、書込み中の ST [18] の語を読む。旧値が入力宣言されていても不正（L10、語ごと）",
+  "machine": "tests/machines/mvp2_vii.json",
+  "program": [
+    "@0: nop | st [18], r1",
+    "@1: nop | ld.w r2:r3, [17]",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 9
+    },
+    "memory": {
+      "17": 1,
+      "18": 2
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L10"
+      ]
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vii_stw_before_halt",
+  "description": "ST.W のレイテンシーが2の構成では、HALT の直前のサイクルの ST.W は完了しない（L6）",
+  "machine": "tests/machines/mvp2_vii.json",
+  "program": [
+    "@0: nop | st.w [0], r2:r3",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1,
+      "r3": 2
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L6"
+      ]
+    }
+  }
+}

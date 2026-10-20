@@ -1,0 +1,41 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_partial_pair_update",
+  "description": "組の部分更新は合法: VMUL が書いた組の r5 だけを、区間が重ならない ADD が書き直す。2つのスカラーの LD で集めた組（r10:r11）を VADD が読む。どのレジスタの値も、最後に commit された書込みで決まる",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3 | ld r10, [0] ; r4 = 6, r5 = 8 at E_2",
+    "@1: nop                   | ld r11, [1]",
+    "@2: add r5, r1, r2                      ; r5 = 5 at E_3: [2, 3) after [0, 2)",
+    "@3: vadd r6:r7, r4:r5, r8:r9            ; 6 + 100 and 5 + 200",
+    "@4: vadd r12:r13, r10:r11, r10:r11      ; the gathered pair",
+    "@5: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 2,
+      "r2": 3,
+      "r3": 4,
+      "r8": 100,
+      "r9": 200
+    },
+    "memory": {
+      "0": 7,
+      "1": "0xFFFFFFFF"
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 6,
+    "registers": {
+      "r4": 6,
+      "r5": 5,
+      "r6": 106,
+      "r7": 205,
+      "r10": 7,
+      "r11": "0xFFFFFFFF",
+      "r12": 14,
+      "r13": "0xFFFFFFFE"
+    }
+  }
+}

@@ -37,9 +37,9 @@ verifier、参照モデル、Phase 1 のRTLテストが共有する、手作り�
 | `format` | ○ | `"vliw-testcase/1"` |
 | `name` | ○ | `[a-z0-9][a-z0-9_]*`。ファイル名と同じにする |
 | `description` | ○ | 何を確かめるケースか |
-| `machine` | | machine description のパス（リポジトリのルートからの相対パス）。省略時は `config/machine.json`。容量を縮小した定義で規則 L7 を確かめる場合などに使う。ISA `mvp-1` の MAC のケースは `config/machine-mvp1.json` などの mvp-1 の定義を指す（#77） |
-| `program` | どちらか一方 | [ASM.md](ASM.md) の構文で、1要素が1行 |
-| `program_hex` | どちらか一方 | 1要素が1bundleの16桁16進。アセンブラで書けない命令語（規則 L1 の違反）に使う |
+| `machine` | | machine description のパス（リポジトリのルートからの相対パス）。省略時は `config/machine.json`。容量を縮小した定義で規則 L7 を確かめる場合などに使う。ISA `mvp-1` の MAC のケースは `config/machine-mvp1.json` などの mvp-1 の定義を指す（#77）。ISA `mvp-2` の W のケースは `config/machine-mvp2.json` などの mvp-2 の定義を指す（#110） |
+| `program` | どちらか一方 | [ASM.md](ASM.md) の構文で、1要素が1行（mvp-2 の組 `r4:r5`、`ld.w`・`st.w` を含む） |
+| `program_hex` | どちらか一方 | 1要素が1bundleの16桁16進。アセンブラで書けない命令語（規則 L1 の違反。mvp-2 の奇数の組、VADD の B など）に使う |
 | `inputs.registers` | ○ | 開始前にホストが設定するレジスタ（入力宣言 R_in）。キーは `r0`〜`r15` |
 | `inputs.memory` | ○ | 開始前にホストが設定するScratchpad（入力宣言 M_in）。キーは10進のword address |
 | `expect.verdict` | ○ | `"legal"`、または `{"illegal": ["L3", ...]}` |

@@ -1,0 +1,33 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_pair_in_flight",
+  "description": "L3 は欄が読む各レジスタに当てはまる。VMUL が書込み中の組の r5 を MUL が読み、LD.W が書込み中の組を ST.W が読む。r5・r6・r7 の旧値は入力宣言してある（L8 ではない）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3 | ld.w r6:r7, [0]",
+    "@1: mul r8, r5, r1        | st.w [4], r6:r7",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r3": 3,
+      "r5": 0,
+      "r6": 0,
+      "r7": 0
+    },
+    "memory": {
+      "0": 4,
+      "1": 5
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L3"
+      ]
+    }
+  }
+}
