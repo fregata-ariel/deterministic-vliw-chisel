@@ -100,8 +100,13 @@ class Mvp1Spec extends AnyFunSuite {
     assertRejected(read("config/machine.json"), "schema_version 1 is for mvp-0, got mvp-1")(
       _("isa_version") = "mvp-1"
     )
-    assertRejected(text, "$.isa_version: must be one of mvp-0, mvp-1")(_("isa_version") = "mvp-2")
-    assertRejected(text, "$.schema_version: must be in 1..2, got 3")(_("schema_version") = 3)
+    // Schema 3 is for mvp-2 (#110, ADR-0022; Mvp2Spec).
+    assertRejected(text, "$.isa_version: schema_version 2 is for mvp-1, got mvp-2")(
+      _("isa_version") = "mvp-2"
+    )
+    assertRejected(text, "$.isa_version: schema_version 3 is for mvp-2, got mvp-1")(
+      _("schema_version") = 3
+    )
   }
 
   test("MAC is required in mvp-1 and unknown in mvp-0") {

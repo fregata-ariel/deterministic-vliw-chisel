@@ -14,8 +14,16 @@ final case class Finding(rule: Rule, cycle: Option[Int], message: String) {
   * write-back port reservations per commit boundary, register and memory reads with their cycles,
   * and the issue cycles of each operation; each rule is then a check over these tables. All
   * violations are reported. The verifier does not use the reference model (ADR-0002).
+  *
+  * ISA mvp-2 (W) comes with #110 stage 2: until then [[verify]] refuses mvp-2 machines.
   */
 object Verifier {
+
+  /** The W operations of mvp-2, which no check reaches: [[verify]] refuses mvp-2 machines first. */
+  private def notYet(op: Product): Nothing =
+    throw new UnsupportedOperationException(
+      s"$op: ISA mvp-2 is not implemented in the verifier yet (#110 stage 2)"
+    )
 
   /** Declared inputs: only which locations the host sets matters, not their values. */
   final case class Declaration(registers: Set[Int], memory: Set[Int])
@@ -23,11 +31,18 @@ object Verifier {
     def of(inputs: Inputs): Declaration = Declaration(inputs.registers.keySet, inputs.memory.keySet)
   }
 
+  /** Why [[verify]] refuses `machine`: ISA mvp-2 until #110 stage 2. `compiler/run verify` exits 2
+    * with it (an input error), not 1 (illegal).
+    */
+  def notImplemented(machine: MachineDescription): Option[String] =
+    IsaVersion.notImplemented(machine, "the verifier", "stage 2")
+
   def verify(
       machine: MachineDescription,
       words: Vector[Long],
       declared: Declaration
   ): Vector[Finding] = {
+    notImplemented(machine).foreach(r => throw new UnsupportedOperationException(r))
     val codec = new BundleCodec(machine)
     val decoded = words.map(codec.decode)
     val encoding = decoded.zipWithIndex.collect { case (Left(e), i) =>
@@ -90,6 +105,10 @@ object Verifier {
           case ComputeOp.Mul(d, x, y)         => rrr(d, x, y, "MUL")
           case ComputeOp.Mac(d, x, y, z)      => rrr(d, x, y, "MAC"); reads += Read(z, s, text)
           case ComputeOp.Nop | ComputeOp.Halt => ()
+          case op: ComputeOp.VAdd             => notYet(op)
+          case op: ComputeOp.VSub             => notYet(op)
+          case op: ComputeOp.VMul             => notYet(op)
+          case op: ComputeOp.VMac             => notYet(op)
         }
         val mtext = Disassembler.memory(b.memory)
         b.memory match {
@@ -101,7 +120,9 @@ object Verifier {
             reads += Read(r, s, mtext)
             accesses += Access(a, s, store = true, lat("ST"))
             issues += Issue("ST", s, mtext)
-          case MemoryOp.Nop => ()
+          case MemoryOp.Nop     => ()
+          case op: MemoryOp.LdW => notYet(op)
+          case op: MemoryOp.StW => notYet(op)
         }
       }
       Summary(writes.result(), reads.result(), accesses.result(), issues.result())

@@ -237,4 +237,20 @@ class VerifierSpec extends AnyFunSuite {
     // MUL and MAC are different operations, each with its own unit.
     assert(on(ii2, "mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nhalt") == Set.empty)
   }
+
+  test("ISA mvp-2 is refused until #110 stage 2, not verified as mvp-1") {
+    val mvp2 = MachineDescription
+      .load(MachineDescription.Mvp2Path)
+      .fold(es => fail(es.mkString("\n")), identity)
+    val e = intercept[UnsupportedOperationException] {
+      Verifier.verify(mvp2, Vector(0xf0000000L), Verifier.Declaration(Set.empty, Set.empty))
+    }
+    assert(
+      e.getMessage == "ISA mvp-2 is not implemented in the verifier yet (#110 stage 2); " +
+        "machine vliw2-i32-sp2-mac-w2"
+    )
+    // `compiler/run verify` exits 2 with this reason, before it calls verify.
+    assert(Verifier.notImplemented(mvp2).contains(e.getMessage))
+    assert(Verifier.notImplemented(mvp1).isEmpty && Verifier.notImplemented(machine).isEmpty)
+  }
 }

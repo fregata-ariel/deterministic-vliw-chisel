@@ -200,4 +200,4 @@ ADR-0020 の決まりを、次の順で行う。
 - #126（#121 の PR A。5.052 を固定にした PR の branch）の run（Toolchain candidates の run 39201497326、knob は `CANDIDATES="apt:5.020-1"`・`SEED_RUNS="10"`）: [5.052/report.md](5.052/report.md) と [5.020/report.md](5.020/report.md) の2つ目の節。固定の版（5.052）と戻す先（apt の 5.020-1）の test が、どちらも 10 回とも success。`scripts/check.sh scala` の step は、5.052 で 426〜701 秒、5.020 で 360〜576 秒だった
 - [5.052/jobs.md](5.052/jobs.md): 5.052 で、`-j 0` と `--verilate-jobs 1` の verilate を手元で比べた記録（2026-10-19、#121）。スレッドの数、生成される C++、時間、並列に動く段階、大きな設計での効き、機械の CPU の構成。速くならず、回避策は当面残す
 
-[5.020/mutation.tsv](5.020/mutation.tsv) と [5.052/mutation.tsv](5.052/mutation.tsv) は、それぞれの run の時点の 53 mutant の記録である（#129 で 55 になった）。後の run と比べるときは共通の行で比べるか、新しい run で記録し直し、記録そのものは書き換えない。
+[5.020/mutation.tsv](5.020/mutation.tsv) と [5.052/mutation.tsv](5.052/mutation.tsv) は、それぞれの run の時点の 53 mutant の記録である（#129 で 55、#110 で 57 になった）。後の run と比べるときは共通の行で比べるか、新しい run で記録し直し、記録そのものは書き換えない。

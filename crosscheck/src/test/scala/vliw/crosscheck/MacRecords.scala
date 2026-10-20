@@ -85,13 +85,17 @@ object MacRecords {
   /** Register reads of a bundle, counted per operand field as rule L11 counts them. */
   def reads(b: Bundle): Int = {
     val compute = b.compute match {
-      case _: ComputeOp.Add | _: ComputeOp.Sub | _: ComputeOp.Mul => 2
-      case _: ComputeOp.Mac                                       => 3
-      case ComputeOp.Nop | ComputeOp.Halt                         => 0
+      case _: ComputeOp.Add | _: ComputeOp.Sub | _: ComputeOp.Mul                              => 2
+      case _: ComputeOp.Mac                                                                    => 3
+      case ComputeOp.Nop | ComputeOp.Halt                                                      => 0
+      case w @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
+        sys.error(s"$w: the records of ISA mvp-2 come with #110 stage 6")
     }
     val memory = b.memory match {
-      case _: MemoryOp.St                => 1
-      case _: MemoryOp.Ld | MemoryOp.Nop => 0
+      case _: MemoryOp.St                          => 1
+      case _: MemoryOp.Ld | MemoryOp.Nop           => 0
+      case w @ (_: MemoryOp.LdW | _: MemoryOp.StW) =>
+        sys.error(s"$w: the records of ISA mvp-2 come with #110 stage 6")
     }
     compute + memory
   }

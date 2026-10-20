@@ -32,9 +32,17 @@ final case class Execution(
   * accepts a new issue. Each cycle reads sources from the visible state, enqueues results for
   * E_(s+L), and then applies everything due at E_(s+1). Runtime checks stand in for RTL assertions:
   * the first violated legality rule stops the run. The model does not use the verifier (ADR-0002).
+  *
+  * ISA mvp-2 (W) comes with #110 stage 2: until then [[run]] refuses mvp-2 machines.
   */
 object ReferenceModel {
   private val Mask = 0xffffffffL
+
+  /** The W operations of mvp-2, which no run reaches: [[run]] refuses mvp-2 machines first. */
+  private def notYet(op: Product): Nothing =
+    throw new UnsupportedOperationException(
+      s"$op: ISA mvp-2 is not implemented in the reference model yet (#110 stage 2)"
+    )
 
   private final case class InFlight(
       issue: Int,
@@ -54,19 +62,32 @@ object ReferenceModel {
       case ComputeOp.Mul(_, x, y)         => Vector(x, y)
       case ComputeOp.Mac(_, x, y, z)      => Vector(x, y, z)
       case ComputeOp.Nop | ComputeOp.Halt => Vector.empty
+      case op: ComputeOp.VAdd             => notYet(op)
+      case op: ComputeOp.VSub             => notYet(op)
+      case op: ComputeOp.VMul             => notYet(op)
+      case op: ComputeOp.VMac             => notYet(op)
     }
     val memory = b.memory match {
       case MemoryOp.St(_, r)                => Vector(r)
       case MemoryOp.Ld(_, _) | MemoryOp.Nop => Vector.empty
+      case op: MemoryOp.LdW                 => notYet(op)
+      case op: MemoryOp.StW                 => notYet(op)
     }
     compute ++ memory
   }
+
+  /** Why [[run]] refuses `machine`: ISA mvp-2 until #110 stage 2. `sim/run` exits 2 with it (an
+    * input error), not 1 (illegal).
+    */
+  def notImplemented(machine: MachineDescription): Option[String] =
+    IsaVersion.notImplemented(machine, "the reference model", "stage 2")
 
   def run(
       machine: MachineDescription,
       words: Vector[Long],
       inputs: Inputs
   ): Either[Violation, Execution] = {
+    notImplemented(machine).foreach(r => throw new UnsupportedOperationException(r))
     val codec = new BundleCodec(machine)
     for {
       bundles <- codec.decodeAll(words).left.map(e => Violation(Rule.Encoding, None, e))
@@ -217,6 +238,10 @@ object ReferenceModel {
         for { _ <- unit("MAC"); x <- readReg(a); y <- readReg(b); z <- readReg(c) } yield Some(
           InFlight(s, s + latency("MAC"), Left(d), Some(Slot.Compute), (x * y + z) & Mask)
         )
+      case op: ComputeOp.VAdd => notYet(op)
+      case op: ComputeOp.VSub => notYet(op)
+      case op: ComputeOp.VMul => notYet(op)
+      case op: ComputeOp.VMac => notYet(op)
     }
     val memoryOp: Either[Violation, Option[InFlight]] = bundle.memory match {
       case MemoryOp.Nop      => Right(None)
@@ -242,6 +267,8 @@ object ReferenceModel {
         for { _ <- unit("ST"); addr <- address(a); v <- readReg(r) } yield Some(
           InFlight(s, s + latency("ST"), Right(addr), None, v)
         )
+      case op: MemoryOp.LdW => notYet(op)
+      case op: MemoryOp.StW => notYet(op)
     }
 
     // 2. Reserve: no overlapping writes to a register (L4), one commit per port per boundary (L5).
@@ -301,11 +328,17 @@ object ReferenceModel {
         case ComputeOp.Mul(_, _, _)         => occupy("MUL")
         case ComputeOp.Mac(_, _, _, _)      => occupy("MAC")
         case ComputeOp.Nop | ComputeOp.Halt => ()
+        case op: ComputeOp.VAdd             => notYet(op)
+        case op: ComputeOp.VSub             => notYet(op)
+        case op: ComputeOp.VMul             => notYet(op)
+        case op: ComputeOp.VMac             => notYet(op)
       }
       bundle.memory match {
         case MemoryOp.Ld(_, _) => occupy("LD")
         case MemoryOp.St(_, _) => occupy("ST")
         case MemoryOp.Nop      => ()
+        case op: MemoryOp.LdW  => notYet(op)
+        case op: MemoryOp.StW  => notYet(op)
       }
       halted
     }

@@ -11,7 +11,8 @@ import java.nio.file.{Files, Path, Paths}
   *   - `case <case.json>`: validate a test case and print its program
   *
   * `asm` and `disasm` use `config/machine.json` (mvp-0) unless `--machine` names another machine
-  * description, such as `config/machine-mvp1.json` for `mac` (the option of compiler/Main.scala).
+  * description, such as `config/machine-mvp1.json` for `mac` or `config/machine-mvp2.json` for the
+  * W operations of ISA mvp-2 (the option of compiler/Main.scala).
   */
 object Cli {
   val usage: String =

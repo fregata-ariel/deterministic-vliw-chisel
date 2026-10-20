@@ -62,7 +62,10 @@ object ModuloCompiler {
 
   /** Layout and lowering as `loop.LoopLowering`, then the loop graph, fused by `FusionChoice`. */
   def prepare(k: LoopKernel, machine: MachineDescription): Either[String, Prepared] =
-    LoopLowering.layout(k, machine).map { layout =>
+    for {
+      _ <- KernelCompiler.notImplemented(machine)
+      layout <- LoopLowering.layout(k, machine)
+    } yield {
       val (g, fusion) = FusionChoice.of(LoopGraph.of(LoopLowering.lower(k, layout), machine))
       Prepared(k, layout, g, fusion)
     }

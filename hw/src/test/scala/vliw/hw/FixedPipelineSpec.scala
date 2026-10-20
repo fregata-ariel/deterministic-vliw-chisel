@@ -254,4 +254,13 @@ class FixedPipelineSpec extends AnyFunSuite with VliwChiselSim {
       assert(dut.io.busy.peek().litToBoolean)
     }
   }
+
+  test("mvp-2 machines are refused with the Core's reason (#110)") {
+    val mvp2 =
+      MachineDescription.load(MachineDescription.Mvp2Path).fold(es => fail(es.mkString), identity)
+    val reasons = FixedParams.check(mvp2, example(2, 2)).left.getOrElse(fail("mvp-2 was accepted"))
+    assert(reasons == CoreParams.unsupported(mvp2))
+    assert(reasons.head.startsWith("ISA mvp-2 is not implemented in the RTL yet (#110 stage 3)"))
+    assertThrows[IllegalArgumentException](FixedParams(mvp2, example(2, 2)))
+  }
 }

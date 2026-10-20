@@ -771,11 +771,15 @@ class ModuloSchedulerSpec extends AnyFunSuite {
         case ComputeOp.Mac(d, x, y, z) =>
           val v = Op.Add(Op.Mul(reg(x), reg(y)), reg(z)); later("MAC")(() => reg(d) = v)
         case ComputeOp.Nop | ComputeOp.Halt => ()
+        case op @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
+          fail(s"$op: the compiler generates W operations from #110 stage 4")
       }
       bundles(s).memory match {
         case MemoryOp.Ld(d, a) => val v = mem(a); later("LD")(() => reg(d) = v)
         case MemoryOp.St(a, x) => val v = reg(x); later("ST")(() => mem(a) = v)
         case MemoryOp.Nop      => ()
+        case op @ (_: MemoryOp.LdW | _: MemoryOp.StW) =>
+          fail(s"$op: the compiler generates W operations from #110 stage 4")
       }
     }
     pending.foreach(_._2())

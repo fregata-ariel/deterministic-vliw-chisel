@@ -370,4 +370,21 @@ class ReferenceModelSpec extends AnyFunSuite {
     assert(header("isa").str == "mvp-1" && header("machine").str == "vliw2-i32-sp2-mac")
     assert(header("machine_hash").str == mvp1.hash)
   }
+
+  test("ISA mvp-2 is refused until #110 stage 2, not run as mvp-1") {
+    val mvp2 = MachineDescription
+      .load(MachineDescription.Mvp2Path)
+      .fold(es => fail(es.mkString), identity)
+    // An mvp-1 program: legal on mvp-2 by the contract, but the model does not implement mvp-2 yet.
+    val e = intercept[UnsupportedOperationException] {
+      ReferenceModel.run(mvp2, words("add r1, r1, r1\nhalt", mvp2), Inputs(Map(1 -> 1L), Map.empty))
+    }
+    assert(
+      e.getMessage == "ISA mvp-2 is not implemented in the reference model yet (#110 stage 2); " +
+        "machine vliw2-i32-sp2-mac-w2"
+    )
+    // `sim/run` exits 2 with this reason, before it calls run.
+    assert(ReferenceModel.notImplemented(mvp2).contains(e.getMessage))
+    assert(ReferenceModel.notImplemented(mvp1).isEmpty)
+  }
 }

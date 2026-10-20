@@ -6,15 +6,18 @@ import vliw.isa._
   * are vliw-metrics/1, and records of mvp-1 are vliw-metrics/2, which adds MAC and register reads.
   *
   * Kept separate from the trace: the trace is for checking correctness cycle by cycle, this record
-  * is for comparing programs and machine configurations.
+  * is for comparing programs and machine configurations. Records of ISA mvp-2 are vliw-metrics/3
+  * (docs/METRICS.md), implemented in #110 stage 2; until then mvp-2 machines are refused.
   */
 object Metrics {
   val Format: String = "vliw-metrics/1"
   val FormatMvp1: String = "vliw-metrics/2"
 
   /** The record format for runs on `machine`. */
-  def format(machine: MachineDescription): String =
+  def format(machine: MachineDescription): String = {
+    IsaVersion.requireImplemented(machine, "the metrics", "stage 2")
     if (machine.isaVersion == IsaVersion.Mvp1) FormatMvp1 else Format
+  }
 
   private def rate(n: Long, d: Long): ujson.Value =
     if (d == 0) ujson.Null else ujson.Num(math.round(n.toDouble / d * 1e6) / 1e6)
@@ -30,6 +33,7 @@ object Metrics {
       name: String,
       ii: Option[Int] = None
   ): ujson.Obj = {
+    IsaVersion.requireImplemented(machine, "the metrics", "stage 2")
     val bundles = new BundleCodec(machine).decodeAll(words).fold(e => sys.error(e), identity)
     val n = bundles.size.toLong
     val cycles = run.cycles.toLong

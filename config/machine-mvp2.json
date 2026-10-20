@@ -1,0 +1,57 @@
+{
+  "schema_version": 3,
+  "revision": 1,
+  "status": "proposed",
+  "isa_version": "mvp-2",
+  "machine_id": "vliw2-i32-sp2-mac-w2",
+  "word_bits": 32,
+  "bundle_bits": 64,
+  "binary_endianness": "little",
+  "arithmetic": "modulo_2_pow_32",
+  "slots": {"compute": 1, "memory": 1},
+  "register_file": {
+    "count": 16,
+    "zero_register": null,
+    "banks": 2,
+    "bank_mapping": "register_index_mod_2",
+    "read_ports": 3,
+    "write_ports": {"compute": 1, "memory": 1},
+    "same_cycle_same_destination_write": "forbidden"
+  },
+  "scratchpad": {
+    "banks": 2,
+    "words_per_bank": 256,
+    "ports_per_bank": "1RW",
+    "global_issue_per_cycle": 1,
+    "max_words_per_access": 2,
+    "address_unit": "word",
+    "bank_mapping": "word_address_mod_2",
+    "row_mapping": "word_address_div_2",
+    "read_during_write": "forbidden"
+  },
+  "operations": {
+    "ADD": {"slot": "compute", "opcode": 1, "latency": 1, "ii": 1, "writeback": "compute"},
+    "SUB": {"slot": "compute", "opcode": 2, "latency": 1, "ii": 1, "writeback": "compute"},
+    "MUL": {"slot": "compute", "opcode": 3, "latency": 2, "ii": 1, "writeback": "compute"},
+    "MAC": {"slot": "compute", "opcode": 4, "latency": 2, "ii": 1, "writeback": "compute"},
+    "VADD": {"slot": "compute", "opcode": 5, "latency": 1, "ii": 1, "writeback": "compute"},
+    "VSUB": {"slot": "compute", "opcode": 6, "latency": 1, "ii": 1, "writeback": "compute"},
+    "VMUL": {"slot": "compute", "opcode": 7, "latency": 2, "ii": 1, "writeback": "compute"},
+    "VMAC": {"slot": "compute", "opcode": 8, "latency": 2, "ii": 1, "writeback": "compute"},
+    "LD": {"slot": "memory", "opcode": 1, "latency": 2, "ii": 1, "writeback": "memory"},
+    "ST": {"slot": "memory", "opcode": 2, "latency": 1, "ii": 1, "writeback": null},
+    "LD.W": {"slot": "memory", "opcode": 3, "latency": 2, "ii": 1, "writeback": "memory"},
+    "ST.W": {"slot": "memory", "opcode": 4, "latency": 1, "ii": 1, "writeback": null},
+    "HALT": {"slot": "compute", "opcode": 15, "requires_no_pending_operations": true, "requires_memory_nop": true, "done_after_cycles": 1}
+  },
+  "nop_opcode": 0,
+  "instruction_memory": {"bundles": 256},
+  "control": {"branches": false, "loops": "unrolled", "internal_stalls": false},
+  "timing": {
+    "source_read": "issue_cycle",
+    "availability": "issue_cycle_plus_latency",
+    "dependency_constraint": "consumer_issue_gte_producer_issue_plus_latency",
+    "writeback_cycle_reservation": true,
+    "kernel_cycles": "halt_issue_cycle_plus_1"
+  }
+}

@@ -52,7 +52,7 @@ MVPで保証する対象は、**入力・命令・出力領域の準備が完了
 | 命令 | 64bit bundle、専用ローカル命令領域 | 小規模の組合せ読出しROMから開始 |
 | 制御 | start / busy / done、PC、HALT | 固定回数ループは当初展開し、専用ループ制御は後続（入れるかは #81 でオーナーが決める。見積りは Milestone 4） |
 
-3R/2W RFは小容量レジスタによる初期モデルであり、一般的なSRAMマクロでそのまま実現できる前提ではない。面積と配線遅延を合成で評価する。2バンク化だけではアクセス帯域は2倍にならず、将来のスロット・ポート拡張が必要である。
+3R/2W RFは小容量レジスタによる初期モデルであり、一般的なSRAMマクロでそのまま実現できる前提ではない。面積と配線遅延を合成で評価する。2バンク化だけではアクセス帯域は2倍にならず、将来のスロット・ポート拡張が必要である。ISA mvp-2 の W-full では、LD.W・ST.W が、Memory の操作を1サイクルに1つ、各 bank へのアクセスを1サイクルに1つに保ったまま、語の帯域を2倍にする（表の「1アクセス/cycle」は、W-full では1サイクルに1つの Memory の操作と読む）。これは #109 の範囲のメモリの帯域の拡張で、#111 の bank のポートの共有で数える（#78 の質問2、[ADR-0022](DECISIONS.md)）。
 
 ## ハードウェア・コンパイラ間の契約
 
@@ -95,4 +95,4 @@ ChiselのRTL生成経路と、カーネルをVLIW命令へ変換するコンパ�
 
 拡張は、同じカーネル・入力・配置・スケジュール戦略で、拡張のある構成とない構成を比べる。MAC は、mvp-0 と、MAC のある ISA mvp-1 の構成（読出しポート3本の既定、制約のない4本、MAC の latency 3）を比べた（#77、ADR-0018。[benchmarks/MAC.md](../benchmarks/MAC.md)）。cycle だけの比較で、面積と Fmax は #57 で測る。
 
-拡張順は、パイプライン最適化 → Modulo Scheduling → MAC → SIMD → DMA/Double Buffer → 複数タイル/静的通信（MAC と SIMD を分ける理由は ADR-0012）。SIMD（または Compute スロットの増設、#78）は、Milestone 4 の最初に、DMA より前に行う（#71、[PHASE3.md](PHASE3.md)）。MAC の後、list scheduling の `saxpy8` は Memory スロットが律速のままで、`matmul3` は Compute と Memory の操作の数が同じ（27）になった（[benchmarks/MAC.md](../benchmarks/MAC.md)）。Compute スロットだけを増やすと、Compute の書戻しポート（L5）と読出しポート（L11）の下限で止まる（mvp-1 の list scheduling の `fir4x8` は、書戻しと3本目の読出しポートの使用がどちらも 32 で、Memory の操作 23 より多い）。ポート（と MAC の演算器）も増やすと、Memory スロット（1サイクル1アクセス）の下限で止まる（見積りで、測った値ではない。[PHASE3.md](PHASE3.md)「#78（SIMD・複数 Compute スロット）」）。このため、#78 の比較では、これらの下限も記録する。動的なホスト側制御と、固定時間のカーネル実行を分離する方針を保つ。
+拡張順は、パイプライン最適化 → Modulo Scheduling → MAC → SIMD → DMA/Double Buffer → 複数タイル/静的通信（MAC と SIMD を分ける理由は ADR-0012）。SIMD は、Milestone 4 の最初に、DMA より前に行う（#71、[PHASE3.md](PHASE3.md)）。方式は、#78 で Compute スロットの増設（S2）と 16bit×2 の packed（P16）と比べて、W にした。W は、偶数・奇数のレジスタの組を 32bit×2 のレーンにし、i32 の計算を保ったまま演算の幅と転送の幅を広げる（2語の LD.W・ST.W を含む。オーナー判断 2026-10-20、[ADR-0022](DECISIONS.md)。ISA mvp-2 として #110 で実装する）。MAC の後、list scheduling の `saxpy8` は Memory スロットが律速のままで、`matmul3` は Compute と Memory の操作の数が同じ（27）になった（[benchmarks/MAC.md](../benchmarks/MAC.md)）。Compute スロットだけを増やすと、Compute の書戻しポート（L5）と読出しポート（L11）の下限で止まる（mvp-1 の list scheduling の `fir4x8` は、書戻しと3本目の読出しポートの使用がどちらも 32 で、Memory の操作 23 より多い）。ポート（と MAC の演算器）も増やすと、Memory スロット（1サイクル1操作）の下限で止まる（見積りで、測った値ではない。[PHASE3.md](PHASE3.md)「#78（SIMD・複数 Compute スロット）」）。W の LD.W・ST.W は、1つの Memory の操作で2語を動かして、この下限を下げる（#78 の見積り。#110 で測る）。このため、#78 の比較では、これらの下限も記録する。動的なホスト側制御と、固定時間のカーネル実行を分離する方針を保つ。

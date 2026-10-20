@@ -41,6 +41,29 @@ class CliSpec extends AnyFunSuite {
     assert(Cli.run(List("disasm", golden, "--machine", mvp1)) == Cli.run(List("disasm", golden)))
   }
 
+  test("machine, asm and disasm handle ISA mvp-2 with --machine config/machine-mvp2.json") {
+    val shown =
+      Cli.run(List("machine", "config/machine-mvp2.json")).fold(e => fail(e.mkString), s => s)
+    assert(shown.contains("machine: vliw2-i32-sp2-mac-w2 revision 1 (proposed)"))
+    assert(shown.contains("isa:     mvp-2"))
+    val mvp2 = "config/machine-mvp2.json"
+    val src = file("w.asm", "vmac r4:r5, r2, r6:r7, r8:r9 | ld.w r10:r11, [17]\nhalt\n").toString
+    val out = dir.resolve("w.hex")
+    assert(Cli.run(List("asm", src, out.toString, "--machine", mvp2)) == Right(s"$out: 2 bundles"))
+    assert(ProgramFile.read(out) == Right(Vector(0x3a08800084268800L, 0xf0000000L)))
+    assert(
+      Cli.run(List("disasm", out.toString, "--machine", mvp2)) ==
+        Right("@0: vmac r4:r5, r2, r6:r7, r8:r9 | ld.w r10:r11, [17]\n@1: halt            | nop")
+    )
+    // mvp-1 has no W operations.
+    assert(
+      errors("asm", src, dir.resolve("w1.hex").toString, "--machine", mvp1).exists(
+        _.contains("vmac is not an operation of vliw2-i32-sp2-mac (ISA mvp-1)")
+      )
+    )
+    assert(errors("disasm", out.toString, "--machine", mvp1).exists(_.contains("unknown opcode 8")))
+  }
+
   test("a missing operand, an unknown option or a bad machine path is reported") {
     assert(errors("asm", "--machine", mvp1, "in.asm") == List(Cli.usage))
     assert(errors("disasm", "in.hex", "--machines", mvp1) == List(Cli.usage))
