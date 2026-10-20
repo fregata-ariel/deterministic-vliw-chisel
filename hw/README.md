@@ -15,10 +15,11 @@ sbt "hw/run [target-dir] [machine.json]"   # Core の SystemVerilog を出力（
 
 ChiselSim の作業ファイルは `build/chiselsim/<Suite>/<test>/` に作られる（gitignore 済み）。
 
-ChiselSim のテストは `ChiselSim` ではなく `VliwChiselSim` を mix in する（`scripts/check.sh static` が検査する。[ADR-0013](../docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)）。`VliwChiselSim` は、すべてのシミュレーションに次の2つを加える。
+ChiselSim のテストは `ChiselSim` ではなく `VliwChiselSim` を mix in する（`scripts/check.sh static` が検査する。[ADR-0013](../docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)）。`VliwChiselSim` は、すべてのシミュレーションに次の3つを加える。
 
 - Verilator に `--build-jobs 0 --verilate-jobs 1` を渡す。verilation は1スレッドで、C++ のビルドは全コアで行う。svsim の既定の `-j 0` では、Verilator 5.020（#74 のときの固定の版）がまれに終了時に `attempted to destroy locked Thread Pool` で abort し、`make ... Error 255` になる（#74）
-- 乱数の seed を明示し、記録する。ChiselSim はレジスタとメモリを Verilator の乱数で初期化してビルドする（`RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT`）。reset のあるレジスタ（PC、busy、スロットのパイプラインなど）は reset でその値を失うが、reset のない `RegisterFile` のレジスタとメモリ（Scratchpad、命令メモリ）は、書き込まれるまで乱数の値を保つ。`VliwChiselSim` は、その seed を `+verilator+seed+<n>` として渡す。seed は、`[sim-seed]` の行で sbt のログに、`seed.txt` で各シミュレーションのディレクトリに残る。seed は環境変数 `VLIW_SIM_SEED` で選ぶ
+- 乱数の seed を明示し、記録する。ChiselSim はレジスタとメモリを Verilator の乱数で初期化してビルドする（`RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT`・`RANDOM=$urandom`。下の「初期状態」）。`VliwChiselSim` は、その seed を `+verilator+seed+<n>` として渡す。seed は、`[sim-seed]` の行で sbt のログに、`seed.txt` で各シミュレーションのディレクトリに残る。seed は環境変数 `VLIW_SIM_SEED` で選ぶ
+- 初期値の設定を確かめ、記録する（#129、[ADR-0021](../docs/DECISIONS.md#adr-0021-rtl-の初期状態への非依存を全-0全-1乱数の初期値で確かめる)）。ビルドの define に `RANDOMIZE_REG_INIT`・`RANDOMIZE_MEM_INIT`・`RANDOM` が1つずつあり、`RANDOM` の値が下の3つのモードのどれかで、`SYNTHESIS` がないことを確かめる。生成した SystemVerilog のすべての `reg` とメモリが、`` `ifndef SYNTHESIS `` の内側の初期化のブロックで `` `RANDOM `` から初期化されることも確かめる（`SvInitCheck`）。満たさなければ、そのテストはビルドの前に、ディレクトリ名を付けて失敗する。モードは、`seed.txt` の隣の `init.txt` に `init=ones RANDOM=32'hFFFFFFFF` の形で残る
 
 ```sh
 sbt hw/test                        # 既定の seed（1）
@@ -29,6 +30,30 @@ VLIW_SIM_SEED=random sbt hw/test   # テストの JVM ごとに新しい seed（
 `+verilator+seed+` がないときに乱数をどこから始めるかは、Verilator の版で違い、どこにも記録されない。同じ seed でも、版が違えば乱数の値が違うことがある。このため `VliwChiselSim` は、seed をいつも渡し、PATH の Verilator の版と一緒に記録する（`VLIW_SIM_SEED=1 (default) verilator=<版>` の形。[ADR-0020](../docs/DECISIONS.md#adr-0020-verilator-と-jdk-の版を1か所で決め版を変える前に候補を対照と同じ-run-で試す) の R3）。版ごとの挙動は [docs/toolchain/README.md](../docs/toolchain/README.md) を参照する。`build/chiselsim/<Suite>/<test>/workdir-verilator/` で `make replay` を実行すると、ビルドし直してから、同じ入力と seed でシミュレーションを再実行する。Makefile は絶対パスを含むので、そのディレクトリでだけ動く。また、ビルドし直すときに、そのディレクトリの `compilation-log.txt`・`simulation-log.txt` を消す。
 
 `VliwChiselSim` は、テストの JVM ごとに1回、`[toolchain] verilator=<PATH の版> expected=<期待する版> (pinned|env)` の行も sbt のログに出す（`vliw.hw.Toolchain`。[docs/toolchain/README.md](../docs/toolchain/README.md)）。
+
+### 初期状態
+
+すべてのレジスタとメモリの初期値は、firtool の `RANDOM` の値で決まる。モードは3つあり、ビルドごとに選ぶ（`vliw.hw.InitMode`）。`simulate` は `urandom` でビルドする。`simulateInit(mode)(module)(body)` は、選んだモードでビルドする。モード1つにつき、ビルドが1回増える。
+
+| モード | `RANDOM` の値 | 使うテスト |
+|---|---|---|
+| `zeros` | `32'h0` | `crosscheck/InitStateSpec` |
+| `ones` | `32'hFFFFFFFF` | `crosscheck/InitStateSpec`、`VliwChiselSimSpec` |
+| `urandom` | `$urandom`（ChiselSim の既定。seed は `VLIW_SIM_SEED`） | ほかのすべてのテスト |
+
+全 0・全 1 は、幅のある 32 bit の値にする。`0` や `'1` では、メモリの初期化のブロックで Verilator が警告（`WIDTHCONCAT`・`WIDTHEXPAND`）を出し、ビルドが失敗する。全 0・全 1 のビルドは乱数の関数を呼ばないので、値は seed にも Verilator の版にもよらない。`make replay` は、Makefile の define で同じモードを使う。
+
+reset のある状態（PC、busy、done、プログラム長、書戻しの予約表、`loadStage`、固定パイプラインのカウンタなど）は、最初の reset の境界で reset の値になる。reset のない次の状態は、書き込まれるまで初期値を保つ。
+
+| reset のない状態 | 場所 |
+|---|---|
+| RF のレジスタ | `RegisterFile` の `regs` |
+| 命令メモリ | `Core` の `imem` |
+| Scratchpad の bank と、その読出しポートのレジスタ（firtool が足す `_RW0_*`） | `MemorySlot` の `banks` |
+| 読み出した bank の番号 | `MemorySlot` の `readBank` |
+| 固定パイプラインの値のレジスタ | `FixedPipeline` の `regs` |
+
+ただし、最初の reset の境界で RF に書込みが起きることがある。書戻しの予約表と `loadStage` には reset があるが、その境界ではまだ初期値を持っており、RF への書込みは reset 中も止まらないからである。全 1 では、両方のポートが、番号のすべての bit が 1 のレジスタ（16本なら r15、8本なら r7）に書く（残るのは Memory のポートの値）。全 0 では何も書かない。乱数では、行き先も値も乱数になり、busy・pc・プログラム長の初期値しだいで、その境界に命令が1つ発行され、ST が Scratchpad に書くこともある。どの場合も、書くのは未定義の位置だけである。そのため、ホストは reset の後に入力を書く（下の「構成」）。この書込みを RTL で止めるかは、状態を足す #110・#112 で決める（ADR-0021）。
 
 ## 構成（Phase 1）
 
@@ -46,7 +71,7 @@ VLIW_SIM_SEED=random sbt hw/test   # テストの JVM ごとに新しい seed（
 | `FixedPlan` | 固定パイプラインの計画（各操作の発行サイクルと読む値）と、組み立て時の検査（スロット、L3、L5、L7、L9。verifier とは独立）。値のレジスタの割り当てと、その寿命の検査 |
 | `FixedParams` | 固定パイプラインのパラメータ。対応する machine は `Core` と同じで、`CoreParams.unsupported` と同じ理由で拒否する |
 
-ホストは停止中に、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける。実行中は内部状態を変更しない。
+ホストは停止中に、reset の後で、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける（`CoreDriver.start` と同じ）。最初の reset の境界は RF や Scratchpad に書くことがあるので（上の「初期状態」）、reset の前に書いた値は残るとは限らない。実行中は内部状態を変更しない。
 
 ## ISA mvp-1（MAC、#77）
 
@@ -70,4 +95,4 @@ machine description に MAC があれば（`config/machine-mvp1.json` など）�
 | `EmitSpec` | SystemVerilog の生成（mvp-0 と mvp-1）と、対応しない構成の拒否 |
 | `FixedPipelineSpec` | 固定パイプライン: 計画の検査の各規則、値のレジスタの共有と寿命、Core と同じ範囲の拒否、SystemVerilog（Decoder と RegisterFile がない）、手で計算した例の発行・書戻し・done の cycle（`FixedDriver` は `CoreDriver` と同じ数え方） |
 
-RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。
+RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。初期値を全 0・全 1 にした RTL の確認（L8 だけに反するカナリア、合法なプログラム、書かれない位置）は、`crosscheck/InitStateSpec` で行う（#129）。

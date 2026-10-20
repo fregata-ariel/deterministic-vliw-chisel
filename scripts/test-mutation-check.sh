@@ -108,6 +108,12 @@ MUTATION_SHARD=2/2 run 'pass kill' "$work/logs6"
 expect 0 '^m-second +killed' '^killed: 1, survived: 0, error: 0, stale: 0'
 MUTATION_SHARD=3/3 run 'pass' "$work/logs7" m-first m-second
 expect 0 '^killed: 0, survived: 0, error: 0, stale: 0'
+# An id that names no mutant (also the header's first field) stops the check before sbt (#129).
+run 'pass' "$work/logs10" m-first m-none
+expect 2 "no mutant 'm-none' in scripts/mutants.tsv"
+[[ ! -e "$work/state" ]] || die 'sbt ran for an id that names no mutant'
+run 'pass' "$work/logs10" '# id'
+expect 2 "no mutant '# id' in scripts/mutants.tsv"
 for bad in 0/2 3/2 1/0 x 1/2/3; do
   MUTATION_SHARD="$bad" run '' "$work/logs8"
   expect 2 'MUTATION_SHARD must be k/n'

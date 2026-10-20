@@ -62,22 +62,11 @@ class FixedPipelineKernelSpec extends AnyFunSuite with VliwChiselSim {
     val k = p.kernel
     val layout = p.prepared.layout
     test(s"${k.name}: DSL reference outputs in ${p.cycles} cycles (${p.strategy})") {
-      val ops = p.plan.ops
-      val computes = ops.filter(_.isInstanceOf[FixedOp.Compute])
-      val memoryOps = ops.filterNot(_.isInstanceOf[FixedOp.Compute])
-      val loads = ops.filter(_.isInstanceOf[FixedOp.Load])
-      def commits(os: Seq[FixedOp]) = os.map(FixedPlan.commitCycle(machine, _)).sorted
       simulate(new FixedPipeline(p.params)) { dut =>
         def check(image: Map[Int, Long], expected: Values, first: Boolean, what: String): Unit = {
           val run = FixedDriver.run(dut, image, layout.outputAddresses, reset = first, extra = 2)
-          assert(run.cycles == p.cycles, what)
-          assert(run.doneCycles == Seq(p.cycles), s"$what: done is high for one cycle")
-          assert(run.busyCycles == (0 until p.cycles), s"$what: busy in cycles 0..T")
-          assert(layout.outputs(a => run.memory(a).toLong) == expected, what)
-          assert(run.computeIssues == computes.map(_.issue).sorted, what)
-          assert(run.memoryIssues == memoryOps.map(_.issue).sorted, what)
-          assert(run.computeCommits == commits(computes), what)
-          assert(run.memoryCommits == commits(loads), what)
+          val problems = FixedPipelines.mismatches(p, run, expected)
+          assert(problems.isEmpty, s"$what: ${problems.mkString("; ")}")
         }
         inputs(k).zipWithIndex.foreach { case (in, i) =>
           val image = layout.memoryImage(in).fold(e => fail(e), identity)
