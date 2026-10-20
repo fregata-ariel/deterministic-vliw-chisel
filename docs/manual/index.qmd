@@ -4,20 +4,13 @@ subtitle: "Chisel実装・ISA・サイクル契約のマニュアル"
 description: "実装を根拠に、2スロットVLIWのデータ経路、命令語、実行時の状態変化、静的スケジューリングを説明する日本語マニュアル。"
 ---
 
-::: {.eyebrow}
-ARCHITECTURE / ISA / EXECUTION
-:::
-
-::: {.lead-in}
-**コンパイラが「いつ」を決め、ハードウェアがその時刻どおりに実行する。**
-このマイクロエンジンでは、待ち時間も命令列の一部になる。
-:::
+**コンパイラが「いつ」を決め、ハードウェアがその時刻どおりに実行する。** このマイクロエンジンでは、待ち時間も命令列の一部になります。
 
 このマニュアルは [deterministic-vliw-chisel][repository] の実装を、日本語の本文と操作できる図で読むためのものです。まず回路の全体像を見て、64bitの命令語を分解し、最後にクロック境界ごとの状態変化を追います。HDLの知識がなくても、レジスタ、メモリ、クロックの基本が分かれば読み進められます。
 
 説明の基準は **commit `787ae6d53953bf87202640dcbc181a88156a12a7`** です。[mvp-0のmachine description][machine0]を標準とし、[mvp-1][machine1]のMAC拡張を併記します。将来案と実装済みの機能は「対応範囲」で区別します。命令の正式な契約は[ISA仕様][isa]、構成値の制約は[Machine仕様][machine-doc]を参照してください。
 
-図の「再生」はクリックして始まります。一時停止、前後送り、先頭への復帰ができます。動きを減らすOS設定にも対応します。JavaScriptを無効にしても本文、静的な図、命令表、実行例を読めます。アニメーションはHTML版で利用してください。
+図はQuarto標準の`{mermaid}`コードセルで記述しています。HTMLでは標準のタブを切り替え、構成や実行段階を比較できます。矢印のアニメーションはMermaidの組み込み機能です。PDF・DOCXでは同じ図を静止画像にし、タブ内の全段階を順に掲載します。独自HTML・JavaScriptによる操作UIは使いません。
 
 | 知りたいこと | 読む場所 |
 |---|---|
@@ -77,7 +70,7 @@ VLIW（Very Long Instruction Word）は、同時に発行する操作を1つの�
 
 ## 比較用のFixedPipeline
 
-図の回路を「FixedPipeline」に切り替えると、同じスロットとScratchpadを使いながら、命令メモリ・Decoder・汎用RFを省いた構成を確認できます。`FixedPlan`が演算、即値アドレス、発行時刻を回路生成時に固定し、サイクルカウンタが制御します。値は`StoragePolicy`で割り当てる専用の32bitレジスタへ保存します。
+上の「FixedPipeline」タブでは、同じスロットとScratchpadを使いながら、命令メモリ・Decoder・汎用RFを省いた構成を確認できます。`FixedPlan`が演算、即値アドレス、発行時刻を回路生成時に固定し、サイクルカウンタが制御します。値は`StoragePolicy`で割り当てる専用の32bitレジスタへ保存します。
 
 | 観点 | VLIW Core | FixedPipeline |
 |---|---|---|
@@ -94,7 +87,7 @@ VLIW（Very Long Instruction Word）は、同時に発行する操作を1つの�
 
 ## 命令の意味
 
-表のLとIIは既定値です。**L（latency）は結果が見えるまでのcycle数、II（initiation interval）は同じ演算を再発行できる最短間隔**です。MULはL=2、II=1なので、結果を待つ間も、依存しない次のMULを発行できます。後の実行図で「MULの連続発行」を選ぶと確認できます。
+表のLとIIは既定値です。**L（latency）は結果が見えるまでのcycle数、II（initiation interval）は同じ演算を再発行できる最短間隔**です。MULはL=2、II=1なので、結果を待つ間も、依存しない次のMULを発行できます。例えばMULをcycle 0、1に発行すると、それぞれE2、E3で結果が見えます。既存の`consecutive_mul`ケースがこのIIを検証しています。
 
 | Slot | 命令 | 結果 | L | II |
 |---|---|---|---:|---:|
@@ -129,7 +122,7 @@ opcodeはmachine descriptionから取得します。NOPとHALTはopcode以外の
 
 {{< include _decoder.qmd >}}
 
-`MAC r5, r1, r2, r3 | NOP`の語は`0000000045123000`です。mvp-1を選ぶとrs3=3が取り出され、mvp-0を選ぶと未知opcodeの違反になります。この図はフィールドの教材で、bundle列の依存関係・HALT・入力宣言までを検査するものではありません。
+`MAC r5, r1, r2, r3 | NOP`の語は`0000000045123000`です。mvp-1ならrs3=3を持つMACになり、mvp-0なら未知opcodeの違反になります。この図はフィールドの教材で、命令列の依存関係・HALT・入力宣言の合法性は独立verifierで検査します。
 
 ## アセンブリで時刻を指定する
 
@@ -184,7 +177,7 @@ opcodeはmachine descriptionから取得します。NOPとHALTはopcode以外の
 
 HALTはcycle 6に発行するので、実行cycle数は`h+1=7`です。トレースはcycle 0からdoneのcycle 7まで記録するため**8行**になります。最終行は新しい命令の発行ではありません。doneはcycle 7だけ1で、その次は0になります。
 
-この教材は[既存テストケース][example-case]と[手書きgolden trace][example-trace]を直接使っています。図を動かすJavaScriptはCPUを再実装せず、初期状態に各行のcommitを順に重ねます。命令語のgoldenは[isa_example.hex][example-hex]です。
+この教材は[既存テストケース][example-case]と[手書きgolden trace][example-trace]を直接使っています。各境界の表は初期状態へgolden traceのcommitを順に反映したものです。命令語のgoldenは[isa_example.hex][example-hex]です。
 
 ## 同じbundleでは旧値を読む
 
@@ -279,7 +272,7 @@ traceの`rf_commit`と`mem_commit`は**行の先頭のE_sで反映した更新**
 
 ## 設定を読めることとRTLを作れること
 
-machine descriptionのローダ、意味論、RTLには次の差があります。図は既定値を表示しますが、アニメーションデータの機械設定はビルド時に設定ファイルから取り込みます。
+machine descriptionのローダ、意味論、RTLには次の差があります。図と表は既定の機械設定を説明します。設定を変更するときは、図の値と仕様もあわせて確認してください。
 
 | 項目 | ローダ・verifier・参照モデル | 現行Core / FixedPipelineのRTL |
 |---|---|---|
@@ -311,26 +304,23 @@ machine descriptionのローダ、意味論、RTLには次の差があります�
 
 ## マニュアルをビルドする
 
-リポジトリルートから実行します。Quarto CLIとPython 3が必要です。このマニュアルの検証にはQuarto **1.8.27**を使用しています。sbt、Jupyter、R、外部JavaScriptライブラリはマニュアルの生成には不要です。
+リポジトリルートから、同じ`.qmd`をそのまま3形式へ出力します。Quarto **1.8.27**と日本語フォントNoto Sans CJK JPを使います。PDFはQuarto同梱のTypstを使う標準出力です。PDF・DOCXのMermaid図はQuartoがChromeで画像化します。
 
 ```sh
-quarto render docs/manual
+quarto render docs/manual --to html
+quarto render docs/manual --to typst  # index.pdf
+quarto render docs/manual --to docx
+# 3形式をまとめて生成
+quarto render docs/manual --to all
 ```
 
-生成される`docs/manual/_output/index.html`をブラウザで開きます。CSS・JavaScript・教材データを埋め込んだ単一HTMLで、実行時の外部通信は不要です。[Quartoのembed-resources][quarto-html]を使っています。図のソースとビルド・検証手順の詳細は[docs/manual/README.md][manual-readme]を参照してください。
+出力先は`docs/manual/_output/`です。HTMLはQuarto標準のタブとMermaidで図を操作・比較し、PDF・DOCXは全図と全段階を読む構成です。ビルド前のデータ生成スクリプトや独自のブラウザアプリは不要です。必要なフォント・ブラウザの導入とCIの検査内容は[README][manual-readme]にまとめています。
 
 ```sh
-# ローカルプレビュー
-quarto preview docs/manual
-
-# 取り込んだ教材データと元のファイルが一致するか
-python3 docs/manual/prepare.py --check
-
-# 状態再生・フィールド分解・既存fixtureとの整合性
-node --test docs/manual/tests/model.test.cjs
+quarto preview docs/manual --to html
 ```
 
-表示確認には後述のREADMEにあるPlaywrightテストも使えます。生成物の`_output/`とQuartoの作業領域はgit管理から除外しています。
+図の形式変換は[Quartoの図表機能][quarto-diagrams]に従います。Mermaidの組み込みアニメーションはHTMLでのみ動き、印刷物では矢印・ラベルを保持した静止図になります。
 
 ## 参照モデルとRTLを動かす
 
@@ -423,7 +413,7 @@ sbt "hw/run generated/mac config/machine-mvp1.json"
 [driver]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/test/scala/vliw/hw/CoreDriver.scala
 [design]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/DESIGN.md
 [roadmap]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/ROADMAP.md
-[quarto-html]: https://quarto.org/docs/output-formats/html-basics.html#self-contained
+[quarto-diagrams]: https://quarto.org/docs/authoring/diagrams.html
 [toolchain]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/toolchain/README.md
 [hw-readme]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/README.md
 [program-file]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/isa/src/main/scala/vliw/isa/ProgramFile.scala

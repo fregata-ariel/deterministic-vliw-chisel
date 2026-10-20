@@ -1,66 +1,47 @@
-```{=html}
-<figure class="manual-figure" id="architecture" aria-labelledby="architecture-title">
-  <h3 id="architecture-title">データが通る場所</h3>
-  <div class="controls js-only" hidden>
-    <label>回路 <select id="architecture-mode"><option value="core">VLIW Core</option><option value="fixed">FixedPipeline</option></select></label>
-    <button type="button" data-play>再生</button><button type="button" data-prev>前へ</button><button type="button" data-next>次へ</button><button type="button" data-reset>先頭へ</button>
-  </div>
-  <p class="step-label" id="architecture-step">1 / 6 — ホストが準備する</p>
-  <div class="diagram-scroll">
-    <svg id="core-diagram" viewBox="0 0 900 510" role="img" aria-labelledby="core-svg-title core-svg-desc">
-      <title id="core-svg-title">VLIW Coreの構成とデータ経路</title>
-      <desc id="core-svg-desc">ホストが命令と入力を設定する。PCが指す64bit命令をDecoderで分解し、RFから入力を読んでComputeとMemoryへ渡す。結果は別々の書戻しポートでRFへ戻る。Memoryは2バンクScratchpadに接続する。予約検査はストールを発生させない。</desc>
-      <defs><marker id="core-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8198ae"/></marker></defs>
-      <g fill="none" marker-end="url(#core-arrow)">
-        <path class="flow" data-path="1" d="M430 48 H490"/>
-        <path class="flow" data-path="2" d="M580 78 V110 H425 V140"/>
-        <path class="flow" data-path="3" d="M350 210 V250 H165 V300"/>
-        <path class="flow memory-flow" data-path="3" d="M500 210 V250 H735 V300"/>
-        <path class="flow" data-path="4" d="M55 300 V170 H300"/>
-        <path class="flow memory-flow" data-path="4" d="M600 340 H565 V190 H550"/>
-        <path class="flow memory-flow" data-path="3" d="M760 374 V430"/>
-        <path class="flow memory-flow" data-path="4" d="M700 430 V374"/>
-      </g>
-      <g class="diagram-node active" data-node="0"><rect class="node" x="20" y="18" width="180" height="60" rx="5"/><text x="110" y="43" text-anchor="middle">HostIO</text><text class="small" x="110" y="64" text-anchor="middle">idle中に命令・入力を配置</text></g>
-      <g class="diagram-node" data-node="1"><rect class="node" x="240" y="18" width="190" height="60" rx="5"/><text x="335" y="43" text-anchor="middle">PC → Instruction memory</text><text class="small" x="335" y="64" text-anchor="middle">Mem / 256 × 64bit</text></g>
-      <g class="diagram-node" data-node="1"><rect class="node" x="490" y="18" width="180" height="60" rx="5"/><text x="580" y="43" text-anchor="middle">Decoder</text><text class="small" x="580" y="64" text-anchor="middle">Compute + Memory</text></g>
-      <g class="diagram-node" data-node="5"><rect class="node" x="710" y="18" width="170" height="60" rx="5"/><text x="795" y="43" text-anchor="middle">start / busy / done</text><text class="small" x="795" y="64" text-anchor="middle">HALTで終了を通知</text></g>
-      <g class="diagram-node" data-node="2,4"><rect class="node" x="300" y="140" width="250" height="70" rx="5"/><text x="425" y="167" text-anchor="middle">RegisterFile / 16 × 32bit</text><text class="small" x="425" y="190" text-anchor="middle">3 read / 2 write・r0も通常レジスタ</text></g>
-      <g class="diagram-node" data-node="2"><rect class="node" x="660" y="140" width="220" height="70" rx="5"/><text x="770" y="167" text-anchor="middle">WriteReservations</text><text class="small" x="770" y="190" text-anchor="middle">違反検出用・ストールしない</text></g>
-      <text class="small" x="75" y="153">Compute WB →</text><text class="small" x="575" y="230">← Memory WB</text>
-      <text class="small" x="180" y="273">rs1 / rs2 / MACのrs3</text><text class="small" x="620" y="273">STのソース</text>
-      <g class="diagram-node" data-node="3,4"><rect class="node" x="30" y="300" width="270" height="74" rx="5"/><text x="165" y="327" text-anchor="middle">ComputeSlot</text><text class="small" x="165" y="350" text-anchor="middle">ADD / SUB / MUL（mvp-1: MAC）</text></g>
-      <g class="diagram-node memory" data-node="3,4"><rect class="node" x="600" y="300" width="270" height="74" rx="5"/><text x="735" y="327" text-anchor="middle">MemorySlot</text><text class="small" x="735" y="350" text-anchor="middle">LD / ST・全体で1 access / cycle</text></g>
-      <text class="small" x="30" y="409">両スロットにWritebackSchedule</text><text class="small" x="30" y="434">固定境界でcommit・各ポート1結果 / 境界</text>
-      <g class="diagram-node memory" data-node="3"><rect class="node" x="600" y="430" width="270" height="62" rx="5"/><text x="735" y="455" text-anchor="middle">Scratchpad / SyncReadMem</text><text class="small" x="735" y="477" text-anchor="middle">2 bank × 256 word・各bank 1RW</text></g>
-    </svg>
-    <svg id="fixed-diagram" viewBox="0 0 900 510" role="img" aria-labelledby="fixed-svg-title fixed-svg-desc" hidden>
-      <title id="fixed-svg-title">FixedPipelineの構成とデータ経路</title>
-      <desc id="fixed-svg-desc">ホストがメモリを準備する。サイクルカウンタが固定されたenable、アドレス、選択信号を出す。値レジスタとオペランドMUXがComputeSlotとMemorySlotに接続され、同じ固定境界で結果が保存される。命令メモリ、Decoder、汎用RFは持たない。</desc>
-      <defs><marker id="fixed-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8198ae"/></marker></defs>
-      <g fill="none" marker-end="url(#fixed-arrow)">
-        <path class="flow" data-path="1" d="M430 48 H490"/>
-        <path class="flow" data-path="2" d="M580 78 V110 H425 V140"/>
-        <path class="flow" data-path="3" d="M350 210 V250 H165 V300"/>
-        <path class="flow memory-flow" data-path="3" d="M500 210 V250 H735 V300"/>
-        <path class="flow" data-path="4" d="M55 300 V170 H300"/>
-        <path class="flow memory-flow" data-path="4" d="M600 340 H565 V190 H550"/>
-        <path class="flow memory-flow" data-path="3" d="M760 374 V430"/>
-        <path class="flow memory-flow" data-path="4" d="M700 430 V374"/>
-      </g>
-      <g class="diagram-node active" data-node="0"><rect class="node" x="20" y="18" width="180" height="60" rx="5"/><text x="110" y="43" text-anchor="middle">FixedHostIO</text><text class="small" x="110" y="64" text-anchor="middle">idle中にメモリを準備</text></g>
-      <g class="diagram-node" data-node="1"><rect class="node" x="240" y="18" width="190" height="60" rx="5"/><text x="335" y="43" text-anchor="middle">サイクルカウンタ</text><text class="small" x="335" y="64" text-anchor="middle">FixedPlanの時刻をたどる</text></g>
-      <g class="diagram-node" data-node="1"><rect class="node" x="490" y="18" width="180" height="60" rx="5"/><text x="580" y="43" text-anchor="middle">時刻ごとの定数制御</text><text class="small" x="580" y="64" text-anchor="middle">enable / select / addr</text></g>
-      <g class="diagram-node" data-node="5"><rect class="node" x="710" y="18" width="170" height="60" rx="5"/><text x="795" y="43" text-anchor="middle">start / busy / done</text><text class="small" x="795" y="64" text-anchor="middle">T + 1 cyclesで完了</text></g>
-      <g class="diagram-node" data-node="2,4"><rect class="node" x="300" y="140" width="250" height="70" rx="5"/><text x="425" y="167" text-anchor="middle">値レジスタ + operand MUX</text><text class="small" x="425" y="190" text-anchor="middle">StoragePolicyで値を割り当てる</text></g>
-      <text class="small" x="665" y="165">IMEM・Decoder・汎用RFを省く</text><text class="small" x="665" y="190">計画は回路の生成時に固定</text>
-      <g class="diagram-node" data-node="3,4"><rect class="node" x="30" y="300" width="270" height="74" rx="5"/><text x="165" y="327" text-anchor="middle">ComputeSlot（Coreと共通）</text><text class="small" x="165" y="350" text-anchor="middle">FixedPlanはADD / SUB / MUL</text></g>
-      <g class="diagram-node memory" data-node="3,4"><rect class="node" x="600" y="300" width="270" height="74" rx="5"/><text x="735" y="327" text-anchor="middle">MemorySlot（Coreと共通）</text><text class="small" x="735" y="350" text-anchor="middle">LD / ST</text></g>
-      <text class="small" x="30" y="420">矢印は値の経路。制御信号の配線は省略。</text>
-      <g class="diagram-node memory" data-node="3"><rect class="node" x="600" y="430" width="270" height="62" rx="5"/><text x="735" y="455" text-anchor="middle">Scratchpad / SyncReadMem</text><text class="small" x="735" y="477" text-anchor="middle">Coreと同じメモリ資源</text></g>
-    </svg>
-  </div>
-  <p id="architecture-detail" class="live-detail" aria-live="polite">idle中にホストが命令メモリ・入力レジスタ・Scratchpadを書き込み、lengthを与える。startの受理境界がE₀になる。</p>
-  <figcaption class="figure-note">主要な値の経路を表示し、DecoderからMemorySlotへの即値アドレス・制御配線などは省略。再生は説明順であり、6段のCPUパイプラインを表さない。Coreのfetch・decode・RF読出しは発行サイクル内で行う。狭い画面では図を横にスクロールできる。</figcaption>
-</figure>
+::: {.panel-tabset}
+
+## VLIW Core {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-core
+%%| fig-cap: "VLIW Coreのデータ経路"
+%%| fig-alt: "命令メモリからDecoderとRFを経てComputeとMemoryへ発行する。別々の書戻しポートからRFへ戻る。"
+%%| fig-width: 6.4
+flowchart TD
+  I["PC → 命令メモリ 256 × 64bit"] --> D["Decoder"]
+  D --> R["RF 16 × 32bit・3R/2W"]
+  D -. "即値アドレス" .-> M["MemorySlot"]
+  R c@-->|"rs1・rs2・MAC rs3"| C["ComputeSlot"]
+  R m@-->|"STのソース"| M
+  C -->|"Compute WB"| R
+  M -->|"Memory WB・LD"| R
+  M -->|"LD / ST"| S["Scratchpad・2 bank × 256 word"]
+  c@{ animation: slow }
+  m@{ animation: slow }
 ```
+
+Coreの命令メモリは組合せ読出しの`Mem`です。fetch・decode・RF読出しは同じ発行サイクル内で行います。ホストの初期化配線と違反検出回路は省略しています。矢印の動きは値の経路を説明するもので、サイクル精度のシミュレーションではありません。
+
+## FixedPipeline {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-fixed
+%%| fig-cap: "スケジュールを回路に固定したFixedPipeline"
+%%| fig-alt: "サイクルカウンタが計画の制御を選び、値レジスタと共通スロットを使う。命令メモリと汎用RFはない。"
+%%| fig-width: 6.4
+flowchart TD
+  T["サイクルカウンタ"] --> P["FixedPlanの定数制御"]
+  P -. "enable・select" .-> V["値レジスタ・operand MUX"]
+  P -. "enable・addr" .-> M["MemorySlot"]
+  V c@--> C["ComputeSlot"]
+  V m@--> M
+  C -->|"Compute WB"| V
+  M -->|"Memory WB"| V
+  M --> S["Scratchpad"]
+  c@{ animation: slow }
+  m@{ animation: slow }
+```
+
+`ComputeSlot`と`MemorySlot`はCoreと共通です。現在の`FixedPlan`はADD/SUB/MUL/LD/STを表し、MACを使う計画には対応していません。命令メモリ・Decoder・汎用RFの代わりに、生成時に固定した時刻と値レジスタを使います。
+
+:::

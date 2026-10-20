@@ -1,73 +1,64 @@
-# 動く図で読むマニュアル（Quarto）
+# Quarto標準の図で読むマニュアル
 
-[index.qmd](index.qmd) が日本語マニュアルの本文です。標準のISA mvp-0と、実装済みのmvp-1（MAC）、比較用FixedPipelineを説明します。
+[index.qmd](index.qmd)を同じソースからHTML、PDF、DOCXへ出力します。図はQuarto標準の`{mermaid}`コードセル、比較と実行段階の切替は標準の`.panel-tabset`です。独自HTML、JavaScript、CSS、Quarto拡張、事前のデータ生成スクリプトはありません。
 
-- Core / FixedPipelineの切替とデータ経路の段階再生
-- ISAのbit分解とlittle-endian byte列。MACのISA依存や予約bit違反も表示
-- 既存golden traceに基づくcycle単位の状態再生、タイムライン、RF・メモリ・busy/done
-- L3・L5・L6・L11の衝突と修正案の段階表示
-- コンパイルから実行・照合までの処理の段階表示
-
-図は手動で再生を開始し、末尾で停止します。前後送りとリセット、実行図には境界のスライダーがあります。OSの`prefers-reduced-motion`を尊重し、非表示になった図・タブの再生は停止します。本文と静的な図・表はJavaScriptなしでも読めます。
-
-## 生成・閲覧
-
-必要: [Quarto CLI](https://quarto.org/docs/get-started/)、Python 3。検証済みQuarto: **1.8.27**。Python標準ライブラリのみを使用し、R・Jupyter・sbtは不要です。
-
-リポジトリルートで:
-
-```sh
-quarto render docs/manual
-# docs/manual/_output/index.html をブラウザで開く
-
-quarto preview docs/manual
-```
-
-CSS、JavaScript、教材データは`embed-resources: true`でHTMLに埋め込まれます。生成後は単一HTMLをコピーしてオフラインで閲覧できます。外部CDN、fetch、Webサーバーは実行時に不要です。`_output/`と`.quarto/`は生成物のためgitignoreしています。印刷は本文と静的な図を使い、動く図はHTMLで利用してください。
-
-## データの由来と更新
-
-本文の設計説明・ソースリンクはcommit `787ae6d53953bf87202640dcbc181a88156a12a7`を基準にしています。ソースが進んだら、基準commit、本文の構成値、静的な図・フォールバック表もあわせて更新してください。
-
-`prepare.py`はQuartoのpre-renderとして次を`assets/data.js`へ取り込みます。fixtureの内容を変換してCPUの期待結果を生成する処理はありません。
-
-| 元データ | 用途 |
+| 出力 | 図の扱い |
 |---|---|
-| `config/machine.json`、`config/machine-mvp1.json` | opcode、latency、ISA、資源数 |
-| `tests/cases/isa_example.json`、`consecutive_mul.json` | 入力値、期待する結果・cycle数 |
-| 上のケースが指定する`tests/golden/*.trace.jsonl` | issue、commit、busy/doneの再生 |
-| `tests/golden/isa_example.hex` | 手計算の命令語との照合 |
-| `tests/cases/raw_mul_next_cycle.json`、`mul_then_add_port.json`、`early_halt_ld.json`、`mac_store_read_ports.json` | ハザード教材と期待する規則番号 |
+| HTML | ネイティブMermaid。組み込みの矢印アニメーションとQuartoのタブ切替 |
+| PDF | QuartoがMermaidを静止画像に変換。全タブの内容を順に掲載 |
+| DOCX | QuartoがMermaidを静止画像に変換。全タブの内容を順に掲載 |
+
+矢印の動きはデータ経路の説明です。CPUの動作をブラウザでシミュレーションするものではありません。値と時刻は本文・各境界の表に明示します。
+
+## 必要なもの
+
+- Quarto CLI **1.8.27**（Typstを同梱）
+- 日本語フォント **Noto Sans CJK JP**（Ubuntuでは`fonts-noto-cjk`）
+- PDF・DOCXへの図の変換にChrome / Chromium。Quartoが自動検出します。未導入なら`quarto install chromium`で導入できます。実行ファイルを明示する場合は`QUARTO_CHROMIUM`を指定します。
+
+PDFにはQuarto標準のTypst形式を使います。`--to typst`の出力は`.pdf`です。LaTeX環境は不要です。本文と図の生成にPython、R、Jupyter、Node.jsのインストールは不要です。
+
+## 生成
+
+リポジトリルートで実行します。
 
 ```sh
-python3 docs/manual/prepare.py          # 取り込み直す（通常はrenderが実行）
-python3 docs/manual/prepare.py --check  # 未更新なら非ゼロ終了
+quarto render docs/manual --to html
+quarto render docs/manual --to typst  # docs/manual/_output/index.pdf
+quarto render docs/manual --to docx
+quarto render docs/manual --to all   # 3形式すべて
+quarto preview docs/manual --to html
 ```
 
-`assets/model.js`はtraceのcommitを入力状態へ重ねる表示用ヘルパーとbit分解だけです。CPUのエミュレータ、スケジューラ、独立verifierの代替ではありません。ISA分解図は単一bundleのL1の欄を確認し、L2〜L11の判定は行いません。ハザード図の修正例は説明用であり、任意プログラムを自動修復しません。
+出力先は`docs/manual/_output/`です。HTMLは`embed-resources: true`でQuartoの標準リソースを埋め込みます。PDF・DOCXにも図、段階ごとの説明、値の表を含めます。印刷形式ではアニメーションとタブ操作は静止図と連続する見出しになります。
+
+## 構成と根拠
+
+| ソース | 内容 |
+|---|---|
+| `index.qmd` | アーキテクチャ、ISA、実行意味論、合法性、コンパイラ、対応範囲、参照リンク |
+| `_architecture.qmd` | VLIW Core / FixedPipelineのMermaid図 |
+| `_decoder.qmd` | 64bit bundleの分解例とMACのISA依存 |
+| `_replay.qmd` | E0、E2、E4、E5、E7の経路と、全8境界の状態表 |
+| `_hazards.qmd` | L3、L5、L6、L11の衝突と修正案 |
+| `_compiler.qmd` | スケジュール、符号化、独立verifierの経路 |
+
+説明とソースリンクはcommit `787ae6d53953bf87202640dcbc181a88156a12a7`を基準にしています。実行図と状態表は`tests/cases/isa_example.json`および`tests/golden/isa_example.trace.jsonl`と照合します。ハザード例は既存の不正ケースに対応します。機械設定やfixtureを変えたときは本文・図・表も更新してください。
 
 ## 検証
 
-Node.js 18以上の標準テストランナーで、fixtureの一致、commit境界、逆方向へのseek、最終状態、LとIIの違い、golden命令語、MAC・不正bitを検査します。
+専用CI `.github/workflows/manual.yml`が次を確認します。
+
+1. raw HTMLや独自ブラウザ資産がなく、状態表が既存goldenと一致すること
+2. `quarto render docs/manual --to all`が成功すること
+3. HTMLで14個のMermaid図が描画され、標準タブを切り替えられること
+4. PDFとDOCXに14個の図と、印刷向けの全段階が含まれること
 
 ```sh
-python3 docs/manual/prepare.py --check
-node --test docs/manual/tests/model.test.cjs
+# ソースとgoldenの照合。ビルド自体には不要
+python3 docs/manual/tests/check_source.py
 ```
 
-ブラウザの検証にはPlaywrightとChromiumを使います。Playwrightが既に利用できる環境なら追加インストールは不要です。未導入ならリポジトリ外の作業ディレクトリにインストールできます。
+ブラウザ検証にはPlaywright、PDF検査にはPopplerを使います。テスト専用依存はマニュアルの出力には含まれません。CIの`quarto-manual` artifactにはHTML・PDF・DOCXと、表示確認用スクリーンショットを保存します。Webサイトへの公開は行いません。
 
-```sh
-# 任意: ブラウザ検証用依存を別ディレクトリへ導入
-npm install --prefix /tmp/vliw-manual-browser --no-package-lock playwright@1.56.1
-/tmp/vliw-manual-browser/node_modules/.bin/playwright install chromium
-
-# render済みのHTMLを直接file://で開き、外部通信なしで検査する
-NODE_PATH=/tmp/vliw-manual-browser/node_modules node docs/manual/tests/browser.cjs
-```
-
-`browser.cjs`は操作、再生の有限停止、2つのtrace、全境界の表示、bit分解、全ハザード、Core/FixedPipeline切替、キーボード、狭い画面、reduced-motion、JavaScript無効時のフォールバック、内部リンク、ブラウザエラー、外部リクエストを検査します。スクリーンショットは`_output/qa/`へ保存します。`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`を指定すると既存のChromiumを使えます。
-
-この変更はドキュメントと表示用コードです。RTL・Scala実装は変更しません。RTLの機能確認は既存の`scripts/check.sh`に従って別途行ってください。
-
-PRでは`.github/workflows/manual.yml`が同じ検証を行い、生成HTMLとレビュー用スクリーンショットを`animated-manual` artifactとして保存します。ホスティングへの公開は行いません。
+[Quartoの図表機能](https://quarto.org/docs/authoring/diagrams.html)はHTMLにネイティブMermaid、PDF・DOCXに画像を出す仕組みです。[標準タブセット](https://quarto.org/docs/output-formats/html-basics.html#tabsets)と[Typst出力](https://quarto.org/docs/output-formats/typst.html)もQuarto標準の機能です。

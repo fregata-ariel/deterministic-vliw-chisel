@@ -1,15 +1,35 @@
-```{=html}
-<figure class="manual-figure" id="decoder" aria-labelledby="decoder-title">
-  <h3 id="decoder-title">64bitの命令語を分解する</h3>
-  <div class="controls js-only" hidden>
-    <label>ISA <select id="decoder-isa"><option>mvp-0</option><option>mvp-1</option></select></label>
-    <label>例 <select id="decoder-example"><option value="1100000000000000">LD r1, [0]</option><option value="0000000033120000">MUL r3, r1, r2</option><option value="2400800000000000">ST [1], r4</option><option value="00000000f0000000">HALT</option><option value="0000000045123000">MAC r5, r1, r2, r3</option><option value="0000000014310001">予約bit違反</option></select></label>
-    <label>16進64bit <input id="decoder-hex" class="mono" type="text" value="1100000000000000" maxlength="16" spellcheck="false" autocomplete="off" aria-describedby="decoder-input-help"></label>
-  </div>
-  <p id="decoder-input-help" class="figure-note">16桁を入力すると分解図を更新する。MACの例はmvp-1へ切り替えて読む。任意の命令列の合法性検査には独立verifierを使う。</p>
-  <div class="bit-word"><strong>上位32bit — Memory word（bundle bits 63:32）</strong><div class="bit-strip" id="memory-fields"><div class="bit-field memory" style="--bits:4">31:28<strong>opcode = 1 / LD</strong></div><div class="bit-field memory" style="--bits:4">27:24<strong>reg = 1</strong></div><div class="bit-field memory" style="--bits:9">23:15<strong>addr = 0</strong></div><div class="bit-field reserved" style="--bits:15">14:0<strong>reserved = 0</strong></div></div></div>
-  <div class="bit-word"><strong>下位32bit — Compute word（bundle bits 31:0）</strong><div class="bit-strip" id="compute-fields"><div class="bit-field" style="--bits:4">31:28<strong>opcode = 0 / NOP</strong></div><div class="bit-field reserved" style="--bits:28">27:0<strong>未使用 = 0</strong></div></div></div>
-  <div class="decode-result" aria-live="polite"><p id="decoder-asm" class="mono">NOP | LD r1, [0]</p><p id="decoder-bytes" class="mono">.bin: 00 00 00 00 00 00 00 11</p><p id="decoder-status">単一bundleのL1フィールド検査: 違反なし。</p></div>
-  <figcaption class="figure-note">bit番号は各32bit word内の番号。幅の比率は説明用。フィールドはmachine descriptionのopcodeを使って分解する。L2〜L11はこの図では判定しない。</figcaption>
-</figure>
+::: {.panel-tabset}
+
+## LDのbundle {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-bundle-ld
+%%| fig-cap: "64bit bundleを2つの32bit wordへ分解する"
+%%| fig-alt: "1100000000000000は上位のMemory wordがLD r1 [0]、下位のCompute wordがNOP。"
+%%| fig-width: 6.4
+flowchart TD
+  B["0x1100000000000000"] --> M["上位32bit: 0x11000000"]
+  B --> C["下位32bit: 0x00000000"]
+  M --> LD["opcode=1・reg=1・addr=0 → LD r1, [0]"]
+  C --> N["opcode=0 → NOP"]
 ```
+
+`.hex`は`1100000000000000`、little-endianの`.bin`は`00 00 00 00 00 00 00 11`です。アドレス0はbyteオフセットではなくword番号です。
+
+## MACのbundle {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-bundle-mac
+%%| fig-cap: "MACの第3ソースとISAバージョン"
+%%| fig-alt: "45123000のCompute wordはopcode 4、rd 5、rs1 1、rs2 2、rs3 3。mvp-1でMACになりmvp-0ではL1違反。"
+%%| fig-width: 6.4
+flowchart TD
+  B["0x0000000045123000"] --> C["Compute: opcode=4, rd=5, rs1=1, rs2=2, rs3=3"]
+  C --> V{"ISA"}
+  V -->|"mvp-1"| OK["MAC r5, r1, r2, r3"]
+  V -->|"mvp-0"| NG["未知opcode・L1違反"]
+```
+
+MACのrs3はbits 15:12です。ADD/SUB/MULでは同じ欄も予約bitで0にします。このMACの`.bin`は`00 30 12 45 00 00 00 00`です。
+
+:::

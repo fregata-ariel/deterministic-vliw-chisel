@@ -1,4 +1,4 @@
-name: Animated manual
+name: Quarto manual
 
 on:
   pull_request:
@@ -24,7 +24,7 @@ permissions:
 jobs:
   manual:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -33,25 +33,35 @@ jobs:
       - uses: quarto-dev/quarto-actions/setup@v2
         with:
           version: "1.8.27"
-      - name: Check embedded data and presentation model
+      - name: Install Japanese fonts and print inspection tools
         run: |
-          python3 docs/manual/prepare.py --check
-          node --test docs/manual/tests/model.test.cjs
-      - name: Render self-contained HTML
-        run: quarto render docs/manual
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk poppler-utils libreoffice-writer
+      - name: Check portable source and golden trace
+        run: python3 docs/manual/tests/check_source.py
+      - name: Render HTML PDF and DOCX with standard Quarto
+        run: quarto render docs/manual --to all
+      - name: Check diagrams and all stages in print outputs
+        run: python3 docs/manual/tests/check_outputs.py
+      - name: Inspect PDF and DOCX page layouts
+        run: |
+          mkdir -p docs/manual/_output/qa/pdf docs/manual/_output/qa/docx
+          pdftoppm -scale-to 1400 -png docs/manual/_output/index.pdf docs/manual/_output/qa/pdf/page
+          libreoffice -env:UserInstallation=file:///$RUNNER_TEMP/manual-lo --headless --convert-to pdf --outdir docs/manual/_output/qa/docx docs/manual/_output/index.docx
+          pdftoppm -scale-to 1400 -png docs/manual/_output/qa/docx/index.pdf docs/manual/_output/qa/docx/page
       - name: Install browser test tools outside the checkout
         run: |
           npm install --prefix "$RUNNER_TEMP/manual-browser" --no-package-lock playwright@1.56.1
           "$RUNNER_TEMP/manual-browser/node_modules/.bin/playwright" install --with-deps chromium
-      - name: Check offline browser interactions and layout
+      - name: Check native Mermaid and standard tabs
         run: node docs/manual/tests/browser.cjs
         env:
           NODE_PATH: ${{ runner.temp }}/manual-browser/node_modules
-      - name: Keep HTML and review screenshots
+      - name: Keep all three outputs and review pages
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: animated-manual
+          name: quarto-manual
           path: docs/manual/_output/
           if-no-files-found: error
           retention-days: 14
