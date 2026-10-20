@@ -28,7 +28,7 @@
       <g class="diagram-node" data-node="2,4"><rect class="node" x="300" y="140" width="250" height="70" rx="5"/><text x="425" y="167" text-anchor="middle">RegisterFile / 16 × 32bit</text><text class="small" x="425" y="190" text-anchor="middle">3 read / 2 write・r0も通常レジスタ</text></g>
       <g class="diagram-node" data-node="2"><rect class="node" x="660" y="140" width="220" height="70" rx="5"/><text x="770" y="167" text-anchor="middle">WriteReservations</text><text class="small" x="770" y="190" text-anchor="middle">違反検出用・ストールしない</text></g>
       <text class="small" x="75" y="153">Compute WB →</text><text class="small" x="575" y="230">← Memory WB</text>
-      <text class="small" x="180" y="273">rs1 / rs2 / MACのrs3</text><text class="small" x="620" y="273">STのソース・即値addr</text>
+      <text class="small" x="180" y="273">rs1 / rs2 / MACのrs3</text><text class="small" x="620" y="273">STのソース</text>
       <g class="diagram-node" data-node="3,4"><rect class="node" x="30" y="300" width="270" height="74" rx="5"/><text x="165" y="327" text-anchor="middle">ComputeSlot</text><text class="small" x="165" y="350" text-anchor="middle">ADD / SUB / MUL（mvp-1: MAC）</text></g>
       <g class="diagram-node memory" data-node="3,4"><rect class="node" x="600" y="300" width="270" height="74" rx="5"/><text x="735" y="327" text-anchor="middle">MemorySlot</text><text class="small" x="735" y="350" text-anchor="middle">LD / ST・全体で1 access / cycle</text></g>
       <text class="small" x="30" y="409">両スロットにWritebackSchedule</text><text class="small" x="30" y="434">固定境界でcommit・各ポート1結果 / 境界</text>
@@ -61,6 +61,6 @@
     </svg>
   </div>
   <p id="architecture-detail" class="live-detail" aria-live="polite">idle中にホストが命令メモリ・入力レジスタ・Scratchpadを書き込み、lengthを与える。startの受理境界がE₀になる。</p>
-  <figcaption class="figure-note">再生は経路の説明順を表す。6段のCPUパイプラインを表していない。Coreのfetch・decode・RF読出しは発行サイクル内で行う。狭い画面では図を横にスクロールできる。</figcaption>
+  <figcaption class="figure-note">主要な値の経路を表示し、DecoderからMemorySlotへの即値アドレス・制御配線などは省略。再生は説明順であり、6段のCPUパイプラインを表さない。Coreのfetch・decode・RF読出しは発行サイクル内で行う。狭い画面では図を横にスクロールできる。</figcaption>
 </figure>
 ```

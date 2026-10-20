@@ -58,7 +58,7 @@ code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monosp
 .live-detail { min-height: 3.7em; margin: .6rem 0; }
 .step-label { font-weight: 750; color: var(--manual-compute); }
 .diagram-scroll { width: 100%; overflow-x: auto; padding: .4rem 0; }
-.diagram-scroll svg { display: block; width: 100%; min-width: 660px; height: auto; }
+.diagram-scroll svg { display: block; width: 100%; min-width: 840px; height: auto; }
 .diagram-scroll svg text { fill: var(--manual-ink); font-family: inherit; font-size: 14px; }
 .diagram-scroll svg .small { font-size: 12px; fill: var(--manual-muted); }
 .diagram-scroll svg .node { fill: var(--manual-paper); stroke: var(--manual-line); stroke-width: 1.5; }
