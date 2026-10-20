@@ -15,7 +15,13 @@ fs.mkdirSync(qa, { recursive: true });
     page.on('pageerror', e => errors.push(e.message));
     await page.route(/^https?:/, route => { external.push(route.request().url()); return route.abort(); });
     await page.goto(pathToFileURL(path.join(out, 'index.html')).href);
-    await page.waitForFunction(() => document.querySelectorAll('svg.mermaid-js').length === 14);
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('svg.mermaid-js').length === 14);
+    } catch (error) {
+      console.error({ errors, external, diagrams: await page.locator('svg').count(), pending: await page.locator('pre.mermaid-js').allTextContents() });
+      await page.screenshot({ path: path.join(qa, 'html-render-failure.png'), fullPage: true });
+      throw error;
+    }
     const tabsets = page.locator('.panel-tabset');
     assert.equal(await tabsets.count(), 4);
     for (const group of await tabsets.all()) {
