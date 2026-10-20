@@ -49,17 +49,20 @@ jobs:
       - name: Check portable source and golden trace
         run: python3 docs/manual/tests/check_source.py
       - name: Render HTML PDF and DOCX with standard Quarto
+        id: render
         timeout-minutes: 4
         run: quarto render docs/manual --to all
       - name: Check diagrams and all stages in print outputs
         run: python3 docs/manual/tests/check_outputs.py
       - name: Inspect PDF and DOCX page layouts
+        if: ${{ !cancelled() && steps.render.outcome == 'success' }}
         run: |
           mkdir -p docs/manual/_output/qa/pdf docs/manual/_output/qa/docx
           pdftoppm -scale-to 1400 -png docs/manual/_output/index.pdf docs/manual/_output/qa/pdf/page
           libreoffice -env:UserInstallation=file:///$RUNNER_TEMP/manual-lo --headless --convert-to pdf --outdir docs/manual/_output/qa/docx docs/manual/_output/index.docx
           pdftoppm -scale-to 1400 -png docs/manual/_output/qa/docx/index.pdf docs/manual/_output/qa/docx/page
       - name: Check native Mermaid and standard tabs
+        if: ${{ !cancelled() && steps.render.outcome == 'success' }}
         run: node docs/manual/tests/browser.cjs
         env:
           NODE_PATH: ${{ runner.temp }}/manual-browser/node_modules

@@ -2,7 +2,7 @@
 %%| label: fig-compiler
 %%| fig-cap: "命令生成の経路と独立verifier"
 %%| fig-alt: "DSLをloweringしてDAGを作り、listまたはModulo Schedulingを経てレジスタ割当と符号化を行う。独立verifierに通った命令列だけを返す。"
-%%| fig-width: 4.8
+%%| fig-width: 4.4
 flowchart TD
   K["Kernel DSL / Loop IR"] --> L["Lowering / 依存グラフ"]
   L --> S["List scheduling"]
