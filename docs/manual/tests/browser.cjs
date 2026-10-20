@@ -80,6 +80,11 @@ fs.mkdirSync(qa, { recursive: true });
     }
     await page.selectOption("#replay-case", "isa_example");
     await seek(4);
+    // Let the value marker reach E4 before capturing the explanatory screenshot.
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#replay-timeline [data-cursor]');
+      return Math.abs(new DOMMatrixReadOnly(getComputedStyle(el).transform).m41 - (190 + 4 * 590 / 7)) < 0.01;
+    });
     await page.locator("#replay").screenshot({ path: path.join(qa, "replay-e4.png") });
     // Native keyboard controls and slider.
     await page.locator("#replay-cycle").focus();
