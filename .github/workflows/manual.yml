@@ -29,8 +29,6 @@ jobs:
   manual:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    env:
-      NODE_PATH: ${{ runner.temp }}/manual-browser/node_modules
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -47,7 +45,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/manual-browser" --no-package-lock playwright@1.56.1
           "$RUNNER_TEMP/manual-browser/node_modules/.bin/playwright" install --with-deps chromium
-          node -e 'console.log("QUARTO_CHROMIUM=" + require("playwright").chromium.executablePath())' >> "$GITHUB_ENV"
+          NODE_PATH="$RUNNER_TEMP/manual-browser/node_modules" node -e 'console.log("QUARTO_CHROMIUM=" + require("playwright").chromium.executablePath())' >> "$GITHUB_ENV"
       - name: Check portable source and golden trace
         run: python3 docs/manual/tests/check_source.py
       - name: Render HTML PDF and DOCX with standard Quarto
