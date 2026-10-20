@@ -23,7 +23,7 @@
     <div class="state-cell">r1<span class="value">未定義</span></div><div class="state-cell">r2<span class="value">3</span></div><div class="state-cell">r3<span class="value">未定義</span></div><div class="state-cell">r4<span class="value">未定義</span></div><div class="state-cell memory">mem[0]<span class="value">7</span></div><div class="state-cell memory">mem[1]<span class="value">未定義</span></div>
   </div>
   <p id="replay-detail" class="live-detail" aria-live="polite">cycle 0: LD r1, [0]を発行する。r1はまだ未定義。E₂から7が見える。</p>
-  <div class="diagram-scroll"><table class="trace-table" id="replay_table">
+  <div class="diagram-scroll" id="replay_table"><table class="trace-table">
     <caption>golden traceの発行とcommit（commit欄は行の先頭境界E_s）</caption>
     <thead><tr><th scope="col">s</th><th scope="col">Compute</th><th scope="col">Memory</th><th scope="col">E_sで反映</th></tr></thead>
     <tbody><tr class="selected"><th scope="row">0</th><td>NOP</td><td>LD r1, [0]</td><td>—</td></tr><tr><th scope="row">1</th><td>NOP</td><td>NOP</td><td>—</td></tr><tr><th scope="row">2</th><td>MUL r3, r1, r2</td><td>NOP</td><td>r1 = 7</td></tr><tr><th scope="row">3</th><td>NOP</td><td>NOP</td><td>—</td></tr><tr><th scope="row">4</th><td>ADD r4, r3, r1</td><td>NOP</td><td>r3 = 21</td></tr><tr><th scope="row">5</th><td>NOP</td><td>ST [1], r4</td><td>r4 = 28</td></tr><tr><th scope="row">6</th><td>HALT</td><td>NOP</td><td>mem[1] = 28</td></tr><tr><th scope="row">7</th><td>—</td><td>—</td><td>done = 1 / busy = 0</td></tr></tbody>
