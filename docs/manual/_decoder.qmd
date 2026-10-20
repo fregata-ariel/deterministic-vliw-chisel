@@ -8,6 +8,8 @@
 %%| fig-alt: "1100000000000000は上位のMemory wordがLD r1 [0]、下位のCompute wordがNOP。"
 %%| fig-width: 6.4
 flowchart TD
+  accTitle: 64bit bundleを2つの32bit wordへ分解する
+  accDescr: 1100000000000000は上位のMemory wordがLD r1 [0]、下位のCompute wordがNOP。
   B["0x1100000000000000"] --> M["上位32bit: 0x11000000"]
   B --> C["下位32bit: 0x00000000"]
   M --> LD["LD r1, [0]"]
@@ -24,6 +26,8 @@ Memoryのフィールドはopcode=1、reg=1、addr=0です。`.hex`は`110000000
 %%| fig-alt: "45123000のCompute wordはopcode 4、rd 5、rs1 1、rs2 2、rs3 3。mvp-1でMACになりmvp-0ではL1違反。"
 %%| fig-width: 6.4
 flowchart TD
+  accTitle: MACの第3ソースとISAバージョン
+  accDescr: 45123000のCompute wordはopcode 4、rd 5、rs1 1、rs2 2、rs3 3。mvp-1でMACになりmvp-0ではL1違反。
   B["0x0000000045123000"] --> C["opcode=4 / MAC"]
   C --> V{"ISA"}
   V -->|"mvp-1"| OK["MAC r5, r1, r2, r3"]
