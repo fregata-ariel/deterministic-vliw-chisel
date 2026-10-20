@@ -1,2 +1,4 @@
 /* Keep native Quarto SVG figures within narrow screens. */
 .cell-output-display svg { max-width: 100%; height: auto; }
+/* Mermaid's one-line labels must have a measurable height while a tab is hidden. */
+.cell-output-display svg foreignObject > div { height: 24px; }

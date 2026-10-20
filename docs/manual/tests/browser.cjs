@@ -31,6 +31,8 @@ fs.mkdirSync(qa, { recursive: true });
         assert.equal(await tab.getAttribute('aria-selected'), 'true');
         const target = await tab.getAttribute('aria-controls');
         await page.locator(`#${target} svg[id^="mermaid-figure-"]`).first().waitFor({ state: 'visible' });
+        const brokenLabels = await page.locator(`#${target} svg foreignObject`).evaluateAll(labels => labels.filter(label => label.getBoundingClientRect().height <= 0 || /NaN/.test(label.parentElement.getAttribute('transform'))).length);
+        assert.equal(brokenLabels, 0, 'every label remains visible after selecting a previously hidden tab');
         await group.screenshot({ path: path.join(qa, `panel-${++panel}.png`) });
       }
     }
