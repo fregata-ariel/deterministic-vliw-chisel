@@ -8,14 +8,14 @@
 %%| fig-alt: "命令メモリからDecoderとRFを経てComputeとMemoryへ発行する。別々の書戻しポートからRFへ戻る。"
 %%| fig-width: 6.4
 flowchart TD
-  I["PC → 命令メモリ 256 × 64bit"] --> D["Decoder"]
+  I["PC / 命令メモリ"] --> D["Decoder"]
   D --> R["RF 16 × 32bit・3R/2W"]
   D -. "即値アドレス" .-> M["MemorySlot"]
   R c@-->|"rs1・rs2・MAC rs3"| C["ComputeSlot"]
   R m@-->|"STのソース"| M
   C -->|"Compute WB"| R
   M -->|"Memory WB・LD"| R
-  M -->|"LD / ST"| S["Scratchpad・2 bank × 256 word"]
+  M -->|"LD / ST"| S["Scratchpad"]
   c@{ animation: slow }
   m@{ animation: slow }
 ```
@@ -31,7 +31,7 @@ Coreの命令メモリは組合せ読出しの`Mem`です。fetch・decode・RF�
 %%| fig-width: 6.4
 flowchart TD
   T["サイクルカウンタ"] --> P["FixedPlanの定数制御"]
-  P -. "enable・select" .-> V["値レジスタ・operand MUX"]
+  P -. "enable・select" .-> V["値レジスタ / MUX"]
   P -. "enable・addr" .-> M["MemorySlot"]
   V c@--> C["ComputeSlot"]
   V m@--> M

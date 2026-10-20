@@ -4,14 +4,14 @@
 %%| fig-alt: "DSLをloweringしてDAGを作り、listまたはModulo Schedulingを経てレジスタ割当と符号化を行う。独立verifierに通った命令列だけを返す。"
 %%| fig-width: 4.8
 flowchart TD
-  K["Kernel DSL / Loop IR"] --> L["配置・Lowering・依存グラフ"]
+  K["Kernel DSL / Loop IR"] --> L["Lowering / 依存グラフ"]
   L --> S["List scheduling"]
-  L --> M["Modulo Scheduling・反復を展開"]
+  L --> M["Modulo Scheduling"]
   S --> R["物理レジスタ割当"]
   M --> R
   R --> C["BundleCodecで符号化"]
   C --> V{"独立Verifier"}
-  V -->|"合法"| B["bundle列 → Core / 参照モデル"]
+  V -->|"合法"| B["Core / 参照モデル"]
   V -->|"不正"| E["コンパイルエラー"]
 ```
 

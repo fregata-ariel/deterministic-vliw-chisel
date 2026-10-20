@@ -10,7 +10,7 @@
 flowchart TD
   M["cycle 0: MUL → r3"] --> W["E2: r3が確定"]
   S["cycle 1: ST [0], r3"] --x X["書込み中のr3を読む・L3"]
-  W --> OK["修正: cycle 2にST、cycle 3にHALT"]
+  W --> OK["STをcycle 2へ"]
 ```
 
 元ケース: `tests/cases/raw_mul_next_cycle.json`。初期値が定義済みでも、書込み区間の途中で読むのは不正です。
@@ -23,7 +23,7 @@ flowchart TD
 %%| fig-alt: "MUL0とADD1はともにE2のCompute書戻しポートを要求する。ADDをcycle2へ移すとE3へ分かれる。"
 %%| fig-width: 6
 flowchart TD
-  M["cycle 0: MUL・L=2"] --> P["E2: Compute WBは1結果だけ"]
+  M["cycle 0: MUL・L=2"] --> P["E2: Compute WB × 1"]
   A["cycle 1: ADD・L=1"] --x P
   A -. "修正: cycle 2へ" .-> Q["E3: ADDをcommit"]
 ```
@@ -40,7 +40,7 @@ flowchart TD
 flowchart TD
   L["cycle 0: LD・L=2"] --> W["E2: RFへcommit"]
   H["cycle 1: HALT"] --x X["LDが未完了・L6"]
-  W --> OK["修正: cycle 2にHALT → E3でdone"]
+  W --> OK["HALTをcycle 2へ"]
 ```
 
 元ケース: `tests/cases/early_halt_ld.json`。done予定の境界にLDが終わればよいのではなく、HALTを発行する時点で終わっている必要があります。
@@ -56,7 +56,7 @@ flowchart TD
   A["MAC rs1・rs2"] --> P["RF port 0・1"]
   C["MAC rs3"] --> Q["RF port 2"]
   S["同じbundleのSTソース"] --x Q
-  Q --> FIX["修正: STを次のcycleへ分ける"]
+  Q --> FIX["STを次のcycleへ"]
 ```
 
 元ケース: `tests/cases/mac_store_read_ports.json`。MACの3読出しとSTの1読出しで4になります。既定のRTLは3Rです。`read_ports=4`の設定を参照モデルで扱えても、このsnapshotのRTLは対応していません。

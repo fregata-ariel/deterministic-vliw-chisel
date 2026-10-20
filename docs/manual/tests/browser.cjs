@@ -24,12 +24,14 @@ fs.mkdirSync(qa, { recursive: true });
     }
     const tabsets = page.locator('.panel-tabset');
     assert.equal(await tabsets.count(), 4);
+    let panel = 0;
     for (const group of await tabsets.all()) {
       for (const tab of await group.locator('[role="tab"]').all()) {
         await tab.click();
         assert.equal(await tab.getAttribute('aria-selected'), 'true');
         const target = await tab.getAttribute('aria-controls');
         await page.locator(`#${target} svg[id^="mermaid-figure-"]`).first().waitFor({ state: 'visible' });
+        await group.screenshot({ path: path.join(qa, `panel-${++panel}.png`) });
       }
     }
     assert.equal(await page.locator('svg[id^="mermaid-figure-"]').count(), 14);

@@ -1,3 +1,2 @@
-/* Keep native SVG figures within narrow screens and preserve multiline labels. */
+/* Keep native Quarto SVG figures within narrow screens. */
 .cell-output-display svg { max-width: 100%; height: auto; }
-.cell-output-display svg foreignObject > div { height: 100%; }

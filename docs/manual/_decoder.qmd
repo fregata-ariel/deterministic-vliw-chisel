@@ -10,11 +10,11 @@
 flowchart TD
   B["0x1100000000000000"] --> M["上位32bit: 0x11000000"]
   B --> C["下位32bit: 0x00000000"]
-  M --> LD["opcode=1・reg=1・addr=0 → LD r1, [0]"]
+  M --> LD["LD r1, [0]"]
   C --> N["opcode=0 → NOP"]
 ```
 
-`.hex`は`1100000000000000`、little-endianの`.bin`は`00 00 00 00 00 00 00 11`です。アドレス0はbyteオフセットではなくword番号です。
+Memoryのフィールドはopcode=1、reg=1、addr=0です。`.hex`は`1100000000000000`、little-endianの`.bin`は`00 00 00 00 00 00 00 11`です。アドレス0はbyteオフセットではなくword番号です。
 
 ## MACのbundle {.unnumbered .unlisted}
 
@@ -24,7 +24,7 @@ flowchart TD
 %%| fig-alt: "45123000のCompute wordはopcode 4、rd 5、rs1 1、rs2 2、rs3 3。mvp-1でMACになりmvp-0ではL1違反。"
 %%| fig-width: 6.4
 flowchart TD
-  B["0x0000000045123000"] --> C["Compute: opcode=4, rd=5, rs1=1, rs2=2, rs3=3"]
+  B["0x0000000045123000"] --> C["opcode=4 / MAC"]
   C --> V{"ISA"}
   V -->|"mvp-1"| OK["MAC r5, r1, r2, r3"]
   V -->|"mvp-0"| NG["未知opcode・L1違反"]

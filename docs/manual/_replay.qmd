@@ -62,7 +62,7 @@ E4のMULの結果はこのcycleのADDから使えます。r4はE5まで未定義
 flowchart LR
   R["r4 = 28"] st@--> M["ST [1], r4"]
   M --> W["E6にmem[1]=28"]
-  M -.-> O["cycle 5のmem[1]は未定義"]
+  M -.-> O["mem[1]は未定義"]
   st@{ animation: slow }
 ```
 
@@ -76,7 +76,7 @@ STのLは1です。E6でmem[1]が28になり、cycle 6には全操作が完了�
 %%| fig-alt: "E6で全操作が完了しcycle6にHALTを発行する。E7でbusyが0、doneが1になる。"
 %%| fig-width: 5.8
 flowchart TD
-  W["E6: mem[1]=28・未完了操作なし"] --> H["cycle 6: HALT"]
+  W["E6: 全操作が完了"] --> H["cycle 6: HALT"]
   H --> B["E7: busy=0"]
   H --> D["E7: done=1・1cycleだけ"]
 ```
