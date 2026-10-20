@@ -510,7 +510,7 @@ quarto render docs/issue-78 --to all
 ```
 
 HTMLでは標準タブで候補・カーネルを切り替えます。PDF・DOCXでは全タブを順に掲載します。
-環境と検証方法は[README](README.md)を参照してください。
+環境と検証方法は[README](https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/d3f6c91996fae274612b37b2e46f12c56f1c799b/docs/issue-78/README.md)を参照してください。
 
 [issue]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78
 [placement]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78#issuecomment-6228989537
