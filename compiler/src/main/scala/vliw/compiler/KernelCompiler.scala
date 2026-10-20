@@ -42,11 +42,16 @@ object KernelCompiler {
   )
 
   def prepare(kernel: Kernel, machine: MachineDescription): Either[String, Prepared] =
-    MemoryLayout
-      .fixedOrder(kernel, machine)
-      .map(layout =>
-        Prepared(kernel, machine, layout, Fusion.fuse(Dag.of(Lowering.lower(layout), machine)))
-      )
+    for {
+      _ <- notImplemented(machine)
+      layout <- MemoryLayout.fixedOrder(kernel, machine)
+    } yield Prepared(kernel, machine, layout, Fusion.fuse(Dag.of(Lowering.lower(layout), machine)))
+
+  /** ISA mvp-2 (W) comes to the compiler in #110 stages 4 and 5. Until then the compiler refuses
+    * mvp-2 machines, rather than generate mvp-1 code under an mvp-2 machine's name.
+    */
+  def notImplemented(machine: MachineDescription): Either[String, Unit] =
+    IsaVersion.notImplemented(machine, "the compiler", "stages 4-5").toLeft(())
 
   /** Encodes and verifies the code of `allocated` (`checked`). */
   def finish(p: Prepared, allocated: Allocated): Either[String, CompiledKernel] = {

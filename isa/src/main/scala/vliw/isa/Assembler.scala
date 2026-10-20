@@ -7,8 +7,9 @@ object Assembler {
   final case class Program(bundles: Vector[Bundle], lines: Vector[Int])
 
   private val CycleLabel = """@(\d+)\s*:(.*)""".r
-  private val Mnemonic = """([A-Za-z]+)(?:\s+(.*))?""".r
+  private val Mnemonic = """([A-Za-z]+(?:\.[A-Za-z]+)?)(?:\s+(.*))?""".r
   private val Register = """[rR](\d+)""".r
+  private val Pair = """([rR]\d+):([rR]\d+)""".r
   private val Address = """\[\s*(0[xX][0-9a-fA-F]+|\d+)\s*\]""".r
 
   /** Assembles `source`. Errors are `line N: message`, in source order. */
@@ -74,6 +75,45 @@ object Assembler {
       case _           => Left(s"expected a register, got \"$token\"")
     }
 
+  /** A register pair `rP:rQ` (ISA mvp-2): Q is P+1 and P is even. Returns P, the value of the pair
+    * field. An odd pair is refused here, as the encoder would refuse it (rule L1).
+    */
+  private def pair(token: String, machine: MachineDescription): Either[String, Int] =
+    token match {
+      case Pair(a, b) =>
+        for {
+          p <- register(a, machine)
+          q <- register(b, machine)
+          _ <- Either.cond(
+            q == p + 1,
+            (),
+            s"a pair names two consecutive registers rP:rP+1, got $token"
+          )
+          _ <- Either.cond(
+            p % 2 == 0,
+            (),
+            s"pair $token starts at an odd register (P must be even)"
+          )
+        } yield p
+      case _ => Left(s"expected a register pair like r4:r5, got \"$token\"")
+    }
+
+  /** rs1 of VMUL and VMAC: a pair, or one register that both lanes read (the broadcast bit). */
+  private def pairOrBroadcast(
+      token: String,
+      machine: MachineDescription
+  ): Either[String, (Int, Boolean)] =
+    if (token.contains(':')) pair(token, machine).map(_ -> false)
+    else register(token, machine).map(_ -> true)
+
+  /** Operations that only some machines have: MAC from mvp-1, the W operations in mvp-2. */
+  private def available(mnemonic: String, machine: MachineDescription): Either[String, Unit] =
+    Either.cond(
+      machine.operations.contains(mnemonic.toUpperCase),
+      (),
+      s"$mnemonic is not an operation of ${machine.machineId} (ISA ${machine.isaVersion})"
+    )
+
   private def address(token: String): Either[String, Int] = token match {
     case Address(n) =>
       val value =
@@ -117,8 +157,37 @@ object Assembler {
             rs2 <- register(ops(2), machine)
             rs3 <- register(ops(3), machine)
           } yield ComputeOp.Mac(rd, rs1, rs2, rs3)
-        case "ld" | "st" => Left(s"$mnemonic is a memory operation; write it after '|'")
-        case _           => Left(s"unknown compute operation \"$text\"")
+        case "vadd" | "vsub" =>
+          for {
+            _ <- available(mnemonic, machine)
+            _ <- arity(mnemonic, ops, 3)
+            rd <- pair(ops(0), machine)
+            rs1 <-
+              if (ops(1).contains(':')) pair(ops(1), machine)
+              else Left(s"$mnemonic has no broadcast: rs1 must be a pair like r2:r3, got ${ops(1)}")
+            rs2 <- pair(ops(2), machine)
+          } yield
+            if (mnemonic == "vadd") ComputeOp.VAdd(rd, rs1, rs2) else ComputeOp.VSub(rd, rs1, rs2)
+        case "vmul" =>
+          for {
+            _ <- available(mnemonic, machine)
+            _ <- arity(mnemonic, ops, 3)
+            rd <- pair(ops(0), machine)
+            rs1 <- pairOrBroadcast(ops(1), machine)
+            rs2 <- pair(ops(2), machine)
+          } yield ComputeOp.VMul(rd, rs1._1, rs2, broadcast = rs1._2)
+        case "vmac" =>
+          for {
+            _ <- available(mnemonic, machine)
+            _ <- arity(mnemonic, ops, 4)
+            rd <- pair(ops(0), machine)
+            rs1 <- pairOrBroadcast(ops(1), machine)
+            rs2 <- pair(ops(2), machine)
+            rs3 <- pair(ops(3), machine)
+          } yield ComputeOp.VMac(rd, rs1._1, rs2, rs3, broadcast = rs1._2)
+        case "ld" | "st" | "ld.w" | "st.w" =>
+          Left(s"$mnemonic is a memory operation; write it after '|'")
+        case _ => Left(s"unknown compute operation \"$text\"")
       }
     }
 
@@ -140,7 +209,21 @@ object Assembler {
             addr <- address(ops(0))
             rs <- register(ops(1), machine)
           } yield MemoryOp.St(addr, rs)
-        case "add" | "sub" | "mul" | "mac" | "halt" =>
+        case "ld.w" =>
+          for {
+            _ <- available(mnemonic, machine)
+            _ <- arity(mnemonic, ops, 2)
+            rd <- pair(ops(0), machine)
+            addr <- address(ops(1))
+          } yield MemoryOp.LdW(rd, addr)
+        case "st.w" =>
+          for {
+            _ <- available(mnemonic, machine)
+            _ <- arity(mnemonic, ops, 2)
+            addr <- address(ops(0))
+            rs <- pair(ops(1), machine)
+          } yield MemoryOp.StW(addr, rs)
+        case "add" | "sub" | "mul" | "mac" | "vadd" | "vsub" | "vmul" | "vmac" | "halt" =>
           Left(s"$mnemonic is a compute operation; write it before '|'")
         case _ => Left(s"unknown memory operation \"$text\"")
       }
@@ -150,18 +233,30 @@ object Assembler {
 /** Canonical text form of bundles, accepted by [[Assembler]]. */
 object Disassembler {
   def compute(op: ComputeOp): String = op match {
-    case ComputeOp.Nop             => "nop"
-    case ComputeOp.Halt            => "halt"
-    case ComputeOp.Add(d, a, b)    => s"add r$d, r$a, r$b"
-    case ComputeOp.Sub(d, a, b)    => s"sub r$d, r$a, r$b"
-    case ComputeOp.Mul(d, a, b)    => s"mul r$d, r$a, r$b"
-    case ComputeOp.Mac(d, a, b, c) => s"mac r$d, r$a, r$b, r$c"
+    case ComputeOp.Nop                      => "nop"
+    case ComputeOp.Halt                     => "halt"
+    case ComputeOp.Add(d, a, b)             => s"add r$d, r$a, r$b"
+    case ComputeOp.Sub(d, a, b)             => s"sub r$d, r$a, r$b"
+    case ComputeOp.Mul(d, a, b)             => s"mul r$d, r$a, r$b"
+    case ComputeOp.Mac(d, a, b, c)          => s"mac r$d, r$a, r$b, r$c"
+    case ComputeOp.VAdd(d, a, b)            => s"vadd ${pair(d)}, ${pair(a)}, ${pair(b)}"
+    case ComputeOp.VSub(d, a, b)            => s"vsub ${pair(d)}, ${pair(a)}, ${pair(b)}"
+    case ComputeOp.VMul(d, a, b, broadcast) =>
+      s"vmul ${pair(d)}, ${rs1(a, broadcast)}, ${pair(b)}"
+    case ComputeOp.VMac(d, a, b, c, broadcast) =>
+      s"vmac ${pair(d)}, ${rs1(a, broadcast)}, ${pair(b)}, ${pair(c)}"
   }
 
+  /** A pair field holding p is written rP:rP+1; a broadcast rs1 is one register. */
+  private def pair(p: Int): String = s"r$p:r${p + 1}"
+  private def rs1(r: Int, broadcast: Boolean): String = if (broadcast) s"r$r" else pair(r)
+
   def memory(op: MemoryOp): String = op match {
-    case MemoryOp.Nop         => "nop"
-    case MemoryOp.Ld(d, addr) => s"ld r$d, [$addr]"
-    case MemoryOp.St(addr, s) => s"st [$addr], r$s"
+    case MemoryOp.Nop          => "nop"
+    case MemoryOp.Ld(d, addr)  => s"ld r$d, [$addr]"
+    case MemoryOp.St(addr, s)  => s"st [$addr], r$s"
+    case MemoryOp.LdW(d, addr) => s"ld.w ${pair(d)}, [$addr]"
+    case MemoryOp.StW(addr, s) => s"st.w [$addr], ${pair(s)}"
   }
 
   def bundle(b: Bundle): String = f"${compute(b.compute)}%-15s | ${memory(b.memory)}"

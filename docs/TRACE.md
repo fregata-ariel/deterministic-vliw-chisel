@@ -12,7 +12,9 @@
 
 `machine_hash` は [MACHINE.md](MACHINE.md) の hash。照合する2つのトレースは、ヘッダが一致しなければならない。
 
-`isa` は machine description の `isa_version`（`mvp-0` または `mvp-1`）。形式はどちらの版でも同じである。mvp-1 の MAC は、`issue.compute` に `mac rd, rs1, rs2, rs3` と書き、結果は `port` が `compute` の `rf_commit` に入る（[ISA.md](ISA.md)「mvp-1: MAC」）。
+`isa` は machine description の `isa_version`（`mvp-0`、`mvp-1`、`mvp-2`）。形式はどの版でも同じである。mvp-1 の MAC は、`issue.compute` に `mac rd, rs1, rs2, rs3` と書き、結果は `port` が `compute` の `rf_commit` に入る（[ISA.md](ISA.md)「mvp-1: MAC」）。
+
+mvp-2 の W（[ISA.md](ISA.md)「mvp-2: W」）も `vliw-trace/1` のままで、キーを足さない（#78 の質問9、[ADR-0022](DECISIONS.md)）。`issue` は [ASM.md](ASM.md) の正規形で書く（例: `vmul r4:r5, r1, r6:r7`、`st.w [20], r4:r5`）。組の commit は、同じ `port` の `rf_commit` 2つ（レジスタ p と p+1）になり、ST.W は `mem_commit` 2つになる。mvp-2 のトレースは、#110 の第2段で参照モデルが出力する。
 
 ## 本体
 
@@ -30,7 +32,8 @@
 | `busy` / `done` | サイクル s の間の制御信号 |
 
 - 行は cycle 0 から h+1 まで並ぶ（h はHALTの発行サイクル）。最後の行は `pc` と `issue` が `null` で、`done` が `true`、`busy` が `false` になる。したがって本体の行数は、実行サイクル数 h+1 より1行多い。
-- `rf_commit` は、Computeポート、Memoryポートの順に並べる。`mem_commit` はアドレス順に並べる。
+- `rf_commit` は、Computeポート、Memoryポートの順に並べ、同じポートの中はレジスタ番号の順に並べる。`mem_commit` はアドレス順に並べる。
+- 1つの操作が2つのレジスタを commit したのか、2つの操作がそれぞれ commit したのかは、`port` で分かる。規則 L5 により、各境界で各ポートに commit する操作は高々1つなので、合法な実行では、1行の中で同じ `port` を持つ `rf_commit` は1つの操作のもの（組の commit）である。同じ境界に commit する2つの操作は、必ず違う `port` を持つ。参照モデルは L5 の違反で止まるので、1つのポートに2つの操作の commit があるトレースは出ない（mvp-2。mvp-0・mvp-1 では、1つのポートの `rf_commit` は高々1つである）。
 - 値は 0〜2^32−1 の整数。
 - 照合は、各行をJSONとして読み、正規化形式（[MACHINE.md](MACHINE.md)）で比較する。キーの順序や空白の違いは問わない。
 

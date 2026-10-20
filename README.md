@@ -6,7 +6,7 @@ Chiselで構築する、コンパイラ主導の静的スケジューリング�
 
 設計原則：**コンパイラが時間配置を決め、ハードウェアがそのスケジュールを実行する。**
 
-Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）、Phase 2（DSL からの自動命令生成。SAXPY・FIR・行列積が機能・サイクルとも一致）、Phase 3（ループの Modulo Scheduling と MAC。II を参照モデルと RTL のトレースで確認）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md)・[Phase 2](docs/PHASE2.md)・[Phase 3](docs/PHASE3.md) の完了報告）。ベンチマークの記録は [benchmarks/RESULTS.md](benchmarks/RESULTS.md)（資源条件を揃えた固定パイプラインとの比較を含む）、Modulo Scheduling の記録は [benchmarks/MODULO.md](benchmarks/MODULO.md)、レジスタ数を変えた記録は [benchmarks/REGISTERS.md](benchmarks/REGISTERS.md)、MAC（ISA mvp-1）のある構成とない構成の比較は [benchmarks/MAC.md](benchmarks/MAC.md)（cycle ベース。Fmax・面積・電力は未測定）。次は Phase 4（DMA、Double Buffer、bank 最適化）で、最初に SIMD または Compute スロットの増設を、MAC 単独と分けて比べます（[#109](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/109)）。
+Phase 0（ISAと実行意味論の確定、machine description、アセンブラ、独立verifier、サイクル精度の参照モデル、テストスイート）、Phase 1（Chisel RTL。参照モデルとサイクル単位で一致）、Phase 2（DSL からの自動命令生成。SAXPY・FIR・行列積が機能・サイクルとも一致）、Phase 3（ループの Modulo Scheduling と MAC。II を参照モデルと RTL のトレースで確認）が完了しています（[Phase 0](docs/PHASE0.md)・[Phase 1](docs/PHASE1.md)・[Phase 2](docs/PHASE2.md)・[Phase 3](docs/PHASE3.md) の完了報告）。ベンチマークの記録は [benchmarks/RESULTS.md](benchmarks/RESULTS.md)（資源条件を揃えた固定パイプラインとの比較を含む）、Modulo Scheduling の記録は [benchmarks/MODULO.md](benchmarks/MODULO.md)、レジスタ数を変えた記録は [benchmarks/REGISTERS.md](benchmarks/REGISTERS.md)、MAC（ISA mvp-1）のある構成とない構成の比較は [benchmarks/MAC.md](benchmarks/MAC.md)（cycle ベース。Fmax・面積・電力は未測定）。次は Phase 4（DMA、Double Buffer、bank 最適化）で、最初に SIMD を、MAC 単独と分けて比べます（[#109](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/109)）。SIMD の方式は W（レジスタの組による 32bit×2 レーンと2語の LD/ST。ISA mvp-2、[#78](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78) で決定）で、[#110](https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/110) で段階的に実装しています。
 
 ## 最初に読む文書
 
@@ -35,7 +35,7 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 
 | パス | 責務 |
 |---|---|
-| `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)）。ISA mvp-1（MAC）の既定は `config/machine-mvp1.json` |
+| `config/machine.json` | ISA、演算遅延、資源制約の共有定義案（形式: [docs/MACHINE.md](docs/MACHINE.md)）。ISA mvp-1（MAC）の既定は `config/machine-mvp1.json`、ISA mvp-2（W）の既定は `config/machine-mvp2.json` |
 | `build.sbt`, `project/` | sbtマルチプロジェクト定義、バージョン固定（Verilator と JDK は `project/toolchain.properties`） |
 | `isa/` | machine description、命令表現、エンコーディング（全プロジェクトの共通基盤） |
 | `hw/` | Chisel生成器、ChiselSimによるRTL検証（Phase 1）。`sbt "hw/run"` で `generated/` にSystemVerilogを出力 |

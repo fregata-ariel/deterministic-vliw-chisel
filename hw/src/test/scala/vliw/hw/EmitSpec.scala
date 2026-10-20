@@ -112,4 +112,20 @@ class EmitSpec extends AnyFunSuite {
       ChiselStage.emitSystemVerilog(new Core(CoreParams(m)), firtoolOpts = Emit.FirtoolOptions)
     }
   }
+
+  test("mvp-2: the RTL refuses every mvp-2 machine until #110 stage 3") {
+    val reason = "ISA mvp-2 is not implemented in the RTL yet (#110 stage 3); machine "
+    val mvp2 =
+      MachineDescription.load(MachineDescription.Mvp2Path).fold(es => fail(es.mkString), identity)
+    (mvp2 +: Seq("mvp2_mw1.json", "mvp2_rp4.json", "mvp2_vlat.json", "mvp2_vii.json")
+      .map(machineFile)).foreach { m =>
+      val reasons = CoreParams.check(m).left.getOrElse(fail(s"${m.machineId} was accepted"))
+      assert(reasons.head == reason + m.machineId, reasons)
+      assertThrows[IllegalArgumentException](CoreParams(m))
+    }
+    // W-full, W-reg and the latency variant are otherwise within the RTL's range (stage 3).
+    (mvp2 +: Seq("mvp2_mw1.json", "mvp2_vlat.json").map(machineFile)).foreach { m =>
+      assert(CoreParams.unsupported(m).size == 1, m.machineId)
+    }
+  }
 }

@@ -32,9 +32,11 @@ class MetricsSpec extends AnyFunSuite {
   /** Register reads of a bundle, counted by operand field as docs/ISA.md rule L11 counts them. */
   private def readFields(b: Bundle): Int = {
     val compute = b.compute match {
-      case _: ComputeOp.Add | _: ComputeOp.Sub | _: ComputeOp.Mul => 2
-      case _: ComputeOp.Mac                                       => 3
-      case ComputeOp.Nop | ComputeOp.Halt                         => 0
+      case _: ComputeOp.Add | _: ComputeOp.Sub | _: ComputeOp.Mul                               => 2
+      case _: ComputeOp.Mac                                                                     => 3
+      case ComputeOp.Nop | ComputeOp.Halt                                                       => 0
+      case op @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
+        fail(s"$op: the metrics of ISA mvp-2 come with #110 stage 2")
     }
     compute + (if (b.memory.isInstanceOf[MemoryOp.St]) 1 else 0)
   }
@@ -231,5 +233,22 @@ class MetricsSpec extends AnyFunSuite {
     val b = record(other)
     assert(ujson.read(ujson.write(a)) == a)
     assert(a == b, "metrics of a fixed schedule must not change with the data")
+  }
+
+  test("ISA mvp-2 is refused until #110 stage 2 (vliw-metrics/3), not written as /1") {
+    val mvp2 = MachineDescription
+      .load(MachineDescription.Mvp2Path)
+      .fold(es => fail(es.mkString), identity)
+    val run = ReferenceModel.run(isaCase.machine, isaCase.words, isaCase.inputs).toOption.get
+    val expected = "ISA mvp-2 is not implemented in the metrics yet (#110 stage 2)"
+    assert(
+      intercept[UnsupportedOperationException](Metrics.format(mvp2)).getMessage.startsWith(expected)
+    )
+    assert(
+      intercept[UnsupportedOperationException](Metrics.of(mvp2, isaCase.words, run, "w")).getMessage
+        .startsWith(expected)
+    )
+    assert(Metrics.format(mvp1) == "vliw-metrics/2")
+    assert(Metrics.format(isaCase.machine) == "vliw-metrics/1")
   }
 }

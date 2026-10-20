@@ -2,7 +2,7 @@ package vliw.hw
 
 import chisel3.util.log2Ceil
 
-import vliw.isa.MachineDescription
+import vliw.isa.{IsaVersion, MachineDescription}
 
 /** Elaboration parameters taken from the machine description.
   *
@@ -10,7 +10,8 @@ import vliw.isa.MachineDescription
   *   - every II is 1 (fully pipelined units; issue every cycle);
   *   - LD latency >= 2, because the scratchpad is a synchronous-read memory;
   *   - ST latency 1, so that a load and a store never meet at the same clock edge;
-  *   - 3 register read ports: on ISA mvp-1, port 2 reads MAC's rs3 or the ST source (ADR-0018).
+  *   - 3 register read ports: on ISA mvp-1, port 2 reads MAC's rs3 or the ST source (ADR-0018);
+  *   - ISA mvp-0 and mvp-1: the W of mvp-2 comes to the RTL in #110 stage 3.
   *
   * Use [[CoreParams.check]] to get every reason a machine is outside that subset.
   */
@@ -61,7 +62,9 @@ object CoreParams {
     val readPorts = Option.when(machine.readPorts != 3)(
       s"read_ports is ${machine.readPorts}; the RTL has 3 register read ports, port 2 shared by MAC's rs3 and the ST source (4 read ports come in #57)"
     )
-    ii ++ ld ++ st ++ readPorts
+    // Without this, an mvp-2 machine would pass every check above and run its W words as unknown
+    // opcodes. The fixed pipeline (FixedParams) refuses it through this reason too.
+    IsaVersion.notImplemented(machine, "the RTL", "stage 3").toSeq ++ ii ++ ld ++ st ++ readPorts
   }
 
   /** The parameters for `machine`, or every reason the RTL cannot implement it. */

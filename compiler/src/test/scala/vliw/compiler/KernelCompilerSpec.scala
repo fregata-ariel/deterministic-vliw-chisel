@@ -78,4 +78,19 @@ class KernelCompilerSpec extends AnyFunSuite {
     assert(KernelCompiler.sampleInputs(k, 1L) != KernelCompiler.sampleInputs(k, 2L))
     assert(KernelCompiler.sampleInputs(k, 1L).arrays.values.flatten.exists(_ > 0x7fffffffL))
   }
+
+  test("ISA mvp-2 is refused until #110 stages 4-5, not compiled as mvp-1") {
+    val expected = "ISA mvp-2 is not implemented in the compiler yet (#110 stages 4-5); machine "
+    Seq("config/machine-mvp2.json", "tests/machines/mvp2_mw1.json").foreach { path =>
+      val mvp2 = MachineDescription
+        .load(java.nio.file.Paths.get(path))
+        .fold(es => fail(es.mkString("\n")), identity)
+      val reason = expected + mvp2.machineId
+      assert(KernelCompiler.prepare(Benchmarks.saxpy(8), mvp2).map(_ => ()) == Left(reason))
+      assert(KernelCompiler.compile(Benchmarks.saxpy(8), mvp2).map(_ => ()) == Left(reason))
+      val loop = vliw.compiler.loop.LoopBenchmarks.saxpy(8)
+      assert(vliw.compiler.modulo.ModuloCompiler.prepare(loop, mvp2).map(_ => ()) == Left(reason))
+      assert(vliw.compiler.modulo.ModuloCompiler.compile(loop, mvp2).map(_ => ()) == Left(reason))
+    }
+  }
 }

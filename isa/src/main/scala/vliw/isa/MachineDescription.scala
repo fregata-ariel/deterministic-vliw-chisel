@@ -40,6 +40,7 @@ final case class MachineDescription(
     readPorts: Int,
     banks: Int,
     wordsPerBank: Int,
+    maxWordsPerAccess: Int,
     operations: Map[String, OperationSpec],
     haltOpcode: Int,
     nopOpcode: Int,
@@ -50,18 +51,32 @@ final case class MachineDescription(
   def scratchpadWords: Int = banks * wordsPerBank
   def operation(mnemonic: String): OperationSpec = operations(mnemonic)
 
-  /** True for ISA mvp-1, whose Compute slot also issues MAC (docs/ISA.md, "mvp-1: MAC"). */
+  /** True for ISA mvp-1 and mvp-2, whose Compute slot also issues MAC (docs/ISA.md, "mvp-1: MAC").
+    */
   def hasMac: Boolean = operations.contains("MAC")
+
+  /** True for ISA mvp-2, whose Compute slot also issues VADD, VSUB, VMUL and VMAC on register pairs
+    * (docs/ISA.md, "mvp-2: W").
+    */
+  def hasVector: Boolean = operations.contains("VADD")
+
+  /** True for ISA mvp-2 with `scratchpad.max_words_per_access` 2 (W-full), whose Memory slot also
+    * issues LD.W and ST.W.
+    */
+  def hasWideMemory: Boolean = operations.contains("LD.W")
 }
 
 object MachineDescription {
 
-  /** Schema 1 is for ISA mvp-0 and schema 2 for mvp-1 ([[IsaVersion.ofSchema]]). */
-  val SchemaVersions: Range = 1 to 2
+  /** Schema 1 is for ISA mvp-0, 2 for mvp-1 and 3 for mvp-2 ([[IsaVersion.ofSchema]]). */
+  val SchemaVersions: Range = 1 to 3
   val DefaultPath: Path = Paths.get("config", "machine.json")
 
   /** The default machine description of ISA mvp-1 (docs/MACHINE.md, ADR-0018). */
   val Mvp1Path: Path = Paths.get("config", "machine-mvp1.json")
+
+  /** The default machine description of ISA mvp-2, W-full (docs/MACHINE.md, ADR-0022). */
+  val Mvp2Path: Path = Paths.get("config", "machine-mvp2.json")
 
   /** Mnemonics of fixed-latency operations, with their slot and write-back port in mvp-0. */
   val FixedLatencyOperations: Seq[(String, Slot, Option[Slot])] = Seq(
@@ -72,11 +87,36 @@ object MachineDescription {
     ("ST", Slot.Memory, None)
   )
 
-  /** The fixed-latency operations of an ISA version: mvp-1 adds MAC to the Compute slot. */
-  def fixedLatencyOperations(isaVersion: String): Seq[(String, Slot, Option[Slot])] =
-    if (isaVersion == IsaVersion.Mvp1)
-      FixedLatencyOperations :+ (("MAC", Slot.Compute, Some(Slot.Compute)))
-    else FixedLatencyOperations
+  /** The operations ISA mvp-2 adds to every mvp-2 machine: the vector operations of W. */
+  val VectorOperations: Seq[(String, Slot, Option[Slot])] = Seq(
+    ("VADD", Slot.Compute, Some(Slot.Compute)),
+    ("VSUB", Slot.Compute, Some(Slot.Compute)),
+    ("VMUL", Slot.Compute, Some(Slot.Compute)),
+    ("VMAC", Slot.Compute, Some(Slot.Compute))
+  )
+
+  /** The operations of an mvp-2 machine whose `scratchpad.max_words_per_access` is 2 (W-full). */
+  val WideMemoryOperations: Seq[(String, Slot, Option[Slot])] = Seq(
+    ("LD.W", Slot.Memory, Some(Slot.Memory)),
+    ("ST.W", Slot.Memory, None)
+  )
+
+  /** The fixed-latency operations of an ISA version: mvp-1 adds MAC to the Compute slot, and mvp-2
+    * adds the vector operations, and LD.W and ST.W when `maxWordsPerAccess` is 2.
+    */
+  def fixedLatencyOperations(
+      isaVersion: String,
+      maxWordsPerAccess: Int = 1
+  ): Seq[(String, Slot, Option[Slot])] = {
+    val mvp1 = FixedLatencyOperations :+ (("MAC", Slot.Compute, Some(Slot.Compute)))
+    isaVersion match {
+      case IsaVersion.Mvp0 => FixedLatencyOperations
+      case IsaVersion.Mvp1 => mvp1
+      case IsaVersion.Mvp2 =>
+        mvp1 ++ VectorOperations ++ (if (maxWordsPerAccess == 2) WideMemoryOperations else Nil)
+      case other => throw new IllegalArgumentException(s"unknown ISA version $other")
+    }
+  }
 
   /** Width of the memory word's immediate address field (docs/ISA.md). */
   val AddressBits: Int = 9
@@ -135,7 +175,7 @@ object MachineDescription {
     // The keys below are read by the rules of this version; a wrong or missing version is already
     // an error, and the schema version decides.
     val isa = isaVersion.orElse(schemaVersion.map(IsaVersion.ofSchema)).getOrElse(IsaVersion.Mvp0)
-    val operationTable = fixedLatencyOperations(isa)
+    val mvp2 = isa == IsaVersion.Mvp2
     val machineId = root.str("machine_id").filter { id =>
       val ok = id.matches("[a-z0-9][a-z0-9-]*")
       if (!ok) errors.add("$.machine_id", "must match [a-z0-9][a-z0-9-]*")
@@ -152,13 +192,25 @@ object MachineDescription {
 
     val registerFile = root
       .obj("register_file") { o =>
-        val count = o.int("count", 1, 1 << RegisterFieldBits)
+        // In mvp-2 both registers of a pair r(p), r(p+1) with p even must exist (ADR-0022).
+        val count =
+          if (mvp2) o.int("count", 2, 1 << RegisterFieldBits).filter { c =>
+            if (c % 2 != 0)
+              o.report("count", s"must be even in ISA mvp-2 (a pair is r(p) and r(p+1)), got $c")
+            c % 2 == 0
+          }
+          else o.int("count", 1, 1 << RegisterFieldBits)
         o.const("zero_register", ujson.Null)
-        // Rule L11: mvp-0 reads at most 3 registers per bundle; mvp-1 accepts 4 for the
-        // comparison without the constraint (ADR-0018).
+        if (mvp2) {
+          // The RF banks of mvp-2: even registers in bank 0, odd ones in bank 1.
+          o.const("banks", ujson.Num(2))
+          o.const("bank_mapping", ujson.Str("register_index_mod_2"))
+        }
+        // Rule L11: mvp-0 reads at most 3 registers per bundle; mvp-1 and mvp-2 accept 4 for the
+        // comparison without the constraint (ADR-0018; per RF bank in mvp-2, ADR-0022).
         val readPorts =
-          if (isa == IsaVersion.Mvp1) o.int("read_ports", 3, 4)
-          else { o.const("read_ports", ujson.Num(3)); Some(3) }
+          if (isa == IsaVersion.Mvp0) { o.const("read_ports", ujson.Num(3)); Some(3) }
+          else o.int("read_ports", 3, 4)
         o.obj("write_ports") { w =>
           w.const("compute", ujson.Num(1))
           w.const("memory", ujson.Num(1))
@@ -168,20 +220,27 @@ object MachineDescription {
       }
       .flatten
 
-    val scratchpad = root
+    val scratchpadFields = root
       .obj("scratchpad") { o =>
         val maxWords = 1 << AddressBits
         val banks = o.int("banks", 1, maxWords)
         val words = o.int("words_per_bank", 1, maxWords)
         o.const("ports_per_bank", ujson.Str("1RW"))
         o.const("global_issue_per_cycle", ujson.Num(1))
+        // Words one Memory operation moves: 2 adds LD.W and ST.W (mvp-2 W-full, ADR-0022).
+        val wordsPerAccess = if (mvp2) o.int("max_words_per_access", 1, 2) else Some(1)
         o.const("address_unit", ujson.Str("word"))
         banks.foreach { b =>
           o.const("bank_mapping", ujson.Str(s"word_address_mod_$b"))
           o.const("row_mapping", ujson.Str(s"word_address_div_$b"))
         }
         o.const("read_during_write", ujson.Str("forbidden"))
-        for (b <- banks; w <- words) yield {
+        for (b <- banks; m <- wordsPerAccess if m == 2 && b < 2)
+          o.report(
+            "max_words_per_access",
+            s"2 needs at least 2 banks (LD.W and ST.W access two banks), got banks $b"
+          )
+        val bankWords = for (b <- banks; w <- words) yield {
           if (b.toLong * w > maxWords)
             errors.add(
               "$.scratchpad",
@@ -189,8 +248,13 @@ object MachineDescription {
             )
           (b, w)
         }
+        (bankWords, wordsPerAccess)
       }
-      .flatten
+    val scratchpad = scratchpadFields.flatMap(_._1)
+    val wordsPerAccess = scratchpadFields.flatMap(_._2)
+    // A missing or invalid max_words_per_access is reported once; the operations are then read as
+    // those of a machine without LD.W and ST.W.
+    val operationTable = fixedLatencyOperations(isa, wordsPerAccess.getOrElse(1))
 
     val nopOpcode = root.int("nop_opcode", 0, 0)
 
@@ -258,6 +322,7 @@ object MachineDescription {
       id <- machineId
       (regs, readPorts) <- registerFile
       (banks, words) <- scratchpad
+      perAccess <- wordsPerAccess
       nop <- nopOpcode
       (fixed, haltOpt) <- operations
       halt <- haltOpt
@@ -273,6 +338,7 @@ object MachineDescription {
       readPorts = readPorts,
       banks = banks,
       wordsPerBank = words,
+      maxWordsPerAccess = perAccess,
       operations = fixed.map(op => op.mnemonic -> op).toMap,
       haltOpcode = halt,
       nopOpcode = nop,

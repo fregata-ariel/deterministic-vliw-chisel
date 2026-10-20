@@ -284,6 +284,8 @@ class DifferentialSpec extends AnyFunSuite {
     case ComputeOp.Mul(d, _, _)         => Some(d -> "MUL")
     case ComputeOp.Mac(d, _, _, _)      => Some(d -> "MAC")
     case ComputeOp.Nop | ComputeOp.Halt => None
+    case w @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
+      sys.error(s"$w: the generator makes no W operations before #110 stage 2")
   }
 
   /** Whether an operation issued before cycle t writes `reg` and its value is not yet visible at t.
@@ -291,8 +293,10 @@ class DifferentialSpec extends AnyFunSuite {
   private def writing(m: MachineDescription, b: Vector[Bundle], t: Int, reg: Int): Boolean =
     (0 until t).exists { s =>
       val ld = b(s).memory match {
-        case MemoryOp.Ld(d, _)                => Some(d -> "LD")
-        case MemoryOp.St(_, _) | MemoryOp.Nop => None
+        case MemoryOp.Ld(d, _)                       => Some(d -> "LD")
+        case MemoryOp.St(_, _) | MemoryOp.Nop        => None
+        case w @ (_: MemoryOp.LdW | _: MemoryOp.StW) =>
+          sys.error(s"$w: the generator makes no W operations before #110 stage 2")
       }
       (computeWrite(b(s).compute) ++ ld).exists { case (r, op) =>
         r == reg && t < s + m.operation(op).latency
