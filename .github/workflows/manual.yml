@@ -1,0 +1,57 @@
+name: Animated manual
+
+on:
+  pull_request:
+    paths:
+      - docs/manual/**
+      - config/machine*.json
+      - tests/cases/**
+      - tests/golden/**
+      - .github/workflows/manual.yml
+  push:
+    branches: [main]
+    paths:
+      - docs/manual/**
+      - config/machine*.json
+      - tests/cases/**
+      - tests/golden/**
+      - .github/workflows/manual.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  manual:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: "1.8.27"
+      - name: Check embedded data and presentation model
+        run: |
+          python3 docs/manual/prepare.py --check
+          node --test docs/manual/tests/model.test.cjs
+      - name: Render self-contained HTML
+        run: quarto render docs/manual
+      - name: Install browser test tools outside the checkout
+        run: |
+          npm install --prefix "$RUNNER_TEMP/manual-browser" --no-package-lock playwright@1.56.1
+          "$RUNNER_TEMP/manual-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Check offline browser interactions and layout
+        run: node docs/manual/tests/browser.cjs
+        env:
+          NODE_PATH: ${{ runner.temp }}/manual-browser/node_modules
+      - name: Keep HTML and review screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: animated-manual
+          path: docs/manual/_output/
+          if-no-files-found: error
+          retention-days: 14

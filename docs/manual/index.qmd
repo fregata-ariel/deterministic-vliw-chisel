@@ -1,0 +1,430 @@
+---
+title: "動く図で読む Deterministic VLIW"
+subtitle: "Chisel実装・ISA・サイクル契約のマニュアル"
+description: "実装を根拠に、2スロットVLIWのデータ経路、命令語、実行時の状態変化、静的スケジューリングを説明する日本語マニュアル。"
+---
+
+::: {.eyebrow}
+ARCHITECTURE / ISA / EXECUTION
+:::
+
+::: {.lead-in}
+**コンパイラが「いつ」を決め、ハードウェアがその時刻どおりに実行する。**
+このマイクロエンジンでは、待ち時間も命令列の一部になる。
+:::
+
+このマニュアルは [deterministic-vliw-chisel][repository] の実装を、日本語の本文と操作できる図で読むためのものです。まず回路の全体像を見て、64bitの命令語を分解し、最後にクロック境界ごとの状態変化を追います。HDLの知識がなくても、レジスタ、メモリ、クロックの基本が分かれば読み進められます。
+
+説明の基準は **commit `787ae6d53953bf87202640dcbc181a88156a12a7`** です。[mvp-0のmachine description][machine0]を標準とし、[mvp-1][machine1]のMAC拡張を併記します。将来案と実装済みの機能は「対応範囲」で区別します。命令の正式な契約は[ISA仕様][isa]、構成値の制約は[Machine仕様][machine-doc]を参照してください。
+
+図の「再生」はクリックして始まります。一時停止、前後送り、先頭への復帰ができます。動きを減らすOS設定にも対応します。JavaScriptを無効にしても本文、静的な図、命令表、実行例を読めます。アニメーションはHTML版で利用してください。
+
+| 知りたいこと | 読む場所 |
+|---|---|
+| どの回路が何をするか | [全体アーキテクチャ](#sec-architecture) |
+| どんな命令を発行できるか | [ISAと命令語](#sec-isa) |
+| いつ入力を読み、いつ結果が見えるか | [実行時の処理](#sec-runtime) |
+| なぜNOPが必要か | [合法性とハザード](#sec-hazards) |
+| どうやって命令列を作るか | [コンパイラと検証](#sec-compiler) |
+| 自分で実行・確認するには | [再現手順とソース案内](#sec-reproduce) |
+
+# 全体アーキテクチャ {#sec-architecture}
+
+## 2スロットのVLIW
+
+VLIW（Very Long Instruction Word）は、同時に発行する操作を1つの長い命令語へまとめる方式です。この実装の **bundleは64bit**。下位32bitがCompute、上位32bitがMemoryです。各サイクルにComputeを最大1操作、Memoryを最大1操作発行します。どちらか、または両方をNOPにできます。
+
+| 標準構成 | 実装契約 |
+|---|---|
+| データ | 32bit整数。算術結果は下位32bit（mod 2^32） |
+| RF（Register File） | r0〜r15。3読出し・2書込み。r0も通常のレジスタ |
+| Compute | ADD、SUB、MUL。mvp-1ではMACも |
+| Memory | LDまたはST。即値のwordアドレスを使う |
+| Scratchpad | 2 bank × 256 word = 512 word（2 KiB）。各bankは1RW |
+| 命令メモリ | 256 bundle（2 KiB）。Coreの`Mem`は組合せ読出し |
+| 制御 | PC、start、busy、done、HALT。分岐・内部ストールなし |
+
+この表は既定の設定です。レジスタ数や遅延などを変更できる範囲は、後の[対応範囲](#sec-support)にまとめています。根拠: [machine.json][machine0]、[Core][core]、[CoreParams][params]。
+
+{{< include _architecture.qmd >}}
+
+## 入力から出力までの経路
+
+**HostIO** が停止中に命令メモリ、入力レジスタ、Scratchpadを準備します。`length`はHALTを含むbundle数です。`start`を受理すると、Coreは`busy`を立て、PC=0から実行を始めます。busy中のstartは受理しません。実行中にホストが命令・RF・メモリを書き換えるとassertionの対象になります。
+
+**Decoder** はbundleを2つのスロットに分け、演算種別、ソース、宛先、アドレスを取り出します。RFはその発行サイクルに見える値を組合せで読みます。ComputeとMemoryが同じbundleにあっても、一方が今計算した結果を他方へ直接渡す経路はありません。
+
+**ComputeSlot** は読み取った値でADD/SUB/MUL、mvp-1ではMACを計算し、`WritebackSchedule`が決められた境界まで結果と宛先を保持します。ソースコード上は、発行時の式で値を計算してから予約表で遅らせる実装です。「MULのL=2」はISA上の可視化時刻を表し、物理的な乗算回路が必ず2段に分割されているという意味ではありません。物理的な配置やretimingは合成結果の確認が必要です。[ComputeSlotの実装][compute]
+
+**MemorySlot** はアドレスからbankとrowを選び、`SyncReadMem`にアクセスします。LDの結果はMemory書戻しポートでRFへ、STはScratchpadへ反映されます。ComputeとLDのRF書戻しポートは別なので、異なるレジスタへの同一境界のcommitは可能です。例: `MUL r3, r1, r2 | LD r4, [2]`は両方L=2で、E₂に別ポートからcommitできます。[compute_and_loadのテスト][parallel-case]
+
+**WriteReservations** は未完了のレジスタ書込みを追跡して違反を検出します。命令の発行を待たせる装置ではありません。合法な命令列を外部で検証してから走らせることが、この実行方式の前提です。[RegisterFileと予約検査][rf]
+
+## Scratchpadの見方
+
+アドレスはbyte数ではなく **32bit wordの番号** です。標準構成では `bank = addr % 2`、`row = addr / 2`（整数除算）。例えば `[1]`はbank 1のrow 0で、byteオフセット1ではありません。
+
+| word address | bank | row |
+|---:|---:|---:|
+| 0 | 0 | 0 |
+| 1 | 1 | 0 |
+| 2 | 0 | 1 |
+| 3 | 1 | 1 |
+| 510 | 0 | 255 |
+| 511 | 1 | 255 |
+
+各bankの1RWは「その境界でreadまたはwriteを1つ」を意味します。bankが2つあってもMemoryスロットは1つなので、Coreの命令からのアクセスは**全体で1操作/cycle**です。ホストのメモリ読出しも同期読出しで、提示したアドレスの値は次のcycleに返ります。[MemorySlot][memory]
+
+## 比較用のFixedPipeline
+
+図の回路を「FixedPipeline」に切り替えると、同じスロットとScratchpadを使いながら、命令メモリ・Decoder・汎用RFを省いた構成を確認できます。`FixedPlan`が演算、即値アドレス、発行時刻を回路生成時に固定し、サイクルカウンタが制御します。値は`StoragePolicy`で割り当てる専用の32bitレジスタへ保存します。
+
+| 観点 | VLIW Core | FixedPipeline |
+|---|---|---|
+| 計画を与える時 | idle中に命令をロード | 回路生成時にFixedPlanを指定 |
+| 操作の選択 | PC → 命令メモリ → Decoder | cycleから定数制御を選択 |
+| 値の保存 | 3R/2Wの汎用RF | 値レジスタと必要なoperand MUX |
+| スロット | ComputeSlot / MemorySlot | Coreと共通のモジュール |
+| 演算 | mvp-0、mvp-1のMAC | 現行FixedPlanはADD/SUB/MUL/LD/ST |
+| 実行cycle数 | HALTをhに発行してh+1 | 最終commitをE_TとしてT+1 |
+
+`ByLifetime`は寿命が重ならない同じ書戻しポートの値をレジスタに共有し、`PerValue`は値ごと、`Assigned`は指定された割当を使います。この回路はプログラマビリティの費用を比較するための実装であり、サイクル数だけから面積・最高周波数・電力の優劣は決まりません。[FixedPipeline][fixed]、[FixedPlan][fixed-plan]
+
+# ISAと命令語 {#sec-isa}
+
+## 命令の意味
+
+表のLとIIは既定値です。**L（latency）は結果が見えるまでのcycle数、II（initiation interval）は同じ演算を再発行できる最短間隔**です。MULはL=2、II=1なので、結果を待つ間も、依存しない次のMULを発行できます。後の実行図で「MULの連続発行」を選ぶと確認できます。
+
+| Slot | 命令 | 結果 | L | II |
+|---|---|---|---:|---:|
+| Compute | NOP | 操作なし | — | — |
+| Compute | ADD rd, rs1, rs2 | rd ← low32(rs1 + rs2) | 1 | 1 |
+| Compute | SUB rd, rs1, rs2 | rd ← low32(rs1 − rs2) | 1 | 1 |
+| Compute | MUL rd, rs1, rs2 | rd ← low32(rs1 × rs2) | 2 | 1 |
+| Compute | MAC rd, rs1, rs2, rs3 | rd ← low32(rs1 × rs2 + rs3)、mvp-1のみ | 2 | 1 |
+| Compute | HALT | 次の境界でbusy解除・done通知 | 発行後1 | — |
+| Memory | NOP | 操作なし | — | — |
+| Memory | LD rd, [addr] | rd ← scratchpad[addr] | 2 | 1 |
+| Memory | ST [addr], rs | scratchpad[addr] ← rs | 1 | 1 |
+
+全レジスタは通常の32bit値で、ゼロ専用レジスタはありません。ADD/SUB/MUL/MACはmod 2^32の算術です。例えば`0xffffffff + 1`は0になります。符号付き・符号なしで下位32bitは一致し、算術オーバーフローで例外を発生させる契約ではありません。MACの3ソースはすべて発行時に読み、rdとrs3を同じにした累算も可能です。[ISA][isa]、[Instruction][instruction]
+
+## 64bit bundleの配置
+
+`.hex`では1行が16桁の64bit値です。左側の8桁がMemory、右側の8桁がComputeです。`.bin`では同じ値を**8byte little-endian**で保存するので、Computeの下位byteから並びます。
+
+| Word | word内のbit | フィールド |
+|---|---|---|
+| Compute | 31:28 | opcode。既定: NOP=0、ADD=1、SUB=2、MUL=3、MAC=4（mvp-1）、HALT=15 |
+| Compute | 27:24 / 23:20 / 19:16 | rd / rs1 / rs2（各4bit） |
+| Compute | 15:12 | MACのrs3。ADD/SUB/MULでは予約bit |
+| Compute | 11:0 | reserved=0。ADD/SUB/MULは15:0全体が0 |
+| Memory | 31:28 | opcode。既定: NOP=0、LD=1、ST=2 |
+| Memory | 27:24 | LDのrd、またはSTのrs |
+| Memory | 23:15 | 9bitの即値wordアドレス |
+| Memory | 14:0 | reserved=0 |
+
+opcodeはmachine descriptionから取得します。NOPとHALTはopcode以外のbitをすべて0にし、HALTに組み合わせるMemory wordはNOPにします。mvp-0でopcode 4を使うと未知opcodeです。[BundleCodec][codec]と[RTL Decoder][decoder-source]は独立に実装されています。
+
+{{< include _decoder.qmd >}}
+
+`MAC r5, r1, r2, r3 | NOP`の語は`0000000045123000`です。mvp-1を選ぶとrs3=3が取り出され、mvp-0を選ぶと未知opcodeの違反になります。この図はフィールドの教材で、bundle列の依存関係・HALT・入力宣言までを検査するものではありません。
+
+## アセンブリで時刻を指定する
+
+1行が1bundle、つまり実行中の1cycleです。`|`の左がCompute、右がMemory。省略した側はNOPです。`@N:`は任意ですが、実際のbundle番号と一致しなければアセンブラが拒否します。空行とコメントだけの行はbundleを増やしません。[Assembler][assembler]、[構文仕様][asm-doc]
+
+```asm
+; r2=3、scratchpad[0]=7をホストで準備する
+@0: nop            | ld r1, [0]
+@1: nop            | nop
+@2: mul r3, r1, r2
+@3: nop
+@4: add r4, r3, r1
+@5:                | st [1], r4
+@6: halt
+```
+
+アセンブルできることと、実行してよいことは別の条件です。上の列の`@1: nop`はLDの結果を待つための時間で、空行に置き換えると後続命令の発行cycleが早まり、合法性が変わります。
+
+# 実行時の処理 {#sec-runtime}
+
+## 発行サイクルとクロック境界
+
+`start`の受理境界を **E₀** とし、その直後から次の境界までがcycle 0です。一般にcycle sは **E_sからE_(s+1)**。境界E_sまでのcommitを反映した状態を、cycle sの命令が読みます。
+
+| 順序 | cycle sで行うこと |
+|---:|---|
+| 1 | E_sで確定した更新がRFとScratchpadから見える |
+| 2 | PC=sのbundleを取り出して分解する |
+| 3 | そのcycleで見える全ソースを読む。STの値、MACのrs3もこの時点 |
+| 4 | 各操作を発行し、E_(s+L)の結果反映を予約する |
+| 5 | cycle末尾のE_(s+1)で、その境界に予約されている更新を反映する |
+
+依存する消費者は `s_consumer >= s_producer + L` に置きます。例えばcycle 0のLD（L=2）の結果はcycle 2から使えます。cycle 1では使えません。逆に、結果がE₂でcommitした後のcycle 2には、その結果を使うMULをすぐ発行できます。
+
+この順序は論理的な説明です。RTLでは組合せのfetch・decode・ソース読出し・計算と、境界でのレジスタ更新で実現します。[サイクル契約][isa]、[Core][core]
+
+{{< include _replay.qmd >}}
+
+## 7cycleの例を読む
+
+教材の初期状態は`r2=3`、`mem[0]=7`だけです。その他の値は入力宣言がないため未定義で、0として扱いません。
+
+| 発行cycle | 操作 | 入力 | commit / done境界 |
+|---:|---|---|---|
+| 0 | LD r1, [0] | mem[0] = 7 | E₂: r1 = 7 |
+| 1 | NOP | — | 更新なし |
+| 2 | MUL r3, r1, r2 | 7 × 3 | E₄: r3 = 21 |
+| 3 | NOP | — | 更新なし |
+| 4 | ADD r4, r3, r1 | 21 + 7 | E₅: r4 = 28 |
+| 5 | ST [1], r4 | r4 = 28 | E₆: mem[1] = 28 |
+| 6 | HALT | 未完了操作なし | E₇: busy = 0、done = 1 |
+
+HALTはcycle 6に発行するので、実行cycle数は`h+1=7`です。トレースはcycle 0からdoneのcycle 7まで記録するため**8行**になります。最終行は新しい命令の発行ではありません。doneはcycle 7だけ1で、その次は0になります。
+
+この教材は[既存テストケース][example-case]と[手書きgolden trace][example-trace]を直接使っています。図を動かすJavaScriptはCPUを再実装せず、初期状態に各行のcommitを順に重ねます。命令語のgoldenは[isa_example.hex][example-hex]です。
+
+## 同じbundleでは旧値を読む
+
+入力が`r1=10`、`r2=5`のとき、次のbundleをcycle 0に置くと、ADDもSTも発行cycleに見えるr1=10を読みます。
+
+```asm
+@0: add r1, r1, r2 | st [0], r1
+@1: halt
+```
+
+E₁でr1は15、mem[0]は10になります。同じbundleのSTへ15を渡すforwardingはありません。r1を読むと同時にr1への新しい書込みを発行すること自体は合法です（L3の発行cycle自身での読出し）。[issue_cycle_readのテスト][old-value-case]
+
+## SRAMが1cycleでも、LDは2cycle
+
+cycle sで発行したLDは、E_(s+1)で`SyncReadMem`に要求が受け付けられ、cycle s+1に読出し値が出ます。それをE_(s+2)でRFへ保存するので、命令から見たLDのLは2です。メモリの同期読出しと、命令結果のRF可視化を区別してください。
+
+STは発行cycleでRFのソースを読み、E_(s+1)でScratchpadへ保存します。既定構成ではMemoryスロットが1つ、STのLが1なので、同じbankの同一境界に命令のLDとSTを重ねません。[MemorySlot][memory]
+
+# 合法性とハザード {#sec-hazards}
+
+## ソフトウェアで守る制約
+
+ハザードとは、値が未完成だったり、同じ資源を同じ時刻に使おうとしたりする衝突です。このCoreは、ハザードを動的に待って解消する設計ではありません。独立verifierで命令列と入力宣言を検査し、不正な列は実行前に拒否します。RTLのassertionはシミュレーションで違反を検出します。[Verifier][verifier]、[検証規則][verifier-doc]
+
+{{< include _hazards.qmd >}}
+
+特にL5は、発行スロットが空いているだけでは足りないことを示します。MUL(0)とADD(1)はどちらもE₂のCompute書戻しポートを必要とします。宛先レジスタが異なっていても同じポートは使えません。一方、MUL(0)とLD(0)ならComputeとMemoryの別ポートなので、宛先が異なれば同時commitできます。
+
+## L1〜L11の一覧
+
+レジスタrへcycle sに発行するL-cycleの書込みは、半開区間`[s, s+L)`を占め、値はcycle s+Lから見えます。この区間と、各境界のポート予約を別々に調べます。
+
+| 規則 | 検査する内容 | 読むときの着眼点 |
+|---|---|---|
+| L1 符号化 | opcode、予約bit、レジスタ欄、HALT + Memory NOP | bit配置が正しいか |
+| L2 形状 | 1〜容量以下のbundle列。HALTは最後にちょうど1つ | 実行が必ず末尾で終わるか |
+| L3 書込み中の読出し | `s < t < s+L`でrを読まない。t=sの旧値読出しは可 | 消費者が早すぎないか |
+| L4 書込み区間 | 同じrへの書込み区間を重ねない | 同じ宛先が未完了でないか |
+| L5 書戻しポート | Compute、Memoryとも各境界で高々1結果 | 発行cycleに加えて完了境界も見る |
+| L6 HALT | 全操作がHALTの発行cycleまでに完了 | doneの境界までに終わればよい、ではない |
+| L7 アドレス | LD/STが実際のScratchpad容量内 | 9bitに収まっても縮小構成では範囲外になり得る |
+| L8 未定義値 | 入力宣言、またはそのcycleまでのcommitで値が定義済み | 未初期化のRF・メモリを読まない |
+| L9 発行間隔 | 同じ演算の発行間隔がそのII以上 | MULのIIとMACのIIは別々に数える |
+| L10 書込み中のメモリ | 未完了STと同じアドレスのLDを途中に置かない | STのLが長い機械設定で必要になる |
+| L11 読出しポート | bundleのソース欄の総数がread_ports以下 | MACは3、STは1。同じrを2欄で読めば2と数える |
+
+L4は、同じ境界への二重commitだけを禁止する規則ではありません。例えば`ADD r1, ... | LD r1, [0]`はcommit境界がE₁とE₂でも、書込み区間が重なるので不正です。
+
+RTLの違反信号・assertionはL1〜L7とmvp-1のL11を検出します。**L8の定義済み値の追跡はRTLにはありません**。L9はRTLがII=1のみ、L10はST L=1のみを受け付けるため、その対応範囲で成立します。verifierと参照モデルは、より広い機械設定でL1〜L11を扱います。入力宣言を含めた事前検査を省略しないでください。[Coreのassertion][core]、[CoreParamsの制約][params]
+
+# コンパイラと検証 {#sec-compiler}
+
+## 命令列を作るまで
+
+カーネルDSLから最終bundle列までを`compiler`が担当します。「いつ発行するか」と「どの物理レジスタに置くか」をソフトウェア側で解決してから、Coreへ渡します。[コンパイラ仕様][compiler-doc]、[KernelCompiler][kernel-compiler]
+
+{{< include _compiler.qmd >}}
+
+依存グラフの辺は、値を作る操作uと読む操作vに対して`issue(v) >= issue(u) + L(u)`という時間距離を表します。スケジューラはデータ依存に加え、発行スロット、演算器のII、未来の書戻しポート、読出しポートを予約します。レジスタ不足には再スケジューリングやLDのrematerializationを使います。一般的なメモリへのspillは実装していません。
+
+mvp-1でのMAC融合は、常にすべてのMUL+ADDを置き換えるわけではありません。使われ方や遅延などの条件を[Fusion][fusion]で判定します。最終的な符号化済みの列は、スケジューラから独立したverifierへ渡してから返します。
+
+## Modulo Schedulingとループ
+
+Phase 3では反復構造を保つLoop IRとModulo Schedulingも実装されています。反復kの演算nを `start + t(n) + k × II` に配置し、異なる反復を重ねます。ここでの **ループII** は反復の開始間隔で、個々の演算器のIIとは別の値です。
+
+| 段階 | 処理 |
+|---|---|
+| Loop IR / LoopGraph | 反復内と反復をまたぐ依存を保持する |
+| MII | 資源によるResMIIと、反復依存によるRecMIIから探索の下限を求める |
+| ModuloScheduler / RowFit | 周期的な予約表、依存、ポート、演算器を満たすIIと時刻を探す |
+| 展開・割当・検証 | 有限回の反復を直線のbundle列へ展開し、レジスタ割当と最終verifierを通す |
+| ModuloTrace | 実行traceから各反復の発行間隔とデータの由来を独立に照合する |
+
+現在のISAに分岐命令やハードウェアループ制御が追加されるわけではありません。Coreが実行する時点では展開済みの直線の列です。選択されたIIが最小cycle数を保証するわけでもなく、命令領域やレジスタ数でIIを大きくする場合があります。[ModuloCompiler][modulo]、[ModuloTrace][modulo-trace]、[Modulo仕様][compiler-doc]
+
+## 独立な実装で照合する
+
+共有するのはmachine descriptionとISAの契約です。`compiler`と`sim`はともに`isa`へ依存しますが、互いには依存しません。スケジューラとverifier、参照モデル、RTLを別の表現・判定方法で実装し、同じ誤りを共有しにくくしています。[build.sbt][build]、[ADR-0002][decisions]
+
+| 検査 | 何を確かめるか |
+|---|---|
+| 独立verifier | 命令語と入力宣言に対する合法性。演算結果は計算しない |
+| ReferenceModel | 発行時の値と将来イベントを使ってcycle精度で実行する |
+| Chisel RTL + ChiselSim | 実際のDecoder、RF、スロット、同期メモリの動作 |
+| crosscheck | 期待する値、cycle数、issue、各ポートのcommit、doneが一致するか |
+| 手書きgolden | ISAから手で導いた命令語・trace。モデル出力を期待値へコピーしない |
+
+traceの`rf_commit`と`mem_commit`は**行の先頭のE_sで反映した更新**です。一方、RTLの`observe`はそのcycle末尾の境界に着地する書込み要求を示すため、テストドライバが境界をそろえてtrace化します。この違いを混ぜると、図も検査も1cycleずれます。[trace仕様][trace-doc]、[CoreDriver][driver]、[ReferenceModel][reference-model]
+
+# 対応範囲と保証 {#sec-support}
+
+## 設定を読めることとRTLを作れること
+
+machine descriptionのローダ、意味論、RTLには次の差があります。図は既定値を表示しますが、アニメーションデータの機械設定はビルド時に設定ファイルから取り込みます。
+
+| 項目 | ローダ・verifier・参照モデル | 現行Core / FixedPipelineのRTL |
+|---|---|---|
+| ISA | mvp-0、mvp-1 | 両方。FixedPlanの演算にはMACなし |
+| RF数 | 1〜16 | 同じ |
+| 各演算のL | 1〜8 | Computeは同じ。LDは2以上、STは1 |
+| 演算器のII | 1〜8 | すべて1 |
+| RF read_ports | mvp-0は3、mvp-1は3または4 | 3のみ |
+| Scratchpad | bank数×words/bankが512以下 | ローダの範囲内 |
+| 命令領域 | 1〜4096 bundle | Coreは同じ。FixedPipelineは命令メモリなし |
+
+`read_ports=4`のmvp-1はverifierと参照モデルで比較できますが、このsnapshotのRTLでは組み立て時に拒否されます。同様に、長いSTやII>1の実験を参照モデルで動かせても、そのままRTLで動くとは限りません。[Machine仕様][machine-doc]、[CoreParams.check][params]
+
+## 「決定論的」の保証範囲
+
+保証の対象は、**命令と入力を準備し、startを受理してからdoneを通知するまでのクロックサイクル数**です。固定クロック、実行中のreset・割込み・クロック停止なし、ホストからの状態変更なし、固定Latency/II、検証済み命令列を前提にします。
+
+ホストでの準備時間や外部DRAMの応答時間は、このcycle契約には含みません。cycle数を実時間へ換算するには、そのクロックでタイミングを満たす回路であることの確認が必要です。[設計方針][design]
+
+| このsnapshotにあるもの | 今後の拡張として区別するもの |
+|---|---|
+| 2スロット、即値アドレス、固定遅延、開始前のローカル入力配置 | SIMD、Computeスロット増設 |
+| list scheduling、レジスタ割当、Modulo Scheduling、MAC | DMA、Double Buffer、実行中の外部メモリ転送 |
+| Coreと資源を共有するFixedPipeline、cycle単位の比較 | 複数タイルと静的通信、合成後の面積・Fmax・電力評価 |
+
+将来項目はこのcommitの[README][readme]と[ROADMAP][roadmap]に基づく区分です。動く図は、未実装のDMAや複数スロットを実装済みとして表示しません。
+
+# 再現手順とソース案内 {#sec-reproduce}
+
+## マニュアルをビルドする
+
+リポジトリルートから実行します。Quarto CLIとPython 3が必要です。このマニュアルの検証にはQuarto **1.8.27**を使用しています。sbt、Jupyter、R、外部JavaScriptライブラリはマニュアルの生成には不要です。
+
+```sh
+quarto render docs/manual
+```
+
+生成される`docs/manual/_output/index.html`をブラウザで開きます。CSS・JavaScript・教材データを埋め込んだ単一HTMLで、実行時の外部通信は不要です。[Quartoのembed-resources][quarto-html]を使っています。図のソースとビルド・検証手順の詳細は[docs/manual/README.md][manual-readme]を参照してください。
+
+```sh
+# ローカルプレビュー
+quarto preview docs/manual
+
+# 取り込んだ教材データと元のファイルが一致するか
+python3 docs/manual/prepare.py --check
+
+# 状態再生・フィールド分解・既存fixtureとの整合性
+node --test docs/manual/tests/model.test.cjs
+```
+
+表示確認には後述のREADMEにあるPlaywrightテストも使えます。生成物の`_output/`とQuartoの作業領域はgit管理から除外しています。
+
+## 参照モデルとRTLを動かす
+
+以下はリポジトリに用意されたコマンドです。JDK、sbt、Verilatorなどの導入は[開発手順][readme]と[toolchainの案内][toolchain]に従ってください。マニュアルのHTMLを生成するための依存関係とは別です。
+
+```sh
+# 入力宣言を含めて検証する
+sbt "compiler/run verify tests/cases/isa_example.json"
+
+# 参照モデルで実行しtraceを出す
+sbt "sim/run tests/cases/isa_example.json --trace out.jsonl"
+
+# RTLの既存テスト。ChiselSim / Verilatorが必要
+scripts/check.sh sbt "hw/testOnly vliw.hw.CaseSpec"
+
+# SystemVerilogを出力する
+sbt "hw/run generated/core config/machine.json"
+
+# MACのあるCoreを出力する
+sbt "hw/run generated/mac config/machine-mvp1.json"
+```
+
+同じチェックアウトで複数のsbtを同時に起動しないでください。共有のシミュレーション作業領域と衝突するためです。RTLテストのtraceは`CoreDriver`が観測ポートから作り、goldenや参照モデルと比較します。[RTLの案内][hw-readme]
+
+## ソースを読む順番
+
+リンクは説明の基準commitへ固定しています。マニュアル自身のソースへのリンクは、PRがマージされる前にも参照できるよう追加ブランチを指します。
+
+| 確かめること | ソース |
+|---|---|
+| 標準値とMACの構成 | [config/machine.json][machine0] / [machine-mvp1.json][machine1] |
+| opcode・bit位置・ファイル形式 | [BundleCodec.scala][codec] / [ProgramFile.scala][program-file] |
+| デコードと発行 | [Core.scala][core] / [Decoder.scala][decoder-source] |
+| RF読出しと書込み区間 | [RegisterFile.scala][rf] |
+| 算術結果と固定書戻し | [ComputeSlot.scala][compute] |
+| 同期メモリとLD/ST | [MemorySlot.scala][memory] |
+| 静的回路への固定 | [FixedPipeline.scala][fixed] / [FixedPlan.scala][fixed-plan] |
+| 最終検査と命令生成 | [KernelCompiler.scala][kernel-compiler] / [Verifier.scala][verifier] |
+| cycle精度の意味論 | [ReferenceModel.scala][reference-model] |
+| 観測からtraceへの変換 | [CoreDriver.scala][driver] / [TRACE.md][trace-doc] |
+
+## 用語
+
+| 用語 | このマニュアルでの意味 |
+|---|---|
+| bundle | 1cycleに発行するCompute + Memoryの64bit命令 |
+| issue | 発行サイクルで入力を読み、操作を開始すること |
+| commit | 指定境界で結果をRFまたはScratchpadへ反映すること |
+| latency / L | issueから結果の可視化までのcycle数 |
+| II | 同じ演算、または同じループの次の開始までの最短間隔。文脈で区別 |
+| NOP | 何も発行しないスロット。時間は1cycle進む |
+| bank / row | Scratchpadの分割番号 / bank内のword番号 |
+| RF | レジスタファイル。発行時の値を供給し、結果を保存する |
+| golden trace | ISAから手で導いて固定した、期待するcycle単位の記録 |
+
+[repository]: https://github.com/fregata-ariel/deterministic-vliw-chisel
+[readme]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/README.md
+[machine0]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/config/machine.json
+[machine1]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/config/machine-mvp1.json
+[isa]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/ISA.md
+[machine-doc]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/MACHINE.md
+[core]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/Core.scala
+[params]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/CoreParams.scala
+[compute]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/ComputeSlot.scala
+[memory]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/MemorySlot.scala
+[rf]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/RegisterFile.scala
+[fixed]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/FixedPipeline.scala
+[fixed-plan]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/FixedPlan.scala
+[instruction]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/isa/src/main/scala/vliw/isa/Instruction.scala
+[codec]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/isa/src/main/scala/vliw/isa/BundleCodec.scala
+[decoder-source]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/main/scala/vliw/hw/Decoder.scala
+[assembler]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/isa/src/main/scala/vliw/isa/Assembler.scala
+[asm-doc]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/ASM.md
+[example-case]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/tests/cases/isa_example.json
+[example-trace]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/tests/golden/isa_example.trace.jsonl
+[example-hex]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/tests/golden/isa_example.hex
+[parallel-case]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/tests/cases/compute_and_load.json
+[old-value-case]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/tests/cases/issue_cycle_read.json
+[verifier]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/compiler/src/main/scala/vliw/compiler/Verifier.scala
+[verifier-doc]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/VERIFIER.md
+[compiler-doc]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/COMPILER.md
+[kernel-compiler]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/compiler/src/main/scala/vliw/compiler/KernelCompiler.scala
+[fusion]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/compiler/src/main/scala/vliw/compiler/dag/Fusion.scala
+[modulo]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/compiler/src/main/scala/vliw/compiler/modulo/ModuloCompiler.scala
+[modulo-trace]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/crosscheck/src/test/scala/vliw/crosscheck/ModuloTrace.scala
+[build]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/build.sbt
+[decisions]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/DECISIONS.md
+[trace-doc]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/TRACE.md
+[reference-model]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/sim/src/main/scala/vliw/sim/ReferenceModel.scala
+[driver]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/src/test/scala/vliw/hw/CoreDriver.scala
+[design]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/DESIGN.md
+[roadmap]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/ROADMAP.md
+[quarto-html]: https://quarto.org/docs/output-formats/html-basics.html#self-contained
+[toolchain]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/toolchain/README.md
+[hw-readme]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/hw/README.md
+[program-file]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/isa/src/main/scala/vliw/isa/ProgramFile.scala
+[manual-readme]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/docs/quarto-animated-manual/docs/manual/README.md

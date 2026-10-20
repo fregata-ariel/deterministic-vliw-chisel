@@ -1,0 +1,33 @@
+```{=html}
+<figure class="manual-figure" id="replay" aria-labelledby="replay-title">
+  <h3 id="replay-title">クロック境界ごとに実行を追う</h3>
+  <div class="controls js-only" hidden>
+    <label>教材 <select id="replay-case"><option value="isa_example">LD → MUL → ADD → ST</option><option value="consecutive_mul">MULの連続発行（L=2 / II=1）</option></select></label>
+    <button type="button" data-play>再生</button><button type="button" data-prev>1サイクル戻る</button><button type="button" data-next>1サイクル進む</button><button type="button" data-reset>E₀へ</button>
+    <label>境界 <input id="replay-cycle" type="range" min="0" max="7" value="0" step="1"><output id="replay-cycle-value">E₀</output></label>
+  </div>
+  <div class="trace-summary" id="replay-summary"><span>境界 <strong>E₀</strong></span><span>PC = 0</span><span>busy = 1</span><span>done = 0</span></div>
+  <div class="diagram-scroll">
+    <svg id="replay-timeline" viewBox="0 0 800 300" role="img" aria-labelledby="timeline-title timeline-desc">
+      <title id="timeline-title">LD、MUL、ADD、ST、HALTの発行と完了境界</title>
+      <desc id="timeline-desc">LDはcycle 0で発行しE2でr1に7、MULはcycle 2で発行しE4でr3に21、ADDはcycle 4で発行しE5でr4に28、STはcycle 5で発行しE6でmemory 1に28をcommit。cycle 6のHALTの後、E7でdoneになる。</desc>
+      <text x="16" y="25">発行 → commit / done</text>
+      <g fill="none" stroke="#ced9e3"><path d="M180 40 V280 M260 40 V280 M340 40 V280 M420 40 V280 M500 40 V280 M580 40 V280 M660 40 V280 M740 40 V280"/></g>
+      <g><text x="170" y="30">E₀</text><text x="250" y="30">E₁</text><text x="330" y="30">E₂</text><text x="410" y="30">E₃</text><text x="490" y="30">E₄</text><text x="570" y="30">E₅</text><text x="650" y="30">E₆</text><text x="730" y="30">E₇</text></g>
+      <g><text x="16" y="75">LD r1, [0]</text><text x="16" y="120">MUL r3, r1, r2</text><text x="16" y="165">ADD r4, r3, r1</text><text x="16" y="210">ST [1], r4</text><text x="16" y="255">HALT</text></g>
+      <g stroke-width="14" stroke-linecap="round"><path d="M180 70 H340" stroke="#087d62"/><path d="M340 115 H500 M500 160 H580" stroke="#086e92"/><path d="M580 205 H660" stroke="#087d62"/><path d="M660 250 H740" stroke="#52667b"/></g>
+    </svg>
+  </div>
+  <p class="figure-note">帯の左端で発行し、右端の境界から結果が見える。現在の境界に入ったcommitを反映してから、そのcycleのソースを読む。</p>
+  <div id="replay-state" class="state-grid" aria-label="このサイクルで見えるレジスタとメモリ">
+    <div class="state-cell">r1<span class="value">未定義</span></div><div class="state-cell">r2<span class="value">3</span></div><div class="state-cell">r3<span class="value">未定義</span></div><div class="state-cell">r4<span class="value">未定義</span></div><div class="state-cell memory">mem[0]<span class="value">7</span></div><div class="state-cell memory">mem[1]<span class="value">未定義</span></div>
+  </div>
+  <p id="replay-detail" class="live-detail" aria-live="polite">cycle 0: LD r1, [0]を発行する。r1はまだ未定義。E₂から7が見える。</p>
+  <div class="diagram-scroll"><table class="trace-table" id="replay_table">
+    <caption>golden traceの発行とcommit（commit欄は行の先頭境界E_s）</caption>
+    <thead><tr><th scope="col">s</th><th scope="col">Compute</th><th scope="col">Memory</th><th scope="col">E_sで反映</th></tr></thead>
+    <tbody><tr class="selected"><th scope="row">0</th><td>NOP</td><td>LD r1, [0]</td><td>—</td></tr><tr><th scope="row">1</th><td>NOP</td><td>NOP</td><td>—</td></tr><tr><th scope="row">2</th><td>MUL r3, r1, r2</td><td>NOP</td><td>r1 = 7</td></tr><tr><th scope="row">3</th><td>NOP</td><td>NOP</td><td>—</td></tr><tr><th scope="row">4</th><td>ADD r4, r3, r1</td><td>NOP</td><td>r3 = 21</td></tr><tr><th scope="row">5</th><td>NOP</td><td>ST [1], r4</td><td>r4 = 28</td></tr><tr><th scope="row">6</th><td>HALT</td><td>NOP</td><td>mem[1] = 28</td></tr><tr><th scope="row">7</th><td>—</td><td>—</td><td>done = 1 / busy = 0</td></tr></tbody>
+  </table></div>
+  <figcaption class="figure-note" id="replay-source">データ: tests/cases/isa_example.json / tests/golden/isa_example.trace.jsonl。図はgolden traceの再生であり、ブラウザ上のCPUシミュレータではない。</figcaption>
+</figure>
+```

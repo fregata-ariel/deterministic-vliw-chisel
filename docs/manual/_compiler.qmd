@@ -1,0 +1,16 @@
+```{=html}
+<figure class="manual-figure" id="compiler-flow" aria-labelledby="compiler-flow-title">
+  <h3 id="compiler-flow-title">ソフトウェアが時間配置を作る</h3>
+  <div class="controls js-only" hidden><button type="button" data-play>再生</button><button type="button" data-prev>前へ</button><button type="button" data-next>次へ</button><button type="button" data-reset>先頭へ</button></div>
+  <div class="phase-grid">
+    <div class="phase current" data-phase="0"><strong>1. DSL → アドレス</strong><small>MemoryLayout / Lowering</small></div>
+    <div class="phase" data-phase="1"><strong>2. 依存グラフ</strong><small>Dag / MACならFusion</small></div>
+    <div class="phase" data-phase="2"><strong>3. 発行サイクル</strong><small>ListScheduler</small></div>
+    <div class="phase" data-phase="3"><strong>4. 物理レジスタ</strong><small>RegisterAllocator</small></div>
+    <div class="phase" data-phase="4"><strong>5. 符号化 → 検証</strong><small>BundleCodec / Verifier</small></div>
+    <div class="phase" data-phase="5"><strong>6. 実行と照合</strong><small>ReferenceModel / Core / crosscheck</small></div>
+  </div>
+  <p id="compiler-detail" class="live-detail" aria-live="polite">配列・スカラーをScratchpadへ配置する。Loweringが式を即値アドレスを使う形に変換する。</p>
+  <figcaption class="figure-note">段1〜5がコンパイル経路。段6は生成物を実行して検証する経路で、コンパイル中の処理ではない。ループのModulo Schedulingは本文の別経路を参照。</figcaption>
+</figure>
+```

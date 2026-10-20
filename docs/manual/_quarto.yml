@@ -1,0 +1,24 @@
+project:
+  type: default
+  output-dir: _output
+  render:
+    - index.qmd
+  pre-render:
+    - python3 prepare.py
+
+lang: ja
+format:
+  html:
+    minimal: true
+    css: assets/manual.css
+    toc: true
+    toc-title: このマニュアル
+    toc-depth: 2
+    number-sections: true
+    embed-resources: true
+    smooth-scroll: false
+    html-math-method: plain
+    include-after-body: assets/scripts.html
+    code-copy: false
+    title-block-banner: false
+    link-external-newwindow: true
