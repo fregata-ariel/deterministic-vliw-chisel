@@ -7,6 +7,8 @@ import vliw.isa.TestCase
 
 /** `sbt "sim/run <case.json> [--trace out.jsonl] [--metrics out.json]"`: run a test case on the
   * reference model, optionally writing its trace (docs/TRACE.md) and metrics (docs/METRICS.md).
+  * Exit 0 when it completes, 1 when it is illegal, 2 on input errors (including a machine the
+  * reference model does not implement yet).
   */
 object Main {
   def main(args: Array[String]): Unit = {
@@ -26,6 +28,10 @@ object Main {
         errors.foreach(System.err.println)
         sys.exit(2)
       case Right(c) =>
+        ReferenceModel.notImplemented(c.machine).foreach { r =>
+          System.err.println(s"$casePath: $r")
+          sys.exit(2)
+        }
         ReferenceModel.run(c.machine, c.words, c.inputs) match {
           case Left(violation) =>
             println(s"${c.name}: illegal: $violation")

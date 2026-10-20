@@ -31,12 +31,18 @@ object Verifier {
     def of(inputs: Inputs): Declaration = Declaration(inputs.registers.keySet, inputs.memory.keySet)
   }
 
+  /** Why [[verify]] refuses `machine`: ISA mvp-2 until #110 stage 2. `compiler/run verify` exits 2
+    * with it (an input error), not 1 (illegal).
+    */
+  def notImplemented(machine: MachineDescription): Option[String] =
+    IsaVersion.notImplemented(machine, "the verifier", "stage 2")
+
   def verify(
       machine: MachineDescription,
       words: Vector[Long],
       declared: Declaration
   ): Vector[Finding] = {
-    IsaVersion.requireImplemented(machine, "the verifier", "stage 2")
+    notImplemented(machine).foreach(r => throw new UnsupportedOperationException(r))
     val codec = new BundleCodec(machine)
     val decoded = words.map(codec.decode)
     val encoding = decoded.zipWithIndex.collect { case (Left(e), i) =>

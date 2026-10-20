@@ -76,12 +76,18 @@ object ReferenceModel {
     compute ++ memory
   }
 
+  /** Why [[run]] refuses `machine`: ISA mvp-2 until #110 stage 2. `sim/run` exits 2 with it (an
+    * input error), not 1 (illegal).
+    */
+  def notImplemented(machine: MachineDescription): Option[String] =
+    IsaVersion.notImplemented(machine, "the reference model", "stage 2")
+
   def run(
       machine: MachineDescription,
       words: Vector[Long],
       inputs: Inputs
   ): Either[Violation, Execution] = {
-    IsaVersion.requireImplemented(machine, "the reference model", "stage 2")
+    notImplemented(machine).foreach(r => throw new UnsupportedOperationException(r))
     val codec = new BundleCodec(machine)
     for {
       bundles <- codec.decodeAll(words).left.map(e => Violation(Rule.Encoding, None, e))

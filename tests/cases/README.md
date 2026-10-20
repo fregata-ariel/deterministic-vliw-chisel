@@ -95,7 +95,7 @@ RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.j
 | `tests/machines/mvp2_mw1.json` | mvp-2 の W-reg: `max_words_per_access` 1 で、LD.W・ST.W が無い | #110 の第2段から |
 | `tests/machines/mvp2_rp4.json` | mvp-2 で読出しポートだけ4本（制約なしの比較用。RTL の範囲外） | #110 の第2段から（verifier と参照モデル） |
 | `tests/machines/mvp2_vlat.json` | mvp-2 で新しい演算のレイテンシーだけ変えたもの（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3） | #110 の第2段から（RTL は第3段から） |
-| `tests/machines/mvp2_vii.json` | mvp-2 で新しい6つの演算の II を2、ST.W のレイテンシーを2にしたもの（RTL の範囲外） | #110 の第2段から（verifier と参照モデル） |
+| `tests/machines/mvp2_vii.json` | mvp-2 で新しい6つの演算の II を2、ST と ST.W のレイテンシーを2にしたもの（ST.W のレイテンシーは ST と同じでなければならない。RTL の範囲外） | #110 の第2段から（verifier と参照モデル） |
 
 mvp-2 の machine を使うケースは、#110 の第2段で verifier と参照モデルと一緒に足す。それまでは、verifier・参照モデル・RTL・コンパイラが mvp-2 の machine を理由付きで拒否する（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。第1段では、ローダ・エンコーダ・デコーダ・アセンブラを `isa/Mvp2Spec` が確かめる。
 

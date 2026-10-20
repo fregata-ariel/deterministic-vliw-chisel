@@ -383,5 +383,8 @@ class ReferenceModelSpec extends AnyFunSuite {
       e.getMessage == "ISA mvp-2 is not implemented in the reference model yet (#110 stage 2); " +
         "machine vliw2-i32-sp2-mac-w2"
     )
+    // `sim/run` exits 2 with this reason, before it calls run.
+    assert(ReferenceModel.notImplemented(mvp2).contains(e.getMessage))
+    assert(ReferenceModel.notImplemented(mvp1).isEmpty)
   }
 }

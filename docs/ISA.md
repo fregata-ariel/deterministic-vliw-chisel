@@ -81,7 +81,7 @@ LDの値を「サイクル s で見えるScratchpad」と定義できるのは�
 
 - 発行数: Compute・Memoryとも、bundle当たり高々1操作。
 - Scratchpadのbank競合と同一境界のread/write: Memoryスロットが1つで、ST のレイテンシーが1なら発生しない。ST のレイテンシーが2以上の構成では、STの書込みと後続のLDの読出しが同じbankで同じ境界に重なり得る。意味論（verifier・参照モデル）では値の競合は L10 で排除されており、bank の物理的な競合は RTL の実装の問題として扱う（現行の RTL は ST のレイテンシー1だけに対応する。[MACHINE.md](MACHINE.md)「実装ごとの対応範囲」）。将来DMAや複数Memoryスロットを追加する際は、この節に規則を追加し、verifierとRTLで維持する。
-- mvp-2 の LD.W・ST.W: 語 `a` と `a+1` にアクセスする。`banks` が2以上なら2語は別の bank にあり、各 bank へのアクセスは1サイクルに高々1つである。Memory の操作は1サイクルに1つのままである（「[mvp-2: W](#mvp-2-w)」）。
+- mvp-2 の LD.W・ST.W: 語 `a` と `a+1` にアクセスする。`banks` が2以上なら2語は別の bank にあり、各 bank へのアクセスは1サイクルに高々1つである。Memory の操作は1サイクルに1つのままである。ST.W の latency は ST と同じなので（ローダが確かめる）、下のメモリ順序は mvp-2 でも語ごとに成り立つ（「[mvp-2: W](#mvp-2-w)」）。
 - メモリ順序: 同一アドレスへの2操作は必ず別サイクルになり、先に発行した方が先に効く（LDの値の定義を参照）。ただし、DAGやスケジューラ（Phase 2）は、aliasするLD/STの依存を落としてはならない。bank競合の検査だけでは、意味上の順序は保証できない。
 
 依存命令の配置 `s_consumer >= s_producer + L` は、L3とL8から導かれる（メモリ経由の依存では L10 と L8）。ソースの書込み区間の外側で、かつcommit後に読む必要があるからである。
@@ -218,8 +218,8 @@ Memory word は mvp-0 と同じ。Compute word は次のとおり。
 `mvp-2` は、`mvp-1` に W を足した版である（#78 のオーナー判断 2026-10-20、[ADR-0022](DECISIONS.md)。#110 で段階的に実装する）。W は、同じ i32 の計算を保ったまま、演算の幅と転送の幅を広げる実験である。偶数・奇数のレジスタの組を 32bit×2 のレーンとして使い、各レーンはスカラーの i32 の演算とまったく同じ計算をする。新しい状態は足さない。
 
 - 演算: Compute スロットの VADD・VSUB・VMUL・VMAC（mvp-2 の machine は必ず持つ）と、Memory スロットの LD.W・ST.W（`scratchpad.max_words_per_access` が2の machine だけが持つ）。2の machine を W-full、1の machine を W-reg と呼ぶ（[MACHINE.md](MACHINE.md)）
-- 命令語の互換性: スカラーの opcode が mvp-1 の既定と同じ mvp-2 の machine（既定の machine はそうである）では、mvp-1 で合法な命令語は、どれも同じ操作に decode される。bit 11 を立てた MAC は、MAC の bits 11:0 が予約のままなので、L1 で不正のままである
-- 命令列の互換性: スカラーの演算の latency・II とレジスタ数が mvp-1 と同じ mvp-2 の machine（既定の machine はそうである）では、mvp-1 で合法な命令列は合法のままで、タイミングも同じである。スカラーの演算については、L1 の decode、L3、L4、L8、L10、操作ごとの L5、L7、欄の数で数える L11 が変わらないからである。#110 の第2段で、mvp-1 のケースとベンチマークの命令列を mvp-2 で実行し、判定・出力・cycles・トレースの本体が同じことを確かめる（ヘッダの `isa`・`machine`・`machine_revision`・`machine_hash` だけが違う）
+- 命令語の互換性: スカラーの opcode と `register_file.count` が mvp-1 の machine と同じ mvp-2 の machine（既定の machine は `config/machine-mvp1.json` とそうである）では、その mvp-1 の machine で合法な命令語は、どれも同じ操作に decode される。bit 11 を立てた MAC は、MAC の bits 11:0 が予約のままなので、L1 で不正のままである
+- 命令列の互換性: mvp-2 で足したキーを除いて mvp-1 の machine と同じ mvp-2 の machine（スカラーの演算の opcode・latency・II、`register_file.count`・`read_ports`、Scratchpad の容量（`banks`・`words_per_bank`）、`instruction_memory.bundles` が同じもの。既定の machine は `config/machine-mvp1.json` とそうである）では、その mvp-1 の machine で合法な命令列は合法のままで、タイミングも同じである。スカラーの演算については L1〜L11 がどれも変わらないからである（L5 は操作ごと、L11 は欄の数で数えるので、mvp-1 の形のままである）。どれかのキーが違えば、判定は変わり得る（例: Scratchpad が小さければ L7、`read_ports` が違えば L11、レジスタ数が少なければ L1）。#110 の第2段で、mvp-1 のケースとベンチマークの命令列を mvp-2 で実行し、判定・出力・cycles・トレースの本体が同じことを確かめる（ヘッダの `isa`・`machine`・`machine_revision`・`machine_hash` だけが違う）
 
 ### 用語
 
@@ -240,7 +240,7 @@ Memory word は mvp-0 と同じ。Compute word は次のとおり。
 | Memory | ST.W | 4 | `M[a] ← r[rs]`、`M[a+1] ← r[rs+1]` | 1 | 1 |
 
 - B はブロードキャストの bit（bit 11。下の「エンコード」）で、VMUL と VMAC だけにある。B=1 の rs1 は1つのレジスタで、1回読んで両方のレーンに使う
-- 各演算は `operations` に自分の項目を持ち、opcode・latency・ii は machine description から取る。latency と ii の既定は、対応するスカラーの演算と同じである（VADD・VSUB は ADD、VMUL は MUL、VMAC は MAC、LD.W は LD、ST.W は ST）
+- 各演算は `operations` に自分の項目を持ち、opcode・latency・ii は machine description から取る。latency と ii の既定は、対応するスカラーの演算と同じである（VADD・VSUB は ADD、VMUL は MUL、VMAC は MAC、LD.W は LD、ST.W は ST）。ただし、ST.W の latency は ST の latency と同じでなければならない（ローダが確かめる。理由は下の「構造上の性質への追加」）
 - 6つの演算は、それぞれ専用の演算器と `ii` を持ち、L9 は演算ごとに数える（VMUL と MUL は別の演算）。演算器を複数の演算で共有する構成は、mvp-2 でも表現しない。RTL は、レーン0 の乗算器を MUL・MAC・VMUL・VMAC で共有してよい（II が1の構成では外から区別できない。mvp-1 の MAC と同じ理由）。レーン1 には2つ目の乗算器が要る（#57 のために記録する）
 - rd は、どのソースの組と同じでもよい。`vmac r4:r5, r2, r6:r7, r4:r5`（rd = rs3）は累算の形で、ソースは発行サイクルの旧い値を読む。ブロードキャストの rs1 が `r[rd]` や `r[rd+1]` でもよい
 
@@ -284,7 +284,10 @@ LD の値を「サイクル s で見えるScratchpad」と定義できる理由�
 
 依存命令の配置 `s_consumer >= s_producer + L` は、組の両方のレジスタと、LD.W・ST.W の両方の語に当てはまる。
 
-構造上の性質への追加: ST のレイテンシーが2以上の構成で起こり得る、STの書込みと後続のLDの読出しの同じ bank での重なりは、ST.W でも語ごとに当てはまる。ST と同じく、verifier と参照モデルは値の競合を L10 で排除し、RTL は ST.W のレイテンシー1だけに対応する。
+構造上の性質への追加:
+
+- ST.W の latency は ST と同じである（ローダが確かめる）。Memory の操作は1サイクルに1つなので、ST・ST.W の書込みは発行の順に、どれも別の境界で効く。同じ語への2つの書込みが同じ境界で効くことも、後に発行した書込みが先に効くこともなく、「メモリ順序」の性質（先に発行した方が先に効く）は語ごとに成り立つ。同じ語への2つの書込みの順を決める規則は無い（L4 はレジスタだけ、L10 は読出しだけの規則で、ST・ST.W は書戻しポートを使わないので L5 も当てはまらない）。そのため、2つの latency が違ってよい構成を足すなら、その規則も足す（[ADR-0022](DECISIONS.md)）
+- ST のレイテンシーが2以上の構成で起こり得る、STの書込みと後続のLDの読出しの同じ bank での重なりは、ST.W でも語ごとに当てはまる。ST と同じく、verifier と参照モデルは読出しとの値の競合を L10 で排除し、RTL は ST・ST.W のレイテンシー1だけに対応する
 
 L11 の形は3つを比べ、F を採った（[ADR-0022](DECISIONS.md)）。
 

@@ -312,6 +312,16 @@ object MachineDescription {
             s"opcode $opcode of ${ops.map(_._3).mkString} equals nop_opcode"
           )
       }
+      // ST.W takes ST's latency, so stores take effect in issue order and never two in one
+      // boundary: no rule orders two stores to one word (docs/ISA.md "mvp-2: W", ADR-0022).
+      for {
+        st <- fixed.find(_.mnemonic == "ST")
+        stw <- fixed.find(_.mnemonic == "ST.W")
+        if stw.latency != st.latency
+      } errors.add(
+        "$.operations.ST.W.latency",
+        s"must equal operations.ST.latency (${st.latency}), got ${stw.latency}"
+      )
     }
 
     for {

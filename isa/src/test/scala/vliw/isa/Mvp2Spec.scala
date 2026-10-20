@@ -181,12 +181,18 @@ class Mvp2Spec extends AnyFunSuite {
         Seq(2, 2, 3, 3, 3)
     )
     assert((vlat.operations -- W) == (machine.operations -- W), "scalar operations unchanged")
+    // ST.W must keep ST's latency, so mvp2_vii raises both to 2 (per-word L10 for ST and ST.W).
     val vii = check("mvp2_vii.json", "vliw2-i32-sp2-mac-w2-vii") { v =>
       W.foreach(op => v("operations")(op)("ii") = 1)
-      v("operations")("ST.W")("latency") = 1
+      Seq("ST", "ST.W").foreach(op => v("operations")(op)("latency") = 1)
     }
-    assert(W.toSeq.map(vii.operation(_).ii).toSet == Set(2) && vii.operation("ST.W").latency == 2)
-    assert((vii.operations -- W) == (machine.operations -- W), "scalar operations unchanged")
+    assert(W.toSeq.map(vii.operation(_).ii).toSet == Set(2))
+    assert(Seq("ST", "ST.W").map(vii.operation(_).latency) == Seq(2, 2))
+    val rest = W + "ST"
+    assert(
+      (vii.operations -- rest) == (machine.operations -- rest),
+      "other scalar operations unchanged"
+    )
   }
 
   test("schema 3 is for mvp-2 only") {
@@ -294,6 +300,14 @@ class Mvp2Spec extends AnyFunSuite {
     assertRejected(text, "$.operations.VMAC.ii: must be in 1..8, got 0")(
       _("operations")("VMAC")("ii") = 0
     )
+    // ST.W takes ST's latency, so no rule is needed to order two stores to one word (ADR-0022).
+    val sameLatency = "$.operations.ST.W.latency: must equal operations.ST.latency"
+    assertRejected(text, s"$sameLatency (1), got 2")(_("operations")("ST.W")("latency") = 2)
+    assertRejected(text, s"$sameLatency (3), got 1")(_("operations")("ST")("latency") = 3)
+    val slowStores = edited(text) { v =>
+      Seq("ST", "ST.W").foreach(op => v("operations")(op)("latency") = 3)
+    }
+    assert(slowStores.operation("ST.W").latency == 3)
     // The same opcode in different slots is fine, as for ADD and LD.
     assert(machine.operation("ADD").opcode == machine.operation("LD").opcode)
   }

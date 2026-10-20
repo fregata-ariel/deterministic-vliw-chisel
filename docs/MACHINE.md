@@ -113,7 +113,7 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 | `operations.VADD` / `.VSUB` / `.VMUL` / `.VMAC` の `slot` / `writeback` | 固定: `compute` / `compute` |
 | `operations.LD.W.slot` / `.writeback` | 固定: `memory` / `memory` |
 | `operations.ST.W.slot` / `.writeback` | 固定: `memory` / `null` |
-| 新しい6つの演算の `opcode` / `latency` / `ii` | ほかの演算と同じ規則（opcode は1〜15で、同じスロット内で HALT を含めて一意、`nop_opcode` と異なる。latency と ii は1〜8） |
+| 新しい6つの演算の `opcode` / `latency` / `ii` | ほかの演算と同じ規則（opcode は1〜15で、同じスロット内で HALT を含めて一意、`nop_opcode` と異なる。latency と ii は1〜8）。加えて、`operations.ST.W.latency` は `operations.ST.latency` と同じ |
 
 演算のキーは `"LD.W"`・`"ST.W"` と書く。JSON パスは `$.operations.LD.W.latency` のようになる。
 
@@ -122,9 +122,10 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 - `register_file.read_ports` は「RF の bank ごと」の数に広げた。mvp-1 の RF は1つの bank なので、bank ごとと全体は同じで、mvp-1 のファイルの読み方は変わらない。L11 の文（形 F）も変わらない
 - `global_issue_per_cycle` は、Memory の操作の数のままにした。W-full では1つの操作が2語を動かす
 - 語の数は新しいキーにした。`global_issue_per_cycle` を語の数に使うと、固定の定数が1〜2のパラメータになり、名前（issue）と意味が合わなくなる。新しいキー1つで、LD.W・ST.W の有無、`scratchpad.banks` が2以上という要求、RTL の範囲が決まり、#111 の bank のポートの問いとも分けられる
+- ST.W の latency は ST と同じにした。Memory の操作は1サイクルに1つなので、ST・ST.W の書込みは発行の順に別の境界で効き、同じ語への2つの書込みの順を決める規則が要らない（[ISA.md](ISA.md)「mvp-2: W」の構造上の性質への追加）。2つが違ってよい構成を足すなら、その規則も足す（ADR-0022）。ii は別々でよい
 - LD.W・ST.W をキーで切り替えても、#69 の項目4の案B（同じ機械に名前と hash が2つできる。ADR-0018 で採らなかった案）にはならない。`max_words_per_access` は、64bit のメモリの経路と bank ごとの行アドレスという、ハードウェアの能力を表す。W-reg と W-full は、`read_ports` 3 と 4 と同じく、別の machine である
 
-ローダは、上の表に合わないものを、ほかのキーと同じく JSON パス付きの理由で拒否する。例えば、奇数の `count` と2未満の `count`、2でない `register_file.banks`、`register_index_mod_2` でない `bank_mapping`、1〜2の外の `max_words_per_access`、`max_words_per_access` が2で `scratchpad.banks` が1、`max_words_per_access` が1で LD.W・ST.W がある（未知のキー）か、2で LD.W・ST.W が無い、`schema_version` 1・2 のファイルの新しいキー（未知のキー）、`schema_version` 3 で `isa_version` が `mvp-2` でない（と、その逆）、opcode の重複（例: LD.W の opcode 1）である。`max_words_per_access` が無いか不正なときは、その誤りを1回だけ報告し、`operations` は LD.W・ST.W の無い11個の表で確かめる。正規化形式と hash の決め方は変わらない。
+ローダは、上の表に合わないものを、ほかのキーと同じく JSON パス付きの理由で拒否する。例えば、奇数の `count` と2未満の `count`、2でない `register_file.banks`、`register_index_mod_2` でない `bank_mapping`、1〜2の外の `max_words_per_access`、`max_words_per_access` が2で `scratchpad.banks` が1、`max_words_per_access` が1で LD.W・ST.W がある（未知のキー）か、2で LD.W・ST.W が無い、`schema_version` 1・2 のファイルの新しいキー（未知のキー）、`schema_version` 3 で `isa_version` が `mvp-2` でない（と、その逆）、opcode の重複（例: LD.W の opcode 1）、ST の latency と違う ST.W の latency である。`max_words_per_access` が無いか不正なときは、その誤りを1回だけ報告し、`operations` は LD.W・ST.W の無い11個の表で確かめる。正規化形式と hash の決め方は変わらない。
 
 | ファイル | machine_id | 内容 |
 |---|---|---|
@@ -132,13 +133,13 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 | `tests/machines/mvp2_mw1.json` | `vliw2-i32-sp2-mac-w2-mw1` | W-reg: `max_words_per_access` 1 で、`operations` に LD.W・ST.W が無い |
 | `tests/machines/mvp2_rp4.json` | `vliw2-i32-sp2-mac-w2-rp4` | `read_ports` だけ4（制約なしの比較用。verifier と参照モデルだけで動かす） |
 | `tests/machines/mvp2_vlat.json` | `vliw2-i32-sp2-mac-w2-vlat` | 新しい演算の latency だけ変えたもの（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3）。verifier・参照モデル・RTL のテスト用 |
-| `tests/machines/mvp2_vii.json` | `vliw2-i32-sp2-mac-w2-vii` | 新しい6つの演算の ii を2、ST.W の latency を2にしたもの。verifier と参照モデルのテスト用（L9、語ごとの L10） |
+| `tests/machines/mvp2_vii.json` | `vliw2-i32-sp2-mac-w2-vii` | 新しい6つの演算の ii を2、ST と ST.W の latency を2にしたもの（ST.W の latency は ST と同じでなければならない）。verifier と参照モデルのテスト用（L9、語ごとの L10） |
 
 変種は `proposed` のままにする（`mvp1_rp4`・`mvp1_mac3` と同じ）。latency を変えた2つは、ベンチマークの系列にも記録にも使わず、テストだけで確かめる（#78 の質問3）。変種が書いたキーだけで W-full と違うことは `isa/Mvp2Spec` が確かめる。どの machine もレジスタは16本で、machine_id は今の接尾辞（`-rp4`、`-mac3`）の形に合わせた。
 
 ## 実装ごとの対応範囲
 
-machine description の契約は3段に分かれる。ローダが受け付ける構成は、すべて verifier と参照モデルで扱える。RTL はその一部だけを実装し、範囲外の構成は組み立て時に理由付きで拒否する（[ADR-0009](DECISIONS.md)）。
+machine description の契約は3段に分かれる。ローダが受け付ける構成は、すべて verifier と参照モデルで扱える（mvp-2 は #110 の第2段までは除く。下）。RTL はその一部だけを実装し、範囲外の構成は組み立て時に理由付きで拒否する（[ADR-0009](DECISIONS.md)）。
 
 | 段 | 判定する場所 | 範囲 |
 |---|---|---|
@@ -164,10 +165,10 @@ mvp-2（W）の範囲は次のとおりで、#110 の各段で実装する（○
 | W-reg、RF の bank ごとに `read_ports` 3 | ○ | ○（第2段） | ○（第3段） | 演算の幅とメモリの幅を分けて測る（ADR-0012） |
 | W-full、RF の bank ごとに `read_ports` 4 | ○ | ○（第2段） | × | 読出し4本の RTL は #57（ADR-0018） |
 | ii が1でない（新しい演算を含む） | ○ | ○（第2段） | × | 上の「ii が1」と同じ |
-| LD.W の latency が2未満、ST.W の latency が1でない | ○ | ○（第2段） | × | 上の LD・ST と同じ理由 |
+| LD.W の latency が2未満、ST・ST.W の latency が1でない | ○ | ○（第2段） | × | 上の LD・ST と同じ理由 |
 | 固定パイプライン（#75） | — | — | × | MAC と同じ扱い（[PHASE3.md](PHASE3.md)） |
 
-その段が入るまでは、mvp-2 の machine を mvp-1 として扱わずに、理由付きで拒否する。mvp-1 として扱うと、黙って誤るからである（RTL は W の命令語を未知の opcode として実行し、メトリクスは `vliw-metrics/1` を書き、コンパイラは mvp-2 の名前で mvp-1 の命令列を作る）。`ReferenceModel`・`Metrics`（`sim`）と `Verifier`（`compiler`）は例外を投げ（第2段まで）、`KernelCompiler.prepare`・`ModuloCompiler.prepare` は理由を返し（第4〜5段まで）、`CoreParams.unsupported` は理由を返す（第3段まで。`FixedParams` も同じ理由で拒否する）。第3段では、`CoreParams.unsupported` と `computeLatencies` を、決まった演算の一覧ではなく machine の全演算で数えるように直す（今のままだと、新しい演算の ii が1でなくても受け付け、`maxLatency` が小さくなり得る）。
+その段が入るまでは、mvp-2 の machine を mvp-1 として扱わずに、理由付きで拒否する。mvp-1 として扱うと、黙って誤るからである（RTL は W の命令語を未知の opcode として実行し、メトリクスは `vliw-metrics/1` を書き、コンパイラは mvp-2 の名前で mvp-1 の命令列を作る）。`ReferenceModel`・`Metrics`（`sim`）と `Verifier`（`compiler`）は例外を投げ（第2段まで。`compiler/run verify` と `sim/run` は、呼ぶ前に同じ理由を表示して、入力の誤りの終了コード2で終わる）、`KernelCompiler.prepare`・`ModuloCompiler.prepare` は理由を返し（第4〜5段まで）、`CoreParams.unsupported` は理由を返す（第3段まで。`FixedParams` も同じ理由で拒否する）。第3段では、`CoreParams.unsupported` と `computeLatencies` を、決まった演算の一覧ではなく machine の全演算で数えるように直す（今のままだと、新しい演算の ii が1でなくても受け付け、`maxLatency` が小さくなり得る）。
 
 `CoreParams.check` は、範囲外の設定を理由付きですべて返す。`sbt "hw/run [dir] [machine.json]"` は理由を表示して終了し、`CoreParams` を直接作ると組み立て時に例外になる。
 

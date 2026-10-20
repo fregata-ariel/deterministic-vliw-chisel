@@ -249,5 +249,8 @@ class VerifierSpec extends AnyFunSuite {
       e.getMessage == "ISA mvp-2 is not implemented in the verifier yet (#110 stage 2); " +
         "machine vliw2-i32-sp2-mac-w2"
     )
+    // `compiler/run verify` exits 2 with this reason, before it calls verify.
+    assert(Verifier.notImplemented(mvp2).contains(e.getMessage))
+    assert(Verifier.notImplemented(mvp1).isEmpty && Verifier.notImplemented(machine).isEmpty)
   }
 }

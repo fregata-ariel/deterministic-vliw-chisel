@@ -39,7 +39,7 @@
     "VMUL": {"slot": "compute", "opcode": 7, "latency": 2, "ii": 2, "writeback": "compute"},
     "VMAC": {"slot": "compute", "opcode": 8, "latency": 2, "ii": 2, "writeback": "compute"},
     "LD": {"slot": "memory", "opcode": 1, "latency": 2, "ii": 1, "writeback": "memory"},
-    "ST": {"slot": "memory", "opcode": 2, "latency": 1, "ii": 1, "writeback": null},
+    "ST": {"slot": "memory", "opcode": 2, "latency": 2, "ii": 1, "writeback": null},
     "LD.W": {"slot": "memory", "opcode": 3, "latency": 2, "ii": 2, "writeback": "memory"},
     "ST.W": {"slot": "memory", "opcode": 4, "latency": 2, "ii": 2, "writeback": null},
     "HALT": {"slot": "compute", "opcode": 15, "requires_no_pending_operations": true, "requires_memory_nop": true, "done_after_cycles": 1}

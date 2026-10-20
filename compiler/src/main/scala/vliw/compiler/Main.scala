@@ -9,7 +9,8 @@ import vliw.compiler.dsl.Benchmarks
 import vliw.compiler.schedule.Priority
 import vliw.isa.{MachineDescription, ProgramFile, TestCase}
 
-/** `sbt "compiler/run verify <case.json>..."`: exit 0 if all are legal, 1 on violations.
+/** `sbt "compiler/run verify <case.json>..."`: exit 0 if all are legal, 1 on violations, 2 on input
+  * errors (including a machine the verifier does not implement yet).
   *
   * `sbt "compiler/run compile <kernel>... [--machine m.json] [--out dir] [--seed n] [--priority p] [--single-issue]"`:
   * compiles benchmark kernels and writes `<kernel>.hex` and the test case `<kernel>.json`; exit 2
@@ -41,6 +42,7 @@ object Main {
       TestCase.load(Paths.get(path)) match {
         case Left(errors) => exit(2, errors.mkString("\n"))
         case Right(c)     =>
+          Verifier.notImplemented(c.machine).foreach(r => exit(2, s"$path: $r"))
           val findings = Verifier.verify(c.machine, c.words, Verifier.Declaration.of(c.inputs))
           if (findings.isEmpty) println(s"${c.name}: legal")
           else {
