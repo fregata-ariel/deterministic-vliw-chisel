@@ -29,4 +29,4 @@ for row, event in zip(rows, trace):
         mem[str(w['addr'])] = w['value']
     expected = [event['cycle'], *[regs.get(r, '未定義') for r in ('r1', 'r2', 'r3', 'r4')], mem.get('1', '未定義'), int(event['busy']), int(event['done'])]
     assert row == list(map(str, expected)), (row, expected)
-print('Quarto source: 14 Mermaid cells, 4 native tabsets, no custom HTML/JS/CSS; all golden boundaries agree.')
+print('Quarto source: 14 Mermaid cells, 4 native tabsets, no custom HTML/JS; all golden boundaries agree.')

@@ -8,7 +8,7 @@ description: "実装を根拠に、2スロットVLIWのデータ経路、命令�
 
 このマニュアルは [deterministic-vliw-chisel][repository] の実装を、日本語の本文と操作できる図で読むためのものです。まず回路の全体像を見て、64bitの命令語を分解し、最後にクロック境界ごとの状態変化を追います。HDLの知識がなくても、レジスタ、メモリ、クロックの基本が分かれば読み進められます。
 
-説明の基準は **commit `787ae6d53953bf87202640dcbc181a88156a12a7`** です。[mvp-0のmachine description][machine0]を標準とし、[mvp-1][machine1]のMAC拡張を併記します。将来案と実装済みの機能は「対応範囲」で区別します。命令の正式な契約は[ISA仕様][isa]、構成値の制約は[Machine仕様][machine-doc]を参照してください。
+説明の基準は **[commit 787ae6d](https://github.com/fregata-ariel/deterministic-vliw-chisel/tree/787ae6d53953bf87202640dcbc181a88156a12a7)** です。[mvp-0のmachine description][machine0]を標準とし、[mvp-1][machine1]のMAC拡張を併記します。将来案と実装済みの機能は「対応範囲」で区別します。命令の正式な契約は[ISA仕様][isa]、構成値の制約は[Machine仕様][machine-doc]を参照してください。
 
 図はQuarto標準の`{mermaid}`コードセルで記述しています。HTMLでは標準のタブを切り替え、構成や実行段階を比較できます。矢印のアニメーションはMermaidの組み込み機能です。PDF・DOCXでは同じ図を静止画像にし、タブ内の全段階を順に掲載します。独自HTML・JavaScriptによる操作UIは使いません。
 

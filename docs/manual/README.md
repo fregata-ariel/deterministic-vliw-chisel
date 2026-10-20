@@ -1,6 +1,6 @@
 # Quarto標準の図で読むマニュアル
 
-[index.qmd](index.qmd)を同じソースからHTML、PDF、DOCXへ出力します。図はQuarto標準の`{mermaid}`コードセル、比較と実行段階の切替は標準の`.panel-tabset`です。独自HTML、JavaScript、CSS、Quarto拡張、事前のデータ生成スクリプトはありません。
+[index.qmd](index.qmd)を同じソースからHTML、PDF、DOCXへ出力します。図はQuarto標準の`{mermaid}`コードセル、比較と実行段階の切替は標準の`.panel-tabset`です。独自HTML、JavaScript、Quarto拡張、事前のデータ生成スクリプトはありません。`svg.css`は狭い画面での図幅と複数行ラベルを補正する2ルールだけです。
 
 | 出力 | 図の扱い |
 |---|---|

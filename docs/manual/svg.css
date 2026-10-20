@@ -1,0 +1,3 @@
+/* Keep native SVG figures within narrow screens and preserve multiline labels. */
+.cell-output-display svg { max-width: 100%; height: auto; }
+.cell-output-display svg foreignObject > div { height: 100%; }
