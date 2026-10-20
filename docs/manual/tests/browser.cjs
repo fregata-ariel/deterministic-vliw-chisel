@@ -15,7 +15,7 @@ fs.mkdirSync(qa, { recursive: true });
     page.on('pageerror', e => errors.push(e.message));
     await page.route(/^https?:/, route => { external.push(route.request().url()); return route.abort(); });
     await page.goto(pathToFileURL(path.join(out, 'index.html')).href);
-    await page.waitForSelector('.mermaid svg');
+    await page.waitForFunction(() => document.querySelectorAll('svg.mermaid-js').length === 14);
     const tabsets = page.locator('.panel-tabset');
     assert.equal(await tabsets.count(), 4);
     for (const group of await tabsets.all()) {
@@ -23,12 +23,12 @@ fs.mkdirSync(qa, { recursive: true });
         await tab.click();
         assert.equal(await tab.getAttribute('aria-selected'), 'true');
         const target = await tab.getAttribute('aria-controls');
-        await page.locator(`#${target} .mermaid svg`).first().waitFor({ state: 'visible' });
+        await page.locator(`#${target} svg.mermaid-js`).first().waitFor({ state: 'visible' });
       }
     }
-    assert.equal(await page.locator('.mermaid svg').count(), 14);
+    assert.equal(await page.locator('svg.mermaid-js').count(), 14);
     assert.equal(await page.getByText(/Syntax error in text/).count(), 0);
-    const animated = await page.locator('.mermaid svg path').evaluateAll(paths => paths.some(p => getComputedStyle(p).animationName !== 'none'));
+    const animated = await page.locator('svg.mermaid-js path').evaluateAll(paths => paths.some(p => getComputedStyle(p).animationName !== 'none'));
     assert.ok(animated, 'native Mermaid edge animation is present');
     // Select the Core and E4 panels for visual review.
     await tabsets.nth(0).locator('[role="tab"]').nth(0).click();

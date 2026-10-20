@@ -24,4 +24,4 @@ format:
       x: 20mm
       y: 20mm
   docx:
-    toc: true
+    toc: false

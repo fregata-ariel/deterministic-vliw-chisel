@@ -14,7 +14,7 @@
 
 - Quarto CLI **1.8.27**（Typstを同梱）
 - 日本語フォント **Noto Sans CJK JP**（Ubuntuでは`fonts-noto-cjk`）
-- PDF・DOCXへの図の変換にChrome / Chromium。Quartoが自動検出します。未導入なら`quarto install chromium`で導入できます。実行ファイルを明示する場合は`QUARTO_CHROMIUM`を指定します。
+- CIで検証したブラウザはChromium 141（Playwright 1.56.1同梱）です。PDF・DOCXへの図の変換にChrome / Chromium。Quartoが自動検出します。未導入なら`quarto install chromium`で導入できます。実行ファイルを明示する場合は`QUARTO_CHROMIUM`を指定します。
 
 PDFにはQuarto標準のTypst形式を使います。`--to typst`の出力は`.pdf`です。LaTeX環境は不要です。本文と図の生成にPython、R、Jupyter、Node.jsのインストールは不要です。
 
