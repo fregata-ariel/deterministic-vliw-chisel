@@ -8,7 +8,8 @@
 #            or the test JVM died, timeout, aborted suite (see tests/cases/README.md)
 #   SURVIVED sbt test passed
 # The tests run once without a mutant first and must pass. An environment ERROR is retried.
-# Usage: scripts/mutation-check.sh [mutant-id...]   (default: all mutants)
+# Usage: scripts/mutation-check.sh [mutant-id...]   (default: all mutants; an id that names no
+#   mutant of scripts/mutants.tsv stops the check before sbt, exit 2)
 # Environment: SBT (sbt command), MUTATION_LOG_DIR (default build/mutation/<UTC time>),
 #   MUTATION_TIMEOUT (seconds per sbt run, default 1200), MUTATION_RETRIES (reruns after an
 #   environment ERROR, default 1), MUTATION_BASELINE (0 skips the unmutated run, default 1),
@@ -51,6 +52,13 @@ if [[ -n "${MUTATION_SHARD:-}" ]]; then
   fi
   shard_k="${BASH_REMATCH[1]}" shard_n="${BASH_REMATCH[2]}"
 fi
+
+# An id that names no mutant would select no row, and the check would pass without running it
+# (#129). The ids are read as the loop below reads them; an id outside the shard is still skipped.
+known_ids="$(awk -F'\t' '{ sub(/^\t+/, "") } $1 != "" && $1 !~ /^#/ { print $1 }' scripts/mutants.tsv)"
+for id in "$@"; do
+  grep -qxF -- "$id" <<<"$known_ids" || die "no mutant '$id' in scripts/mutants.tsv"
+done
 
 log_dir="${MUTATION_LOG_DIR:-$repo_root/build/mutation/$(date -u +%Y%m%dT%H%M%SZ)}"
 limit="${MUTATION_TIMEOUT:-1200}"

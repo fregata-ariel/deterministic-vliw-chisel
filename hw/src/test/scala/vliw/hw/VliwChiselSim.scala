@@ -1,9 +1,10 @@
 package vliw.hw
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, StandardOpenOption}
+import java.nio.file.{Files, Path, StandardOpenOption}
 import java.security.SecureRandom
 
+import chisel3.Module
 import chisel3.simulator.scalatest.ChiselSim
 import org.scalatest.TestSuite
 import svsim.{
@@ -17,12 +18,22 @@ import svsim.verilator.Backend.CompilationSettings.Parallelism
 
 /** The seed of Verilator's random numbers for every simulation in this test JVM (#74).
   *
-  * ChiselSim builds with `RANDOMIZE_REG_INIT`, `RANDOMIZE_MEM_INIT` and `RANDOM=$urandom`, so
-  * registers and memories start from Verilator's random numbers. Registers with a reset lose them
-  * at reset; the register file (no reset) and the memories keep them until written. Where the
-  * random numbers start without `+verilator+seed+` depends on the Verilator version, and the same
-  * seed can give other numbers in another version. The seed is therefore passed explicitly and
-  * recorded together with the version of the Verilator that ran (ADR-0020).
+  * ChiselSim builds with `RANDOMIZE_REG_INIT`, `RANDOMIZE_MEM_INIT` and `RANDOM=$urandom`, so every
+  * register and memory starts from Verilator's random numbers ([[InitMode.Urandom]]; a test can
+  * choose all zeros or all ones instead, [[VliwChiselSim.simulateInit]]). Registers with a reset
+  * get their reset value at the first reset edge. The state without a reset keeps its initial value
+  * until written: the registers of the register file (`RegisterFile.regs`), the instruction memory
+  * (`Core.imem`), the scratchpad banks (`MemorySlot.banks`, with the registers of their read ports
+  * that firtool adds, `_RW0_*`), the bank of the last read (`MemorySlot.readBank`) and the value
+  * registers of a fixed pipeline (`FixedPipeline.regs`). The first reset edge itself can write the
+  * register file: the write-back schedules and `loadStage` still hold their initial values at that
+  * edge, and register writes are not stopped by reset (with all ones, both ports write the register
+  * whose index bits are all 1; ADR-0021). The host therefore loads its inputs after reset
+  * ([[CoreDriver.start]]).
+  *
+  * Where the random numbers start without `+verilator+seed+` depends on the Verilator version, and
+  * the same seed can give other numbers in another version. The seed is therefore passed explicitly
+  * and recorded together with the version of the Verilator that ran (ADR-0020).
   *
   * `VLIW_SIM_SEED` selects it: unset for [[Default]], a number from 1 to 2147483647 (the range that
   * Verilator accepts), or `random` for a new seed per test JVM.
@@ -82,33 +93,62 @@ object SimVerilator {
   *   - the seed of [[SimSeed]], also written to `seed.txt` in the simulation's directory under
   *     `build/chiselsim/` (next to the logs that ChiselSim writes there; the Makefile `replay`
   *     target in that directory uses the same seed);
+  *   - the initial state: the build must define `RANDOMIZE_REG_INIT`, `RANDOMIZE_MEM_INIT` and
+  *     `RANDOM` once each, `RANDOM` as one of the [[InitMode]]s, and not `SYNTHESIS`; every
+  *     register and memory of the generated SystemVerilog must start from `RANDOM`
+  *     ([[SvInitCheck]]); the mode is written to `init.txt` next to `seed.txt` (`init=<mode>
+  *     RANDOM=<value>`; the Makefile holds the same define, so `replay` keeps the mode). Otherwise
+  *     the simulation fails before the build, naming its directory;
   *   - the Verilator jobs of [[SimVerilator]];
   *   - the `[toolchain]` line of [[Toolchain]] in the sbt log, once per test JVM.
   *
   * ChiselSim specs mix in this trait instead of ChiselSim (`scripts/check.sh static` checks it).
   */
 trait VliwChiselSim extends ChiselSim { this: TestSuite =>
+
+  /** `simulate` with every register and memory starting from `mode` (#129). `simulate` itself
+    * starts from [[InitMode.Urandom]].
+    */
+  def simulateInit[T <: Module](mode: InitMode)(module: => T)(body: T => Unit): Unit =
+    simulate(module, settings = InitMode.settings[T](mode))(body)
+
   override implicit def commonSettingsModifications: CommonSettingsModifications = {
     val inherited = super.commonSettingsModifications
     (original: CommonCompilationSettings) => {
       val settings = inherited(original)
       val dir = implementation.getDirectory
+      // The mode that the test chose wins. A JVM-wide mode added later (for example an environment
+      // variable for whole-suite runs) may only replace the default, urandom.
+      val mode = InitMode
+        .of(settings.verilogPreprocessorDefines)
+        .fold(e => throw new IllegalArgumentException(s"$dir: randomization: $e"), identity)
+      // Elaboration has written the primary sources before the compilation settings are made.
+      val sv = SvInitCheck.directory(dir.resolve("primary-sources"))
+      if (sv.problems.nonEmpty)
+        throw new IllegalStateException(
+          s"$dir: initial state: ${sv.problems.mkString("; ")}"
+        )
       SimSeed.announce
       Toolchain.announce
       Files.createDirectories(dir)
-      Files.write(
-        dir.resolve("seed.txt"),
-        (SimSeed.describe + "\n").getBytes(StandardCharsets.UTF_8),
-        StandardOpenOption.CREATE,
-        StandardOpenOption.TRUNCATE_EXISTING,
-        StandardOpenOption.WRITE
-      )
+      write(dir.resolve("seed.txt"), SimSeed.describe + "\n")
+      write(dir.resolve("init.txt"), s"init=${mode.name} RANDOM=${mode.value}\n")
       settings.copy(simulationSettings =
         settings.simulationSettings.copy(plusArgs =
           settings.simulationSettings.plusArgs :+ SimSeed.plusArg
         )
       )
     }
+  }
+
+  private def write(file: Path, text: String): Unit = {
+    Files.write(
+      file,
+      text.getBytes(StandardCharsets.UTF_8),
+      StandardOpenOption.CREATE,
+      StandardOpenOption.TRUNCATE_EXISTING,
+      StandardOpenOption.WRITE
+    )
   }
 
   override implicit def backendSettingsModifications: BackendSettingsModifications = {

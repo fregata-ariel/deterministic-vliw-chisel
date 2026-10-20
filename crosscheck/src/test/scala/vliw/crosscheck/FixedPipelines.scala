@@ -2,9 +2,9 @@ package vliw.crosscheck
 
 import vliw.compiler.{CompiledKernel, KernelCompiler}
 import vliw.compiler.dag.{Dag, Node}
-import vliw.compiler.dsl.Kernel
+import vliw.compiler.dsl.{Kernel, Values}
 import vliw.compiler.schedule.{ListScheduler, Priority, Schedule}
-import vliw.hw.{FixedOp, FixedParams, FixedPlan, StoragePolicy}
+import vliw.hw.{FixedOp, FixedParams, FixedPlan, FixedRun, StoragePolicy}
 import vliw.isa.{MachineDescription, Slot}
 
 /** Fixed pipelines (#75) of the DSL kernels: the kernel's layout (`MemoryLayout.fixedOrder`) and
@@ -124,4 +124,28 @@ object FixedPipelines {
     KernelCompiler.prepare(kernel, machine).map { p =>
       attempts(p).minBy(a => (a.cycles, a.params.registers))
     }
+
+  /** How `run`, a run of the circuit of `p`, differs from its plan: the cycles, done high for one
+    * cycle, busy in cycles 0..T, the outputs (`expected`), and the issue and commit cycles of each
+    * slot. Empty when it does not.
+    */
+  def mismatches(p: Planned, run: FixedRun, expected: Values): Seq[String] = {
+    val ops = p.plan.ops
+    val computes = ops.filter(_.isInstanceOf[FixedOp.Compute])
+    val memoryOps = ops.filterNot(_.isInstanceOf[FixedOp.Compute])
+    val loads = ops.filter(_.isInstanceOf[FixedOp.Load])
+    def commits(os: Seq[FixedOp]) = os.map(FixedPlan.commitCycle(p.machine, _)).sorted
+    def differs[A](what: String, actual: A, planned: A) =
+      Option.when(actual != planned)(s"$what: $actual, expected $planned")
+    Seq(
+      differs("cycles", run.cycles, p.cycles),
+      differs("done is high for one cycle", run.doneCycles, Seq(p.cycles)),
+      differs("busy in cycles 0..T", run.busyCycles, 0 until p.cycles),
+      differs("outputs", p.prepared.layout.outputs(a => run.memory(a).toLong), expected),
+      differs("compute issues", run.computeIssues, computes.map(_.issue).sorted),
+      differs("memory issues", run.memoryIssues, memoryOps.map(_.issue).sorted),
+      differs("compute commits", run.computeCommits, commits(computes)),
+      differs("memory commits", run.memoryCommits, commits(loads))
+    ).flatten
+  }
 }
