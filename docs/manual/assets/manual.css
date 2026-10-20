@@ -117,7 +117,7 @@ code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Consolas, monosp
   .trace-table th, .trace-table td { padding: .3rem; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .diagram-scroll svg .active-flow { animation: none; }
+  .diagram-scroll svg .active-flow, .is-playing .diagram-scroll svg .active-flow { animation: none; }
   .diagram-scroll svg .diagram-node { transition: none; }
   .diagram-scroll svg [data-token], .diagram-scroll svg [data-cursor] { transition: none !important; }
 }
