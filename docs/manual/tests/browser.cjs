@@ -16,9 +16,9 @@ fs.mkdirSync(qa, { recursive: true });
     await page.route(/^https?:/, route => { external.push(route.request().url()); return route.abort(); });
     await page.goto(pathToFileURL(path.join(out, 'index.html')).href);
     try {
-      await page.waitForFunction(() => document.querySelectorAll('svg.mermaid-js').length === 14);
+      await page.waitForFunction(() => document.querySelectorAll('svg[id^="mermaid-figure-"]').length === 14);
     } catch (error) {
-      console.error({ errors, external, diagrams: await page.locator('svg').count(), pending: await page.locator('pre.mermaid-js').allTextContents() });
+      console.error({ errors, external, diagrams: await page.locator('svg').count(), pending: await page.locator('pre.mermaid-js').count() });
       await page.screenshot({ path: path.join(qa, 'html-render-failure.png'), fullPage: true });
       throw error;
     }
@@ -29,12 +29,12 @@ fs.mkdirSync(qa, { recursive: true });
         await tab.click();
         assert.equal(await tab.getAttribute('aria-selected'), 'true');
         const target = await tab.getAttribute('aria-controls');
-        await page.locator(`#${target} svg.mermaid-js`).first().waitFor({ state: 'visible' });
+        await page.locator(`#${target} svg[id^="mermaid-figure-"]`).first().waitFor({ state: 'visible' });
       }
     }
-    assert.equal(await page.locator('svg.mermaid-js').count(), 14);
+    assert.equal(await page.locator('svg[id^="mermaid-figure-"]').count(), 14);
     assert.equal(await page.getByText(/Syntax error in text/).count(), 0);
-    const animated = await page.locator('svg.mermaid-js path').evaluateAll(paths => paths.some(p => getComputedStyle(p).animationName !== 'none'));
+    const animated = await page.locator('svg[id^="mermaid-figure-"] path').evaluateAll(paths => paths.some(p => getComputedStyle(p).animationName !== 'none'));
     assert.ok(animated, 'native Mermaid edge animation is present');
     // Select the Core and E4 panels for visual review.
     await tabsets.nth(0).locator('[role="tab"]').nth(0).click();

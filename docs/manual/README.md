@@ -4,7 +4,7 @@
 
 | 出力 | 図の扱い |
 |---|---|
-| HTML | ネイティブMermaid。組み込みの矢印アニメーションとQuartoのタブ切替 |
+| HTML | Quarto標準の`mermaid-format: svg`。組み込みの矢印アニメーションとQuartoのタブ切替 |
 | PDF | QuartoがMermaidを静止画像に変換。全タブの内容を順に掲載 |
 | DOCX | QuartoがMermaidを静止画像に変換。全タブの内容を順に掲載 |
 
@@ -14,7 +14,7 @@
 
 - Quarto CLI **1.8.27**（Typstを同梱）
 - 日本語フォント **Noto Sans CJK JP**（Ubuntuでは`fonts-noto-cjk`）
-- CIで検証したブラウザはChromium 141（Playwright 1.56.1同梱）です。PDF・DOCXへの図の変換にChrome / Chromium。Quartoが自動検出します。未導入なら`quarto install chromium`で導入できます。実行ファイルを明示する場合は`QUARTO_CHROMIUM`を指定します。
+- 図の変換にChrome / Chromiumを使います。CIで検証したブラウザはChromium 141（Playwright 1.56.1同梱）です。Quartoが自動検出します。未導入なら`quarto install chromium`で導入できます。実行ファイルを明示する場合は`QUARTO_CHROMIUM`を指定します。
 
 PDFにはQuarto標準のTypst形式を使います。`--to typst`の出力は`.pdf`です。LaTeX環境は不要です。本文と図の生成にPython、R、Jupyter、Node.jsのインストールは不要です。
 
@@ -30,7 +30,7 @@ quarto render docs/manual --to all   # 3形式すべて
 quarto preview docs/manual --to html
 ```
 
-出力先は`docs/manual/_output/`です。HTMLは`embed-resources: true`でQuartoの標準リソースを埋め込みます。PDF・DOCXにも図、段階ごとの説明、値の表を含めます。印刷形式ではアニメーションとタブ操作は静止図と連続する見出しになります。
+出力先は`docs/manual/_output/`です。HTMLは`embed-resources: true`でQuartoの標準リソースを埋め込みます。SVGはQuartoがビルド時に生成するため、非表示タブ内の図も正しい寸法になります。PDF・DOCXにも図、段階ごとの説明、値の表を含めます。印刷形式ではアニメーションとタブ操作は静止図と連続する見出しになります。
 
 ## 構成と根拠
 

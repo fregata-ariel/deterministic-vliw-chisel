@@ -304,7 +304,7 @@ machine descriptionのローダ、意味論、RTLには次の差があります�
 
 ## マニュアルをビルドする
 
-リポジトリルートから、同じ`.qmd`をそのまま3形式へ出力します。Quarto **1.8.27**と日本語フォントNoto Sans CJK JPを使います。PDFはQuarto同梱のTypstを使う標準出力です。PDF・DOCXのMermaid図はQuartoがChromeで画像化します。
+リポジトリルートから、同じ`.qmd`をそのまま3形式へ出力します。Quarto **1.8.27**と日本語フォントNoto Sans CJK JPを使います。PDFはQuarto同梱のTypstを使う標準出力です。Mermaid図はQuartoがChromeで変換します。HTMLは標準の`mermaid-format: svg`でSVGを生成し、PDF・DOCXは静止画像にします。
 
 ```sh
 quarto render docs/manual --to html
