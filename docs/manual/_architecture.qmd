@@ -1,0 +1,51 @@
+::: {.panel-tabset}
+
+## VLIW Core {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-core
+%%| fig-cap: "VLIW Coreのデータ経路"
+%%| fig-alt: "命令メモリからDecoderとRFを経てComputeとMemoryへ発行する。別々の書戻しポートからRFへ戻る。"
+%%| fig-width: 6.4
+flowchart TD
+  accTitle: VLIW Coreのデータ経路
+  accDescr: 命令メモリからDecoderとRFを経てComputeとMemoryへ発行する。別々の書戻しポートからRFへ戻る。
+  I["PC / 命令メモリ"] --> D["Decoder"]
+  D --> R["RF 16 × 32bit・3R/2W"]
+  D -. "即値アドレス" .-> M["MemorySlot"]
+  R c@-->|"rs1・rs2・MAC rs3"| C["ComputeSlot"]
+  R m@-->|"STのソース"| M
+  C -->|"Compute WB"| R
+  M -->|"Memory WB・LD"| R
+  M -->|"LD / ST"| S["Scratchpad"]
+  c@{ animation: slow }
+  m@{ animation: slow }
+```
+
+Coreの命令メモリは組合せ読出しの`Mem`です。fetch・decode・RF読出しは同じ発行サイクル内で行います。ホストの初期化配線と違反検出回路は省略しています。矢印の動きは値の経路を説明するもので、サイクル精度のシミュレーションではありません。
+
+## FixedPipeline {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-fixed
+%%| fig-cap: "スケジュールを回路に固定したFixedPipeline"
+%%| fig-alt: "サイクルカウンタが計画の制御を選び、値レジスタと共通スロットを使う。命令メモリと汎用RFはない。"
+%%| fig-width: 6.4
+flowchart TD
+  accTitle: スケジュールを回路に固定したFixedPipeline
+  accDescr: サイクルカウンタが計画の制御を選び、値レジスタと共通スロットを使う。命令メモリと汎用RFはない。
+  T["サイクルカウンタ"] --> P["FixedPlanの定数制御"]
+  P -. "enable・select" .-> V["値レジスタ / MUX"]
+  P -. "enable・addr" .-> M["MemorySlot"]
+  V c@--> C["ComputeSlot"]
+  V m@--> M
+  C -->|"Compute WB"| V
+  M -->|"Memory WB"| V
+  M --> S["Scratchpad"]
+  c@{ animation: slow }
+  m@{ animation: slow }
+```
+
+`ComputeSlot`と`MemorySlot`はCoreと共通です。現在の`FixedPlan`はADD/SUB/MUL/LD/STを表し、MACを使う計画には対応していません。命令メモリ・Decoder・汎用RFの代わりに、生成時に固定した時刻と値レジスタを使います。
+
+:::

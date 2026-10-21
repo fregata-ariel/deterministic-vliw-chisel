@@ -10,6 +10,8 @@ Phase 0（ISAと実行意味論の確定、machine description、アセンブラ
 
 ## 最初に読む文書
 
+- [動く図で読むアーキテクチャ・ISA・実行マニュアル](docs/manual/README.md)（Quarto標準のMermaid図、日本語。HTML・PDF・DOCX出力）
+- [Issue #78の図解：SIMD・Computeスロット増設の議論](docs/issue-78/README.md)（既決事項・提案・見積り・14の判断項目を整理。Quarto、HTML・PDF・DOCX出力）
 - [設計方針・技術的系譜](docs/DESIGN.md)
 - [ISAとサイクル契約](docs/ISA.md)
 - [開発順序・完了条件](docs/ROADMAP.md)

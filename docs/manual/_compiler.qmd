@@ -1,0 +1,20 @@
+```{mermaid}
+%%| label: fig-compiler
+%%| fig-cap: "命令生成の経路と独立verifier"
+%%| fig-alt: "DSLをloweringしてDAGを作り、listまたはModulo Schedulingを経てレジスタ割当と符号化を行う。独立verifierに通った命令列だけを返す。"
+%%| fig-width: 4.4
+flowchart TD
+  accTitle: 命令生成の経路と独立verifier
+  accDescr: DSLをloweringしてDAGを作り、listまたはModulo Schedulingを経てレジスタ割当と符号化を行う。独立verifierに通った命令列だけを返す。
+  K["Kernel DSL / Loop IR"] --> L["Lowering / 依存グラフ"]
+  L --> S["List scheduling"]
+  L --> M["Modulo Scheduling"]
+  S --> R["物理レジスタ割当"]
+  M --> R
+  R --> C["BundleCodecで符号化"]
+  C --> V{"独立Verifier"}
+  V -->|"合法"| B["Core / 参照モデル"]
+  V -->|"不正"| E["コンパイルエラー"]
+```
+
+配置とスケジュールはソフトウェアが決めます。mvp-1では条件を満たすMUL+ADDをMACへ融合します。最終的な符号化済み命令列を独立verifierで検査し、不正な列は返しません。実行後のtrace照合はコンパイルとは別の検証段階です。

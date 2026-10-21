@@ -1,0 +1,58 @@
+// Test Quarto's standard Mermaid renderer and tabs; nothing here is shipped in the manual.
+const { chromium } = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const out = path.resolve(__dirname, '../_output');
+const qa = path.join(out, 'qa');
+fs.mkdirSync(qa, { recursive: true });
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 960 } });
+    const errors = [], external = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.route(/^https?:/, route => { external.push(route.request().url()); return route.abort(); });
+    await page.goto(pathToFileURL(path.join(out, 'index.html')).href);
+    try {
+      await page.waitForFunction(() => document.querySelectorAll('svg[id^="mermaid-figure-"]').length === 14);
+    } catch (error) {
+      console.error({ errors, external, diagrams: await page.locator('svg').count(), pending: await page.locator('pre.mermaid-js').count() });
+      await page.screenshot({ path: path.join(qa, 'html-render-failure.png'), fullPage: true });
+      throw error;
+    }
+    const tabsets = page.locator('.panel-tabset');
+    assert.equal(await tabsets.count(), 4);
+    let panel = 0;
+    for (const group of await tabsets.all()) {
+      for (const tab of await group.locator('[role="tab"]').all()) {
+        await tab.click();
+        assert.equal(await tab.getAttribute('aria-selected'), 'true');
+        const target = await tab.getAttribute('aria-controls');
+        await page.locator(`#${target} svg[id^="mermaid-figure-"]`).first().waitFor({ state: 'visible' });
+        const brokenLabels = await page.locator(`#${target} svg foreignObject`).evaluateAll(labels => labels.filter(label => label.getBoundingClientRect().height <= 0 || /NaN/.test(label.parentElement.getAttribute('transform'))).length);
+        assert.equal(brokenLabels, 0, 'every label remains visible after selecting a previously hidden tab');
+        await group.screenshot({ path: path.join(qa, `panel-${++panel}.png`) });
+      }
+    }
+    assert.equal(await page.locator('svg[id^="mermaid-figure-"]').count(), 14);
+    assert.equal(await page.getByText(/Syntax error in text/).count(), 0);
+    const animated = await page.locator('svg[id^="mermaid-figure-"] path').evaluateAll(paths => paths.some(p => getComputedStyle(p).animationName !== 'none'));
+    assert.ok(animated, 'native Mermaid edge animation is present');
+    // Select the Core and E4 panels for visual review.
+    await tabsets.nth(0).locator('[role="tab"]').nth(0).click();
+    await tabsets.nth(2).locator('[role="tab"]').nth(2).click();
+    await tabsets.nth(0).screenshot({ path: path.join(qa, 'architecture.png') });
+    await tabsets.nth(2).screenshot({ path: path.join(qa, 'cycle-e4.png') });
+    await page.screenshot({ path: path.join(qa, 'html-desktop.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: path.join(qa, 'html-mobile-page.png'), fullPage: true });
+    const overflow = await page.locator('body *').evaluateAll(els => els.filter(e => e.getBoundingClientRect().right > innerWidth + 1).slice(0, 12).map(e => ({ tag: e.tagName, text: e.textContent.slice(0, 60), width: e.getBoundingClientRect().width })));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), JSON.stringify(overflow));
+    await tabsets.nth(2).screenshot({ path: path.join(qa, 'html-mobile.png') });
+    assert.deepEqual(errors, []);
+    assert.deepEqual(external, [], 'HTML must use embedded Quarto resources');
+    console.log('Native Quarto tabs, 14 Mermaid diagrams, built-in animation and offline rendering passed.');
+  } finally { await browser.close(); }
+})().catch(e => { console.error(e); process.exitCode = 1; });

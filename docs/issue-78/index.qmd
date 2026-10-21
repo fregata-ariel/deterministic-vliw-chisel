@@ -1,0 +1,526 @@
+---
+title: "Issue #78を図で読む"
+subtitle: "SIMD・Computeスロット増設の比較と、判断待ちの契約案"
+description: "Issue #78の本文と全2コメントをもとに、既決事項、方式Wの提案、比較の見積り、14の未決事項を整理する。"
+---
+
+**何を増やすと速くなるのか。その効果を、どう切り分けて測るのか。**
+Issue #78は、MACの次に導入する並列化の方式と契約を決める議論です。
+候補は、32bitの2レーンを持つ **W**、1語に16bitの2レーンを詰める **P16**、
+Computeスロットを2つにする **S2**。詳しい提案はW-fullを推奨していますが、
+**2語のLD/STを認めることが前提**であり、方式だけを独立に決める話ではありません。
+
+::: {.callout-important icon=false}
+## この資料での状態の読み方
+
+2026年10月20日に取得した[Issue本文][issue]と全2コメントを整理しています。
+本文の作業項目は未完了で、[提案コメント][proposal]は14項目のオーナー回答を求めています。
+**W、mvp-2、LD.W/ST.W、ADR-0020/0021は、この議論では提案・作成予定です。**
+採用済みの仕様や実装としては扱いません。数値の比較も、明記した既存記録を除き、
+提案コメントに記録された見積りです。
+:::
+
+3方式の違いは第2節、数値の条件は第3節、14の判断項目は第5節にまとめています。
+
+::: {.table-responsive}
+
+| 読みたいこと | 場所 |
+|----------------------------------------------------------------------|--------------------------------------------------|
+| 決まっていることと、判断待ちのこと | [議論の現在地](#sec-status) |
+| W・P16・S2の違い | [3つの方式](#sec-options) |
+| 推奨を支える数値と条件 | [見積りの比較](#sec-estimates) |
+| レジスタ・メモリ・ポートの契約 | [Wの契約案](#sec-contract) |
+| 実装・比較の進め方と残る質問 | [実装への引継ぎ](#sec-handoff) |
+
+:::
+
+# 議論の現在地 {#sec-status}
+
+## 経緯を3段階で読む
+
+::: {.table-responsive}
+
+| 記録 | 位置づけ | 内容 |
+|--------------------|------------------------------|----------------------------------------------------------------------|
+| [Issue本文][issue] | 問いの設定 | MAC単独の評価後に、SIMDとComputeスロット増設の方式・順・変更範囲を決める |
+| [コメント1][placement] | 作業順の整理 | #71の完了レビューを受け、M4の最初、DMA実装の前に置く。方式と契約は#78、実装と比較は#110 |
+| [コメント2][proposal] | 判断を求める提案 | W-fullを既定、W-regを比較構成とする案。P16・S2は見積りを併記。14問の回答後にADR・仕様へ反映する流れ |
+
+:::
+
+既存の[ADR-0012][adr12]は、MAC・SIMD・スロット増設を同時に導入せず、効果を分けて測る方針です。
+[Phase 3の引継ぎ][phase3]と[M4追跡Issue][m4]は、DMAより前に#78・#110を置いています。
+この順序の決定と、どの方式を採用するかの判断は分けて読みます。
+
+```{mermaid}
+%%| label: fig-issue-map
+%%| fig-cap: "既決の作業順と、これから行う判断・実装・評価"
+%%| fig-alt: "MAC評価と戦略固定の後にIssue78で方式を判断し、Issue110で実装比較する。DMA契約と合成評価は並行して検討できる。"
+%%| fig-width: 4.8
+flowchart TD
+  accTitle: Issue78の位置づけ
+  accDescr: 既存のMAC評価を基準に方式を判断し、実装比較と後続のDMAへ引き継ぐ。合成評価で暫定判断を見直す。
+  M["MAC評価 / #77・#79"] --> D["方式・契約 / #78"]
+  D --> I["実装・比較 / #110"]
+  I --> X["DMA実装 / #112以降"]
+  C["DMA契約 / #111"] --> X
+  D -. "並行して検討" .-> C
+  S["合成評価 / #57"] -. "費用で見直す" .-> D
+```
+
+## なぜスロットの数だけでは足りないか
+
+MAC導入後も、既存記録では`fir4x8(i)`のIIは4、`matmul3(i)`・`matmul3(m)`は9です。
+Computeスロットだけでなく、Computeの書戻しポート、3本目の読出しポート、
+`matmul3(m)`ではMAC演算器も同じ下限を作ります。[MACの記録][mac]・[コメント1][placement]
+
+::: {.table-responsive}
+
+| 資源を増やす仮定 | fir4x8(i) | matmul3(i) | matmul3(m) |
+|------------------------------------------------------------------|----------------:|----------------:|----------------:|
+| スロットだけを2つにする（S2a） | 4 | 9 | 9 |
+| スロット・必要なポート・演算器を増やす（S2） | 2 | 6 | 6 |
+
+:::
+
+この表は**ResMIIの見積り**です。後者でもMemoryの操作数が下限になり、
+`saxpy8(i)`は3のままです。「Computeを増やせば2倍」という推論は成り立ちません。
+
+# 3つの方式 {#sec-options}
+
+HTMLではタブで方式を比較できます。PDF・DOCXには3方式を順に掲載します。
+以下の図は**提案されている構成の概念図**です。[提案・方式の比較][proposal]
+
+::: {.panel-tabset}
+
+## W：2本のi32 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-option-w
+%%| fig-cap: "Wは2本の32bitレジスタを、1つの命令で独立に計算する"
+%%| fig-alt: "r2を両レーンへブロードキャストし、r6とr8からr4、r7とr9からr5を計算する。レーン間の桁上げはない。"
+%%| fig-width: 5.8
+flowchart TD
+  accTitle: Wの2つのi32レーン
+  accDescr: VMACのrs1をブロードキャストし、2組の32bit計算を独立に実行する契約案。
+  A["r2 / broadcast"] --> L["r6 × r2 + r8"]
+  A --> R["r7 × r2 + r9"]
+  L --> O["lane 0 → r4"]
+  R --> P["lane 1 → r5"]
+```
+
+例えば`vmac r4:r5, r2, r6:r7, r8:r9`。`r2=3`、`r6=7`、`r7=11`、
+`r8=1`、`r9=2`なら、結果は`r4=22`、`r5=35`です。
+各レーンはmod 2^32で計算し、互いに桁上げしません。
+
+組は偶数番号pとp+1。RFは16×32bit、bundleは64bitを保つ案です。
+RFは偶奇の2 bankに分け、bankごとに3R/2W、32bit換算で6R/4Wとします。
+レジスタの記憶量が同じでも、ポートとデータ配線の費用は変わります。
+レジスタの組・整列・割当ての断片化という制約がコンパイラに加わります。
+上の値は意味を説明する手計算例で、実装の実行結果ではありません。
+
+## P16：1語に2要素 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-option-p16
+%%| fig-cap: "P16は1本の32bitレジスタ内に、16bit要素を2つ詰める"
+%%| fig-alt: "32bitのpacked入力を16bitの2レーンに分け、各レーンmod2の16乗で演算し、32bitのpacked結果に戻す。"
+%%| fig-width: 5.4
+flowchart TD
+  accTitle: P16のpackedレーン
+  accDescr: 1語内の上下16bitを独立に計算する。Wの2本のi32とは算術も配置も異なる。
+  A["1語 = 32bit"] --> L["下位16bit / lane 0"]
+  A --> H["上位16bit / lane 1"]
+  L --> C["各レーン mod 2^16"]
+  H --> C
+  C --> O["1語のpacked結果"]
+```
+
+RF・bundle・メモリ系を保て、RTLの費用が小さいと見積もられています。
+一方、結果はi16の算術で、現在のi32ベンチマークとは異なります。
+比較には同じ算術のスカラー基準が必要です。packedとunpackedで配置も変わります。
+
+`matmul3`では行の詰め物や要素を組み替えるPK演算も問題になります。
+提案はP16を将来のi16実験として残し、P8（4×8bit）を対象外としています。
+
+## S2：Computeを2つ {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-option-s2
+%%| fig-cap: "S2は独立したCompute操作を同じbundleで発行する"
+%%| fig-alt: "幅を広げたbundleからCompute0、Compute1、Memoryへ発行し、増設したRFのポートへ書き戻す。Memoryスロットは1つ。"
+%%| fig-width: 5.8
+flowchart TD
+  accTitle: S2の2つのComputeスロット
+  accDescr: スロットだけでなく書戻しと読出しのポート、演算器も増やす比較案。
+  B["bundle / 96か128bit"] --> A["Compute 0"]
+  B --> C["Compute 1"]
+  B --> M["Memory × 1"]
+  A --> R["RF / 7R・3W"]
+  C --> R
+  M --> R
+```
+
+i32の算術とレジスタ単位の割当てを保ちます。
+その代わり、bundle幅、RFのmux、スケジューラの容量モデルの変更が大きい案です。
+Memoryの下限は下がりません。S2に2語LD/STを足す組合せは別の比較になり、
+提案中のS2単独の見積りと混ぜません。
+
+:::
+
+::: {.table-responsive}
+
+| 観点 | W | P16 | S2 |
+|------------------|----------------------------------|----------------------------------|----------------------------------|
+| 演算の単位 | 2本のi32 | 1語内の2×i16 | 独立したi32操作2つ |
+| 算術の基準 | 既存mvp-1 | 同じi16基準を新設 | 既存mvp-1 |
+| 主な制約・費用 | 整列した組、2個目の乗算器、RFの配線 | packed配置、PK、別の算術 | bundle拡幅、ポート・演算器増設 |
+| 提案での扱い | W-fullを既定、W-regを対照に実装 | 見積りを併記 | 見積りを併記 |
+
+:::
+
+Wは、過去の#69で避けた種類の「コンパイラに増える制約」を伴います。
+提案はこの不利益も認めた上で、同じi32の基準を使えることと、費用・コードへの波及を理由に推奨しています。
+**Wがあらゆる評価軸で優れる、という結論ではありません。** [提案・方式の比較][proposal]
+
+# 見積りの比較 {#sec-estimates}
+
+## list schedulingのcycles
+
+次の数値は、提案コメントの**16レジスタ・rematerializationなし・20試行**の見積りです。
+方式ごとに成立した試行のcycles最小を並べています。
+戦略を固定した同一行の測定とは区別します。P16は算術が違うため、
+棒の高さだけでi32の性能順位を確定できません。[提案・見積り][proposal]
+
+::: {.panel-tabset}
+
+## saxpy8 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycles-saxpy
+%%| fig-cap: "saxpy8のcycles見積り。小さいほど少ないサイクルで終了する"
+%%| fig-alt: "M1は27、W-regは27、W-fullは15、S2は26、P16は15。P16は別の算術。"
+%%| fig-width: 5.8
+xychart-beta
+  accTitle: saxpy8のcycles見積り
+  accDescr: M1 27、WR 27、WF 15、S2 26、P16 15。実時間の速度比ではない。
+  x-axis [M1, WR, WF, S2, P16]
+  y-axis "cycles / estimate" 0 --> 45
+  bar [27, 27, 15, 26, 15]
+```
+
+Memoryが律速です。Computeだけを広げるW-regやS2では、ほとんど減りません。
+W-fullでは2語LD/STがMemoryの下限を26から14へ下げると見積もられています。
+
+## fir4x8 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycles-fir
+%%| fig-cap: "fir4x8のcycles見積り。W-fullでも下限19から離れている"
+%%| fig-alt: "M1は40、W-regは35、W-fullは26、S2は28、P16は29。"
+%%| fig-width: 5.8
+xychart-beta
+  accTitle: fir4x8のcycles見積り
+  accDescr: M1 40、WR 35、WF 26、S2 28、P16 29。成立した試行の最小値。
+  x-axis [M1, WR, WF, S2, P16]
+  y-axis "cycles / estimate" 0 --> 45
+  bar [40, 35, 26, 28, 29]
+```
+
+W-fullの選択スケジュールはレジスタ16本に達します。
+レジスタの圧力と整列した組の不足が、資源の下限からの差を作る要因です。
+提案の割当て見積りは最小番号方式で、推奨するbest fitはまだ反映していません。
+
+## matmul3 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycles-matmul
+%%| fig-cap: "matmul3のcycles見積り。W-full・S2・P16は同じ28"
+%%| fig-alt: "M1は39、W-regは32、W-fullは28、S2は28、P16は28。P16は行の詰め物を含む。"
+%%| fig-width: 5.8
+xychart-beta
+  accTitle: matmul3のcycles見積り
+  accDescr: M1 39、WR 32、WF 28、S2 28、P16 28。P16は別算術と詰め物を含む。
+  x-axis [M1, WR, WF, S2, P16]
+  y-axis "cycles / estimate" 0 --> 45
+  bar [39, 32, 28, 28, 28]
+```
+
+S2はMemoryの下限28に達します。W-fullの下限は22ですが、選ばれた命令列は28です。
+Wは3×3のうち3列目をスカラーで扱うため、仕事の1/3がスカラーに残ります。
+P16の28には行の詰め物が含まれます。
+
+:::
+
+::: {.table-responsive}
+
+| 構成 | 意味 | saxpy8 | fir4x8 | matmul3 |
+|----------|--------------------------------------------------------------|--------------:|--------------:|--------------:|
+| M1 | mvp-1の基準 | 27 | 40 | 39 |
+| WR | W-reg、2語LD/STなし | 27 | 35 | 32 |
+| WF | W-full、非整列の2語LD/ST | 15 | 26 | 28 |
+| S2 | Compute・ポート・演算器を増設 | 26 | 28 | 28 |
+| P16 | 2×i16 packed、別の算術 | 15 | 29 | 28 |
+| WFa | W-fullの2語アクセスを整列に限定 | 19 | 30 | 30 |
+| WF4 | W-full、RFのbankごとに読出し4本 | 14 | 26 | 24 |
+
+:::
+
+**W-fullの利得は、2語LD/STを含めた利得です。**
+M1→WRで演算の幅、WR→WFでメモリの幅、M1→WFで両方の効果を調べる、という比較を提案しています。
+WRとWFは`max_words_per_access`と、それで決まるLD.W/ST.Wの有無、machine_idが違う構成です。
+
+## ループは「元の単位あたりのMII」で比べる
+
+::: {.table-responsive}
+
+| 元の単位 | M1 | S2 | WR | WF | P16 |
+|----------------------------------------|--------------:|--------------:|--------------:|--------------:|--------------:|
+| saxpy8(i)：要素 | 3 | 3 | 3 | 1.5 | 1.5 |
+| fir4x8(i)：出力 | 4 | 2 | 3 | 2 | 2.5 |
+| matmul3(i)：行 | 9 | 6 | 7 | 6 | 6 |
+| matmul3(m)：段 | 9 | 6 | 6 | 6 | 6 |
+
+:::
+
+これも下限を数えた**見積り**で、#110で得たIIや総cyclesではありません。
+1.5は元の要素あたりに換算した値です。整数cycleの発行間隔を持つ2要素の反復を、
+元の1要素へ正規化できるので、小数になります。
+
+P16の`fir4x8(i)`の2.5には、PKの結果を反復間で渡す仮定があります。
+現在のLoopGraphの制約で再計算すると3です。P16の`matmul3(m)`にも、
+ブロードキャストするレーンが段ごとに変わり、1つのループ本体では表せない注意があります。
+表の数値を、そのまま現在のコンパイラで達成できるIIとは読みません。[提案・ループの注][proposal]
+
+## 見積りを信頼できる範囲
+
+提案者は、使い捨ての独立実装A・Bについて、既存記録のrematerializationなしの190/190セルで校正一致、
+新構成の392セル中381セルで一致したと報告しています。
+残る11セルはスカラーのRF bankの数え方に由来し、保守的な読み方Fを採用しています。
+今回の資料はその報告を整理したもので、使い捨て実装の再実行結果ではありません。
+
+未反映のrematerialization、best fit、bankを見た割当てによって値は変わり得ます。
+実測はcyclesを#110、面積・Fmaxを#57で行う計画です。
+**cycle数の比は実時間の速度比ではありません。**
+
+# Wの契約案 {#sec-contract}
+
+## ISAと版の案
+
+::: {.table-responsive}
+
+| 項目 | 提案内容 |
+|------------------------------|------------------------------------------------------------------------------------------|
+| 版 | mvp-2、schema 3。#110 Phase A中はproposed、その後frozen |
+| 演算 | mvp-1にVADD・VSUB・VMUL・VMACを追加。能力キー2ならLD.W・ST.Wも追加 |
+| 既定opcode | Computeは5・6・7・8、Memoryは3・4 |
+| レジスタの組 | 偶数pとp+1。各レーンi32、RF 16×32bit、bundle 64bit |
+| ブロードキャスト | bit 11。VMUL・VMACのrs1だけ。スカラー番号は偶数・奇数とも可 |
+| 既定の遅延 | VADD/VSUB 1、VMUL/VMAC/LD.W 2、ST.W 1。IIは各1 |
+| 互換性の狙い | スカラー条件が同じmvp-2で、mvp-1の合法列の操作・合法性・タイミングを保つ |
+
+:::
+
+これは契約の**案**です。既定opcodeやlatencyの値は、採用後のmachine descriptionで管理する提案です。
+凍結済みのmvp-0・mvp-1を編集せず、新しい版を重ねます。[提案・契約の案][proposal]
+
+## 2語アクセスは「2つのMemory操作」ではない
+
+LD.W/ST.Wは連続するa・a+1を、**1つのMemory操作**で扱う案です。
+Scratchpadのbankが2以上なら2語は別bankに入り、bankごとに1アクセスです。
+RFのbankはレジスタ番号の偶奇、Scratchpadのbankは語アドレスの剰余であり、別の分割です。
+
+```{mermaid}
+%%| label: fig-wide-load
+%%| fig-cap: "奇数アドレス17のLD.W。Scratchpadのbank順とRFのレーン順を合わせる"
+%%| fig-alt: "アドレス17はbank1のrow8からr10へ、18はbank0のrow9からr11へ入る。2bank、256語毎bankの例。"
+%%| fig-width: 5.8
+flowchart TD
+  accTitle: 非整列LD.Wの2語の経路
+  accDescr: 2bankのScratchpadでは、奇数の開始番地の次の語でbank0の行が1つ進む。レーンの入れ替えが必要。
+  A["a=17"] --> B["bank 1 / row 8"]
+  N["a+1=18"] --> C["bank 0 / row 9"]
+  B --> L["lane 0 → r10"]
+  C --> H["lane 1 → r11"]
+```
+
+例は2 bank × 256語です。`ld.w r10:r11, [17]`の案では、bankごとの行アドレスとレーンの入れ替えが必要です。
+512語の構成で[510]は510・511を読み合法ですが、[511]は2語目の512が範囲外でL7です。
+L8の定義済み値とL10の書込み区間も、両方の語を調べます。
+
+非整列を許すと既存の`fixedOrder`配置を保てます。一方、M4が範囲外にしたMemoryスロット増設との区別や、
+DESIGN.mdの帯域の記述との整合はオーナー判断です。
+DMAには、使用中のサイクルは両bankを占めることと、Memory操作数が減って空きサイクルが増えることの両面があるため、
+#111で両方を数える提案です。
+
+## L5は操作、L11は欄、L3/L4/L8はレジスタ
+
+::: {.table-responsive}
+
+| 規則 | 提案する数え方 | 注意点 |
+|------------------------------|------------------------------------|------------------------------------------------------|
+| L3・L4・RFのL8 | 組を2本のレジスタへ展開 | lane 1の読出しや、組とスカラーの書込み重複も検査 |
+| L5 | commitする操作の数 | 組のcommitは同じポートを1回使う。2本のWriteを2操作と誤認しない |
+| L7・MemoryのL8・L10 | 2語のアクセスへ展開 | 最初の語だけの検査では不十分 |
+| L11：F | ソース欄の数 | 組・ブロードキャストも1欄。同じ番号でも欄が違えば別に数える |
+
+:::
+
+L11にはF・S・Cの3案があります。合法集合はF ⊂ S ⊂ Cです。
+提案は**revision 1ではF**、RTLのデータ経路はSの固定したbank別ポート構造とするものです。
+
+```{mermaid}
+%%| label: fig-read-port-rules
+%%| fig-cap: "L11の3案。合法集合を広げるほど、許すbundleが増える"
+%%| fig-alt: "Fは欄数、Sはbankとポートの競合、Cはbankごとの読出し数を検査する。Fが提案の初期規則で、Cにはポート割当てのmuxが必要。"
+%%| fig-width: 5.2
+flowchart TD
+  accTitle: L11のF・S・C
+  accDescr: FはSの部分集合、SはCの部分集合。FからSへの緩和は同じデータ経路で可能だが、Cには割当てが必要。
+  F["F / 欄数 ≤ rp"] -->|"F ⊂ S"| S["S / bank・port"]
+  S -->|"S ⊂ C"| C["C / bankの読出し数"]
+  F -.-> I["初期規則の推奨"]
+  S -.-> H["Fと同じデータ経路"]
+  C -.-> M["割当てmuxが必要"]
+```
+
+読出し3本で違いが出る例は次のとおりです。ほかの規則の違反はない前提です。
+
+::: {.table-responsive}
+
+| bundleの例 | F | S | C |
+|----------------------------------------------------|----------------|----------------------------|------------------------|
+| `mac r10,r0,r2,r4` と `st [0],r3` | 不正：4欄 | 合法：別bankのport 2 | 合法 |
+| broadcast VMACのrs3にr8:r9、STにr1 | 不正：4欄 | 不正：bank 1のport 2が競合 | 合法：各bankで3 |
+
+:::
+
+2行目のComputeは`vmac r4:r5, r2, r6:r7, r8:r9`です。
+FならスカラーのMAC+STの合法性をmvp-1から緩めず、bankを見ないコンパイラの判定も保てます。
+組の片方へのスカラー書込みは、レジスタ単位の規則を満たせば合法とする案です。[提案・L5/L11][proposal]
+
+# 実装への引継ぎ {#sec-handoff}
+
+## 推奨を変える依存関係
+
+```{mermaid}
+%%| label: fig-decision-dependency
+%%| fig-cap: "質問1の方式選択は、質問2のMemory契約に依存する。いずれも判断待ち"
+%%| fig-alt: "非整列の2語LD/STを認めるならW-fullを推奨。整列だけならWFaの見積り、認めないか後送りならW-regとなり提案の推奨はP16へ変わる。"
+%%| fig-width: 5.6
+flowchart TD
+  accTitle: 2語LD/STと方式選択の依存
+  accDescr: 提案の推奨がどの仮定に依存するかを示す。採用が決まった手順ではない。
+  Q["Q2 / 2語LD・ST?"] -->|"非整列も許可"| W["W-fullを推奨"]
+  Q -->|"整列だけ"| A["WFaの見積り"]
+  Q -->|"なし・後送り"| R["W-regのみ"]
+  R --> P["提案の推奨はP16へ"]
+```
+
+W-fullの15 / 26 / 28だけを見て方式を選ぶと、Memory契約を暗黙に決めてしまいます。
+質問2で2語LD/STを入れない場合、提案コメント自身が推奨をP16へ変えています。
+WFa（整列だけ）は19 / 30 / 30の見積りです。採用の判断はこの資料では行いません。
+
+## 層ごとに何を変える案か
+
+::: {.table-responsive}
+
+| 層 | 提案する変更 | 検証・記録の要点 |
+|------------------------|------------------------------------------------|------------------------------------------------|
+| ISA・machine | mvp-2/schema 3、組、broadcast、能力キー、新opcode | mvp-1の列の互換性、未知opcode、奇数の組、予約bit |
+| verifier・参照モデル | 組と2語への展開、操作id・欄idの区別 | L5を操作、L11を欄で数え、独立実装を保つ |
+| RTL | RFのbank分け、レーン1、64bitの経路、行+1、入替え | 対応外の構成をCoreParamsで拒否。新演算のII・最大遅延の検査も更新 |
+| コンパイラ | Fusion後の固定SLP、ループのベクトル化、組の割当て | スカラー1・組2の重み、best fit、TooManyLiveとNoAlignedPairを区別 |
+| 記録 | metrics/3、trace/1に同ポート内のレジスタ順を明記 | 同じ行で比較し、操作数・語数・ポート・失敗理由も残す |
+
+:::
+
+コンパイラの順序は、Lowering → DAG → 既存のFusion → 新しいPack → scheduling →
+必要時のrematerialization → 組を考えた割当て → コード生成 → 独立verifier、という案です。
+ループでは融合の判断を先に保ち、偶数反復・状態なし等の条件を満たす場合に2倍へベクトル化します。
+それ以外は本体を詰め、元の単位あたりのMIIを増やさない場合に採る案です。
+`dot8`・`product8`は結合順を変えないため、ベクトル化しません。
+
+## 14の判断項目を見失わないための索引
+
+次は**提案コメントの推奨の要約**です。回答済み一覧ではありません。
+選択肢の全文・理由・例外は[元の14問][proposal]を参照してください。
+
+::: {.table-responsive}
+
+| 問 | 論点 | コメントで推奨される案 |
+|--------|----------------------------|------------------------------------------------------------------------------------|
+| 1 | 方式と比較 | Wを実装、P16/S2は見積り併記。質問2が前提 |
+| 2 | 2語LD/ST | 能力キー1/2で切替え、非整列を許す。M4の範囲との整合を確認 |
+| 3 | 版・凍結 | mvp-2/schema 3、Phase Aはproposed、その後frozen |
+| 4 | RF・符号化 | 偶数の組、bank別ポート、VMUL/VMACのrs1だけbroadcast |
+| 5 | L5 | 操作ごとにcommitを数える |
+| 6 | L11 | 初期規則F、RTLの構造S。S/Cへの緩和は後に残す |
+| 7 | 部分更新 | 組の片方へのスカラー書込みを合法にする |
+| 8 | 実装・測定範囲 | WR/WFのrp3をRTLまで、両schedulingで測る。rp4 RTLは#57、固定パイプラインは対象外 |
+| 9 | 記録形式 | metrics/3、trace/1を維持し順序の文を追加 |
+| 10 | 詰め込み・ループ | 固定SLP。ループは条件付き2倍化か本体の詰め込み、MIIで採否 |
+| 11 | レジスタ割当て | 重み、整列した組、スカラーbest fit、NoAlignedPairの記録 |
+| 12 | スケジューラ | Compute優先、欄数で読出しを検査、bankを見た最適化は入れない |
+| 13 | ベンチマーク | 既存3カーネルと6ループを維持。大きさを新設しない |
+| 14 | 判断の扱い | cyclesで暫定判断し、#57の面積・Fmaxで見直す |
+
+:::
+
+## 採用後に残す証拠
+
+提案は、回答後にADR-0020（契約）とADR-0021（コンパイラ）へ記録し、#110へ渡す流れです。
+#110ではWR・WFの機能、cycles、RTLと参照モデルのtrace、入力値を変えたときの時間の不変性を検証します。
+rp4はverifier・参照モデルまで、RTLの合成評価は#57で扱う案です。
+
+評価では、同じ戦略の行、資源ごとの下限、レジスタの失敗、L11で待ったST/ST.Wを残します。
+境界値、両bankの非整列アクセス、lane 1のハザード、スカラーとの互換性を手計算の期待値で確かめ、
+21個のmutantを追加する提案もあります。提案の見積りと、そこで初めて得る測定結果を並べます。
+
+残る主要なリスクは、8組しかないRFの断片化、W-regの集めの難しさ、2個目の乗算器・RF配線の費用、
+DMAのbank占有との整合、命令領域への影響です。#57で費用が分かればP16を含めて順位を見直し得ます。
+
+# 出典と再生成
+
+本文とコメントの取得日：**2026-10-20（日本時間）**。
+出典のURL・コメントID・本文ハッシュと、転記した数値を[source-manifest.json](source-manifest.json)に記録しています。
+議論が更新された場合は、最新のIssueと本資料の取得時点を照合してください。
+
+::: {.table-responsive}
+
+| 出典 | この資料での用途 |
+|----------------------------------------|--------------------------------------------------------------------------------|
+| [Issue #78本文][issue] | 目的・前提・未完了項目 |
+| [コメント1][placement] | M4の順序、スロットだけ増やす場合の下限 |
+| [コメント2：提案と14問][proposal] | 方式比較、見積り、契約案、実装範囲、リスク |
+| [PHASE3.md][phase3]・[MAC.md][mac] | 完了した評価と次段への引継ぎ |
+| [ADR-0012][adr12]・[ADR-0018][adr18]・[ADR-0019][adr19] | 変更を分ける方針、mvp-1の既存契約・融合 |
+| [#109][m4]・[#110][implementation]・[#111][dma]・[#57][synthesis] | M4の範囲、実装比較、DMA契約、合成評価への引継ぎ |
+
+:::
+
+リポジトリ文書のリンクは、前回のマニュアルと同じ基準commit `787ae6d`へ固定しています。
+この資料のためにISAやADRの採否を変更してはいません。
+
+```sh
+quarto render docs/issue-78 --to html
+quarto render docs/issue-78 --to typst  # index.pdf
+quarto render docs/issue-78 --to docx
+quarto render docs/issue-78 --to all
+```
+
+HTMLでは標準タブで候補・カーネルを切り替えます。PDF・DOCXでは全タブを順に掲載します。
+環境と検証方法は[README](https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/d3f6c91996fae274612b37b2e46f12c56f1c799b/docs/issue-78/README.md)を参照してください。
+
+[issue]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78
+[placement]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78#issuecomment-6228989537
+[proposal]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78#issuecomment-6231266982
+[phase3]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/PHASE3.md
+[mac]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/benchmarks/MAC.md
+[adr12]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/DECISIONS.md#adr-0012-mac-を先に導入して評価しsimd-は後に分ける
+[adr18]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/DECISIONS.md#adr-0018-mac-は-isa-mvp-1-で入れ読出しポートは3本のまま規則-l11-で数える
+[adr19]: https://github.com/fregata-ariel/deterministic-vliw-chisel/blob/787ae6d53953bf87202640dcbc181a88156a12a7/docs/DECISIONS.md#adr-0019-読む側が1つの-mul-とそれを読む-add-を-mac-に融合しループでは-mii-が上がるときは融合しない
+[m4]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/109
+[implementation]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/110
+[dma]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/111
+[synthesis]: https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/57

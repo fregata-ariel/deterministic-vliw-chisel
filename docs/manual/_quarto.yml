@@ -1,0 +1,30 @@
+project:
+  type: default
+  output-dir: _output
+  render:
+    - index.qmd
+
+lang: ja
+toc: true
+toc-depth: 2
+number-sections: true
+fig-align: center
+format:
+  html:
+    theme: cosmo
+    embed-resources: true
+    code-fold: true
+    css: svg.css
+    execute:
+      mermaid-format: svg
+    mermaid:
+      theme: neutral
+  typst:
+    mainfont: Noto Sans CJK JP
+    fontsize: 10.5pt
+    papersize: us-letter
+    margin:
+      x: 20mm
+      y: 20mm
+  docx:
+    toc: false

@@ -1,0 +1,108 @@
+{
+  "retrieved_on_jst": "2026-10-20",
+  "repository": "fregata-ariel/deterministic-vliw-chisel",
+  "repository_snapshot": "787ae6d53953bf87202640dcbc181a88156a12a7",
+  "issue": {
+    "number": 78,
+    "url": "https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78",
+    "state": "open",
+    "updated_at": "2026-10-17T17:10:32Z",
+    "comment_count": 2,
+    "body_sha256": "8ff030af358253994d220a25aeadbe40d5f486ea4fa4c73989915a8756a9769b"
+  },
+  "comments": [
+    {
+      "id": 6228989537,
+      "url": "https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78#issuecomment-6228989537",
+      "author": "fregata-ariel",
+      "body_sha256": "70cdf99be88ebc0fde84f57cd960848d85649f274d182e1412dafe21cbc54cb6"
+    },
+    {
+      "id": 6231266982,
+      "url": "https://github.com/fregata-ariel/deterministic-vliw-chisel/issues/78#issuecomment-6231266982",
+      "author": "fregata-ariel",
+      "body_sha256": "6bb73cf8aab21535c0d3c800fcf94e26056e153edcaf4b9f1e967b3286243477"
+    }
+  ],
+  "list_cycles": {
+    "M1": [
+      27,
+      40,
+      39
+    ],
+    "S2": [
+      26,
+      28,
+      28
+    ],
+    "WR": [
+      27,
+      35,
+      32
+    ],
+    "WF": [
+      15,
+      26,
+      28
+    ],
+    "WFa": [
+      19,
+      30,
+      30
+    ],
+    "WF4": [
+      14,
+      26,
+      24
+    ],
+    "P16": [
+      15,
+      29,
+      28
+    ]
+  },
+  "loop_mii": {
+    "saxpy8（i）（要素）": {
+      "M1": 3,
+      "S2": 3,
+      "S2a": 3,
+      "WR": 3,
+      "WF": 1.5,
+      "WFa": 2,
+      "WF4": 1.5,
+      "P16": 1.5
+    },
+    "fir4x8（i）（出力）": {
+      "M1": 4,
+      "S2": 2,
+      "S2a": 4,
+      "WR": 3,
+      "WF": 2,
+      "WFa": 2.5,
+      "WF4": 2,
+      "P16": 2.5
+    },
+    "matmul3（i）（行）": {
+      "M1": 9,
+      "S2": 6,
+      "S2a": 9,
+      "WR": 7,
+      "WF": 6,
+      "WFa": 7,
+      "WF4": 6,
+      "P16": 6
+    },
+    "matmul3（m）（段）": {
+      "M1": 9,
+      "S2": 6,
+      "S2a": 9,
+      "WR": 6,
+      "WF": 6,
+      "WFa": 6,
+      "WF4": 6,
+      "P16": 6
+    }
+  },
+  "numeric_source_comment_id": 6231266982,
+  "numeric_status": "estimates reported in the proposal; not measured results of Issue #110"
+}
