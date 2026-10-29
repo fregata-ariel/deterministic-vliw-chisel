@@ -275,7 +275,7 @@ class VerifierSpec extends AnyFunSuite {
     assert(r("mac r10, r0, r2, r4 | st [0], r3\nnop\nhalt") == Set("L11"))
     assert(r("vmul r4:r5, r1, r2:r3 | st.w [0], r6:r7\nnop\nhalt") == Set.empty)
     assert(r("nop | ld.w r2:r3, [510]\nnop\nhalt") == Set.empty)
-    // Word 512 is outside the scratchpad, and no input or store can give it a value (L8).
+    // Word 512 is outside the scratchpad: no input can name it, and no store here writes it (L8).
     assert(r("nop | ld.w r2:r3, [511]\nnop\nhalt") == Set("L7", "L8"))
     val m8 = Verifier.Declaration((0 until 16).toSet, Set(8))
     assert(findingsOn(mvp2, "nop | ld.w r2:r3, [8]\nnop\nhalt", m8).map(_.rule.id) == Vector("L8"))
@@ -363,6 +363,12 @@ class VerifierSpec extends AnyFunSuite {
     val l7 = findingsOn(mvp2, "nop | st.w [511], r2:r3\nhalt")
     assert(
       l7.map(_.message) == Vector("`st.w [511]`: address 512 is outside the scratchpad (0..511)")
+    )
+    // L8 does not tell stores by range: an earlier ST.W [511] (itself L7) gives word 512 a value,
+    // so the later LD.W [511] is L7 and not L8 (docs/VERIFIER.md, L8).
+    assert(
+      findingsOn(mvp2, "nop | st.w [511], r2:r3\nnop | ld.w r4:r5, [511]\nnop\nhalt")
+        .map(f => (f.rule.id, f.cycle)) == Vector(("L7", Some(0)), ("L7", Some(1)))
     )
   }
 

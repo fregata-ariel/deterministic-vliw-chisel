@@ -1,7 +1,7 @@
 {
   "format": "vliw-testcase/1",
   "name": "w_vii_spaced",
-  "description": "新しい6つの演算の II が2の構成。各演算をちょうど II 空けて発行する。II は演算ごとなので、VADD の直後に VSUB を発行できる。ST.W のレイテンシーは2で、その語は s+2 から読める",
+  "description": "新しい6つの演算の II が2の構成。各演算をちょうど II 空けて発行する。II は演算ごとなので、VADD の直後に VSUB を発行できる。ST.W のレイテンシーは2で、その語はちょうど s+2 から読める",
   "machine": "tests/machines/mvp2_vii.json",
   "program": [
     "@0: vadd r4:r5, r2:r3, r2:r3 | ld.w r6:r7, [0]",
@@ -9,10 +9,11 @@
     "@2: vadd r10:r11, r4:r5, r2:r3 | ld.w r12:r13, [2]",
     "@3: nop | st.w [4], r6:r7    ; [4] and [5] visible from 5",
     "@4: nop",
-    "@5: nop | st.w [6], r12:r13",
+    "@5: nop | st.w [6], r12:r13    ; [6] and [7] visible from 7",
     "@6: nop | ld r14, [4]",
-    "@7: nop",
-    "@8: halt"
+    "@7: nop | ld r15, [6]          ; s+2 of the ST.W at 5",
+    "@8: nop",
+    "@9: halt"
   ],
   "inputs": {
     "registers": {
@@ -28,7 +29,7 @@
   },
   "expect": {
     "verdict": "legal",
-    "cycles": 9,
+    "cycles": 10,
     "registers": {
       "r4": 2,
       "r5": 4,
@@ -40,7 +41,8 @@
       "r11": 6,
       "r12": 12,
       "r13": 13,
-      "r14": 10
+      "r14": 10,
+      "r15": 12
     },
     "memory": {
       "4": 10,

@@ -34,7 +34,7 @@
 | [`w_partial_pair_update`](w_partial_pair_update.json) | 合法 | 組の部分更新: VMUL の組の r5 だけを、区間が重ならない ADD が書き直す。スカラーの LD 2つで集めた組を VADD が読む | 6 cycles、machine-mvp2.json |
 | [`w_rp4_vmac_store`](w_rp4_vmac_store.json) | 合法 | 読出しポートが4本の構成では、VMAC と ST・ST.W を同じ bundle に置ける（欄4） | 4 cycles、mvp2_rp4.json |
 | [`w_vii_ldw_same_bank`](w_vii_ldw_same_bank.json) | 合法 | ST のレイテンシーが2の構成で、書込み中の語 16 と同じ bank の別の語 18（次の行）を LD.W [17] が読める | 5 cycles、mvp2_vii.json |
-| [`w_vii_spaced`](w_vii_spaced.json) | 合法 | 新しい6つの演算の II が2の構成で、各演算をちょうど II 空けて発行する。VADD の直後に VSUB を発行できる。ST.W の語は s+2 から読める | 9 cycles、mvp2_vii.json |
+| [`w_vii_spaced`](w_vii_spaced.json) | 合法 | 新しい6つの演算の II が2の構成で、各演算をちょうど II 空けて発行する。VADD の直後に VSUB を発行できる。ST.W の語はちょうど s+2 から読める | 10 cycles、mvp2_vii.json |
 | [`w_vlat_spacing`](w_vlat_spacing.json) | 合法 | 新しい演算のレイテンシーを変えた構成（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3）。結果は s+L から見える | 9 cycles、mvp2_vlat.json |
 | [`address_out_of_range`](address_out_of_range.json) | 不正: L7 | 8 wordのScratchpadで、アドレス8へのST（L7） | small_scratchpad.json |
 | [`early_halt_ld`](early_halt_ld.json) | 不正: L6 | HALT時にLDが完了していない（L6） |  |

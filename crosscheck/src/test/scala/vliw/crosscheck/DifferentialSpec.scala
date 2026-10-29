@@ -144,7 +144,7 @@ class DifferentialSpec extends AnyFunSuite {
         case (false, Left(v))   => assert(findings.map(_.rule).contains(v.rule), show)
         case _                  => fail(s"verdicts differ\n$show")
       }
-      Judged(bundles, findings.map(_.rule).toSet, result.left.toOption.map(_.rule))
+      Judged(bundles, in, findings.map(_.rule).toSet, result.left.toOption.map(_.rule))
     }
   }
 
@@ -567,32 +567,12 @@ class DifferentialSpec extends AnyFunSuite {
   test(
     "ISA mvp-2: verifier and reference model agree on W-full, W-reg, 4 read ports and the variants"
   ) {
-    val all = mvp2Variants.zipWithIndex.map { case ((label, m), k) =>
-      val rng = new Random(110L + k)
-      val c = new BundleCodec(m)
-      val judged = Vector.tabulate(20000) { i =>
-        val bundles = wProgram(rng, m)
-        val in = wInputs(rng)
-        val words = c.encodeAll(bundles).fold(e => fail(e), identity)
-        val findings = Verifier.verify(m, words, Verifier.Declaration.of(in))
-        val result = ReferenceModel.run(m, words, in)
-        def show = s"$label #$i\n" + Disassembler.program(bundles) +
-          findings.mkString("verifier:\n  ", "\n  ", "\n") + s"model: $result"
-        (findings.isEmpty, result) match {
-          case (true, Right(run)) => assert(run.cycles == bundles.size, show)
-          case (false, Left(v))   => assert(findings.map(_.rule).contains(v.rule), show)
-          case _                  => fail(s"verdicts differ\n$show")
-        }
-        (Judged(bundles, findings.map(_.rule).toSet, result.left.toOption.map(_.rule)), in)
-      }
-      (label, m, judged)
-    }
-    all.foreach { case (label, m, judged) =>
-      val legal = judged.filter(_._1.first.isEmpty)
-      val rules = firstRules(judged.map(_._1))
+    mvp2Variants.zipWithIndex.foreach { case ((label, m), k) =>
+      val judged = agree(m, 110L + k, 20000, wGen(m))
+      val legal = judged.filter(_.first.isEmpty)
+      val rules = firstRules(judged)
       def where = s"$label: rules hit first ${rules.map { case (r, n) => s"${r.id} $n" }}"
-      def count(js: Vector[(Judged, Inputs)])(p: Vector[Bundle] => Boolean) =
-        js.count(j => p(j._1.bundles))
+      def count(js: Vector[Judged])(p: Vector[Bundle] => Boolean) = js.count(j => p(j.bundles))
       val wide = m.hasWideMemory
       assert(legal.size > 1000, where)
       // One vector operation or LD.W commits two registers through one use of its port (L5).
@@ -600,31 +580,31 @@ class DifferentialSpec extends AnyFunSuite {
       assert(count(legal)(Shapes.pairCommit(m, _)) > 300, where)
       if (wide) assert(count(legal)(_.exists(_.memory.isInstanceOf[MemoryOp.LdW])) > 100, where)
       // Two operations on one port at one boundary, one of them a pair, are L5.
-      val clash = judged.filter(j => Shapes.pairPortClash(m, j._1.bundles))
-      assert(clash.forall(_._1.found(Rule.WritebackPort)), where)
-      assert(clash.count(_._1.first.contains(Rule.WritebackPort)) > 100, where)
+      val clash = judged.filter(j => Shapes.pairPortClash(m, j.bundles))
+      assert(clash.forall(_.found(Rule.WritebackPort)), where)
+      assert(clash.count(_.first.contains(Rule.WritebackPort)) > 100, where)
       // L3 for the second register of a pair alone.
-      val lane = judged.filter(j => Shapes.secondLaneWritten(m, j._1.bundles))
-      assert(lane.forall(_._1.found(Rule.InFlightRead)), where)
-      assert(lane.count(_._1.first.contains(Rule.InFlightRead)) > 100, where)
+      val lane = judged.filter(j => Shapes.secondLaneWritten(m, j.bundles))
+      assert(lane.forall(_.found(Rule.InFlightRead)), where)
+      assert(lane.count(_.first.contains(Rule.InFlightRead)) > 100, where)
       // A broadcast rs1 reads one register; partial pair updates are legal.
-      assert(legal.count(j => Shapes.broadcastAlone(j._1.bundles, j._2)) > 30, where)
+      assert(legal.count(j => Shapes.broadcastAlone(j.bundles, j.inputs)) > 30, where)
       assert(count(legal)(Shapes.partialUpdate(m, _)) > 50, where)
       if (wide) assert(count(legal)(Shapes.oddWide) > 100, where)
       // L11 counts fields: VMAC or MAC with ST or ST.W are four.
-      val withStore = judged.filter(j => Shapes.rs3Store(j._1.bundles))
+      val withStore = judged.filter(j => Shapes.rs3Store(j.bundles))
       if (m.readPorts == 3) {
-        assert(withStore.forall(_._1.found(Rule.ReadPorts)), where)
-        assert(withStore.count(_._1.first.contains(Rule.ReadPorts)) > 300, where)
+        assert(withStore.forall(_.found(Rule.ReadPorts)), where)
+        assert(withStore.count(_.first.contains(Rule.ReadPorts)) > 300, where)
       } else {
-        assert(judged.forall(!_._1.found(Rule.ReadPorts)), where)
-        assert(withStore.count(_._1.first.isEmpty) > 100, where)
+        assert(judged.forall(!_.found(Rule.ReadPorts)), where)
+        assert(withStore.count(_.first.isEmpty) > 100, where)
       }
       // L10 per word, with ST and ST.W latency 2.
-      val inFlight = judged.filter(j => Shapes.wordInFlight(m, j._1.bundles))
-      assert(inFlight.forall(_._1.found(Rule.InFlightStoreRead)), where)
+      val inFlight = judged.filter(j => Shapes.wordInFlight(m, j.bundles))
+      assert(inFlight.forall(_.found(Rule.InFlightStoreRead)), where)
       if (m.operation("ST").latency > 1)
-        assert(inFlight.count(_._1.first.contains(Rule.InFlightStoreRead)) > 50, where)
+        assert(inFlight.count(_.first.contains(Rule.InFlightStoreRead)) > 50, where)
       // Every rule the model can hit first, and no other: the words 0..5 exist and word 512 does
       // not (L7, W-full only), L9 needs an II above 1 and L10 a store latency above 1, and the
       // generated words decode (L1).
@@ -657,9 +637,15 @@ class DifferentialSpec extends AnyFunSuite {
 
 object DifferentialSpec {
 
-  /** A random program, the rules the verifier finds, and the rule the model stops at (None: legal).
+  /** A random program, its declared inputs, the rules the verifier finds, and the rule the model
+    * stops at (None: legal).
     */
-  final case class Judged(bundles: Vector[Bundle], found: Set[Rule], first: Option[Rule])
+  final case class Judged(
+      bundles: Vector[Bundle],
+      inputs: Inputs,
+      found: Set[Rule],
+      first: Option[Rule]
+  )
 
   /** How random programs and their declared inputs are drawn, in this order, from one generator. */
   final case class Gen(program: Random => Vector[Bundle], inputs: Random => Inputs)
