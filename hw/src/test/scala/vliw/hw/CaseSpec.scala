@@ -11,15 +11,15 @@ import vliw.isa._
   * One build per machine (#110 Q3, [[CaseBuildSpec]]): the legal cases of the machine in turn, then
   * one illegal case of the machine whose assertion must really fire, so that a legal case that
   * signals nothing is known to have run with live assertions. The firing cases differ from those of
-  * [[AssertionSpec]], so that the two suites fire the assertions of different rules (with
-  * `crosscheck/RtlMvp2Spec`, every rule the RTL checks fires in some build).
+  * [[AssertionSpec]] but on `mvp1_mac3`, whose only illegal case is `mac3_mul_port`
+  * ([[CaseBuildSpec]]).
   *
   * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, in the same way.
   */
 class CaseSpec extends CaseBuildSpec {
   import CaseBuildSpec._
 
-  protected val firing: Set[String] = Set("early_halt_mul", "mac3_mul_port", "mac_overlapping_ld")
+  protected val firing: Set[String] = CaseSpec.firing
 
   private def canonical(v: ujson.Value): String =
     Json.canonical(v).fold(e => fail(e.message), identity)
@@ -69,4 +69,10 @@ class CaseSpec extends CaseBuildSpec {
   legal.foreach { c =>
     outside(c).foreach(why => ignore(s"${c.name}: outside the RTL's range ($why)") {})
   }
+}
+
+object CaseSpec {
+
+  /** The firing case of each machine of the legal cases (L6, L5 and L4). */
+  val firing: Set[String] = Set("early_halt_mul", "mac3_mul_port", "mac_overlapping_ld")
 }

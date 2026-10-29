@@ -9,6 +9,7 @@ import chisel3.simulator.Exceptions.AssertionFailed
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.Verifier
+import vliw.hw.{AssertionSpec, CaseBuildSpec, CaseSpec}
 import vliw.hw.{Core, CoreDriver, CoreParams, CoreRun, VliwChiselSim}
 import vliw.isa._
 import vliw.sim.{Execution, ReferenceModel, Violation}
@@ -32,7 +33,9 @@ import RtlPrograms.canonical
   *     for programs that break only L8;
   *   - last, in the three builds with cases, one case whose assertion must really fire, so that the
   *     bound assertions of the build are checked too. The generated variant runs only the random
-  *     programs, in stop mode: no assertion fires there.
+  *     programs, in stop mode: no assertion fires there. With the builds of `hw/CaseSpec` and
+  *     `hw/AssertionSpec`, the assertion of every rule the RTL checks fires in some build (a test
+  *     below checks the rules of the firing cases).
   *
   * Only the W-full build also decodes ISA.md's example words of mvp-2 and runs the mvp-0 and mvp-1
   * programs (program compatibility).
@@ -89,18 +92,34 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
     vlat.hash -> ("w_vlat_vmul_mul_port" -> Rule.WritebackPort)
   )
 
+  /** The rules the RTL checks: L8 is outside the RTL, and L9 and L10 need an II or a store latency
+    * the RTL refuses.
+    */
+  private val checked =
+    Rule.all.toSet -- Set(Rule.UndefinedRead, Rule.IssueInterval, Rule.InFlightStoreRead)
+
   test("the W cases of the RTL's machines cover every rule the RTL checks, in three builds") {
     val (in, out) = cases.partition(supported)
     assert(cases.size == 37 && in.size == 29 && out.size == 8, cases.map(_.name))
     assert(in.map(_.machine.hash).toSet == Set(full.hash, mw1.hash, vlat.hash))
     assert(out.map(_.machine.machineId).toSet.map((_: String).split("-").last) == Set("rp4", "vii"))
-    // L8 is outside the RTL, and L9 and L10 need an II or a store latency the RTL refuses.
-    val unreachable = Set[Rule](Rule.UndefinedRead, Rule.IssueInterval, Rule.InFlightStoreRead)
     val covered = in.flatMap(rulesOf).toSet
-    assert((Rule.all.toSet -- unreachable).subsetOf(covered), covered.map(_.id))
+    assert(checked.subsetOf(covered), covered.map(_.id))
     firing.values.foreach { case (name, rule) =>
       assert(in.exists(c => c.name == name && rulesOf(c) == Set(rule)), name)
     }
+  }
+
+  // A build fires one assertion, so the rules fired are those of the firing cases (#110 Q3).
+  test("with hw/CaseSpec and hw/AssertionSpec, the assertion of every rule the RTL checks fires") {
+    val hw = (CaseSpec.firing ++ AssertionSpec.firing).toSeq.sorted.map { name =>
+      val c = CaseBuildSpec.cases.find(_.name == name).getOrElse(fail(s"no case $name"))
+      val rules = CaseBuildSpec.rtlRules(c)
+      assert(CaseBuildSpec.outside(c).isEmpty && rules.size == 1, s"$name: ${rules.map(_.id)}")
+      rules.head
+    }
+    val fired = hw.toSet ++ firing.values.map(_._2)
+    assert(checked.subsetOf(fired), s"fired in no build: ${(checked -- fired).map(_.id)}")
   }
 
   cases.filterNot(supported).foreach { c =>

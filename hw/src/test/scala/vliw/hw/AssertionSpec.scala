@@ -9,16 +9,15 @@ import vliw.isa._
   * each stopped in the first cycle in which the core signals a violation (the condition of an
   * assertion), whose rules must be some of the case's; then the machine's firing case again, whose
   * assertion must really fire with its rule, at the pc at which it stopped. The firing cases differ
-  * from those of [[CaseSpec]], so that the two suites fire the assertions of different rules (with
-  * `crosscheck/RtlMvp2Spec`, every rule the RTL checks fires in some build).
+  * from those of [[CaseSpec]] but on `mvp1_mac3`, whose only illegal case is `mac3_mul_port`
+  * ([[CaseBuildSpec]]).
   *
   * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, in the same way.
   */
 class AssertionSpec extends CaseBuildSpec {
   import CaseBuildSpec._
 
-  protected val firing: Set[String] =
-    Set("halt_not_last", "address_out_of_range", "mac3_mul_port", "mac_rs3_in_flight")
+  protected val firing: Set[String] = AssertionSpec.firing
 
   private val illegal = cases.filter(rulesOf(_).nonEmpty)
 
@@ -79,4 +78,11 @@ class AssertionSpec extends CaseBuildSpec {
   illegal.foreach { c =>
     outside(c).foreach(why => ignore(s"${c.name}: outside the RTL's range ($why)") {})
   }
+}
+
+object AssertionSpec {
+
+  /** The firing case of each machine of the illegal cases (L2, L7, L5 and L3). */
+  val firing: Set[String] =
+    Set("halt_not_last", "address_out_of_range", "mac3_mul_port", "mac_rs3_in_flight")
 }

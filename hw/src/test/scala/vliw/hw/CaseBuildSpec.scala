@@ -23,14 +23,21 @@ import vliw.isa._
   * stopped. So the assertions of each build are checked too, not only the signals that are their
   * conditions (docs/VERIFIER.md).
   *
+  * A firing case ends its build, since the simulation stops at the assertion: a build checks the
+  * assertion of one rule. The two suites build the same machines, but for `small_scratchpad`
+  * (illegal cases only), and their firing cases differ on the machines with more than one illegal
+  * case, so that each of the two builds of such a machine fires another rule; on `mvp1_mac3`, whose
+  * only illegal case is `mac3_mul_port`, both fire L5. With `crosscheck/RtlMvp2Spec`, the assertion
+  * of every rule the RTL checks fires in some build, which RtlMvp2Spec tests.
+  *
   * Each build registers one test, named after the machine, and then one test per case, named after
   * the case, as when every case had a build of its own (until #110 Q3). The build runs once, in the
   * first of these tests that runs (the machine's, unless a filter selects only cases). The
   * machine's test fails when the build fails, when the firing case does not fire as expected, or
-  * when cases fail, naming them; each case's test reports that case's result in the build. A
-  * failure of the environment (a Verilator build, a simulation that died) is rethrown as it is, in
-  * every test it stops, so that `scripts/mutation-classify.py` counts it as an error, not as a
-  * kill.
+  * when cases fail, with every problem in its message: the firing case's, then the names of the
+  * cases that failed. Each case's test reports that case's result in the build. A failure of the
+  * environment (a Verilator build, a simulation that died) is rethrown as it is, in every test it
+  * stops, so that `scripts/mutation-classify.py` counts it as an error, not as a kill.
   */
 abstract class CaseBuildSpec extends AnyFunSuite with VliwChiselSim {
   import CaseBuildSpec._
@@ -68,20 +75,21 @@ abstract class CaseBuildSpec extends AnyFunSuite with VliwChiselSim {
     val count = if (steps.size == 1) s"1 $what case" else s"${steps.size} $what cases"
     test(s"${label(m)}: $count in one build; $fires") {
       val o = outcome // the build runs here, unless a test of a case ran first
-      o.stop.foreach { case (where, e) =>
-        info(s"the build stopped in $where; not run: ${o.notRun.mkString(", ")}")
-        throw e
-      }
-      fire.swap.toOption.foreach(why => fail(why))
-      o.firing.foreach(fail(_))
       val failed =
         steps.map(_.c.name).flatMap(n => o.results.get(n).flatMap(_.failed.toOption).map(n -> _))
-      failed.headOption.foreach { case (first, e) =>
-        fail(
-          s"${failed.size} of ${steps.size} cases failed: ${failed.map(_._1).mkString(", ")}; " +
-            s"$first: ${e.getMessage}",
-          e
-        )
+      val casesFailed = Option.when(failed.nonEmpty)(
+        s"${failed.size} of ${steps.size} cases failed: ${failed.map(_._1).mkString(", ")}"
+      )
+      o.stop.foreach { case (where, e) =>
+        val notRun = Option.when(o.notRun.nonEmpty)(s"not run: ${o.notRun.mkString(", ")}")
+        info((Seq(s"the build stopped in $where") ++ notRun ++ casesFailed).mkString("; "))
+        throw e
+      }
+      // Every problem in one message: the firing case's, then the cases that failed.
+      val problems = (fire.swap.toOption ++ o.firing ++ casesFailed).mkString("; ")
+      failed.headOption match {
+        case Some((first, e)) => fail(s"$problems; $first: ${e.getMessage}", e)
+        case None             => if (problems.nonEmpty) fail(problems)
       }
     }
     steps.foreach { s =>
