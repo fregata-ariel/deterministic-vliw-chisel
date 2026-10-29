@@ -13,7 +13,7 @@ sbt hw/test                 # ChiselSim のテスト（Verilator が必要）
 sbt "hw/run [target-dir] [machine.json]"   # Core の SystemVerilog を出力（既定は generated/ と config/machine.json）
 ```
 
-ChiselSim の作業ファイルは `build/chiselsim/<Suite>/<test>/` に作られる（gitignore 済み）。
+ChiselSim の作業ファイルは `build/chiselsim/<Suite>/<test>/` に作られる（gitignore 済み）。`CaseSpec`・`AssertionSpec` のビルドは machine ごとに1つで、その machine のテストの名前のディレクトリに作られる（下の「テスト」）。
 
 ChiselSim のテストは `ChiselSim` ではなく `VliwChiselSim` を mix in する（`scripts/check.sh static` が検査する。[ADR-0013](../docs/DECISIONS.md#adr-0013-chiselsim-の-verilator-は1スレッドで-verilate-し乱数の-seed-を明示する)）。`VliwChiselSim` は、すべてのシミュレーションに次の3つを加える。
 
@@ -116,9 +116,17 @@ machine description が ISA mvp-2 なら（`config/machine-mvp2.json` など）�
 | 単体（`RegisterFileSpec` ほか） | 各モジュールのタイミングと違反信号 |
 | `DecoderSpec` | MAC の欄、予約 bit、レジスタ数を超える rs3、mvp-0 に MAC がないこと、mvp-1 では VMAC の opcode 8 が未知であること |
 | `CoreSpec` | ISA例、HALT のみ、再スタート。mvp-1: ポート2の読出し、MAC と ST の L11、MUL・LD・MAC・ST・ADD の命令列（MAC の latency 2 と 3） |
-| `CaseSpec` | `tests/cases` の全ての合法ケース（cycles、最終状態、golden trace）。mvp-2 のケースは `crosscheck/RtlMvp2Spec` |
-| `AssertionSpec` | `tests/cases` の全ての不正ケース（期待した規則の assertion）。mvp-2 のケースは `crosscheck/RtlMvp2Spec` |
+| `CaseSpec` | `tests/cases` の全ての合法ケース（違反の信号がないこと、cycles、最終状態、golden trace）。machine ごとに1回のビルド（下記）。mvp-2 のケースは `crosscheck/RtlMvp2Spec` |
+| `AssertionSpec` | `tests/cases` の全ての不正ケース（最初に違反したサイクルで知らせた規則が、ケースの規則に含まれること。L8 だけのケースは最後まで走ること。命令領域を超えるケースはロードで拒否されること）と、machine ごとに1つのケースで assertion が実際に発火すること。machine ごとに1回のビルド（下記）。mvp-2 のケースは `crosscheck/RtlMvp2Spec` |
 | `EmitSpec` | SystemVerilog の生成（mvp-0、mvp-1、mvp-2 の W-full・W-reg・latency の変種と、mvp-2 の範囲の両端）と、対応しない構成の拒否（理由の文） |
 | `FixedPipelineSpec` | 固定パイプライン: 計画の検査の各規則、値のレジスタの共有と寿命、Core と同じ範囲の拒否、SystemVerilog（Decoder と RegisterFile がない）、手で計算した例の発行・書戻し・done の cycle（`FixedDriver` は `CoreDriver` と同じ数え方） |
+
+`CaseSpec`・`AssertionSpec` は、RTL が対応する machine ごとに1回だけビルドする（#110 の Q3。共通の部分は `CaseBuildSpec`）。`simulate` は呼ぶたびに Verilator でビルドするので、ケースごとにビルドすると 40 回になる（合法 16、不正 24）。まとめた後は 7 回である（`CaseSpec` は `config/machine.json`・`config/machine-mvp1.json`・`mvp1_mac3.json` の3回、`AssertionSpec` はそれに `small_scratchpad.json` を足した4回）。手元（4 コア、Verilator 5.052）の JUnit で、2つのスイートは計 226.8 秒から 42.5 秒になった（[ADR-0022](../docs/DECISIONS.md) の 2026-10-29 の Q3 の補足）。
+
+- 1つのビルドで、その machine のケースを名前の順に、テスト用の `CoreDriver.run` の `stopAtViolation` で走らせる。違反の信号が立てば、そのサイクルで止める（そのサイクルの終わりの境界の間 reset を立てるので assertion は発火せず、次のケースの `start` がコアを reset し直す）。信号が立たなければ、assertion が生きたまま done まで走る。合法なケースは信号がないことと期待値を、不正なケースは最初に違反したサイクルで知らせた規則がケースの規則（L8 を除く）に含まれることを確かめる。命令領域を超えるケースはロードで拒否され（L2）、シミュレーションに触れない
+- ビルドの最後に、その machine の不正なケースの1つ（発火させるケース。RTL が確かめる規則が1つのもの）を、まず `stopAtViolation` で、次に `stopAtViolation` なしで走らせる。その規則の assertion が実際に発火し（ChiselSim の `AssertionFailed`）、その pc が止めたときの pc と同じであることを確かめる。違反の信号は assertion の条件そのものなので、これで、そのビルドの assertion が生きていて、違反の信号から発火までつながっていることを、1つの規則で確かめる。発火させるケースは、`CaseSpec` が `early_halt_mul`（L6）・`mac_overlapping_ld`（L4）・`mac3_mul_port`（L5）、`AssertionSpec` が `halt_not_last`（L2）・`mac_rs3_in_flight`（L3）・`address_out_of_range`（L7）・`mac3_mul_port`（L5）である。`crosscheck/RtlMvp2Spec` の L11・L1・L5 と合わせて、RTL が確かめるすべての規則（L1〜L7、L11）の assertion が、どこかのビルドで発火する。ケースごとのビルドでは、不正なケースのそれぞれで assertion を発火させていた。今は、発火させるケース以外は、assertion の条件である違反の信号を確かめる
+- テストは、ビルドごとに machine のテスト（machine_id で始まる名前）と、ケースごとのテストがある。ビルドは、このうち最初に走るテスト（ふつうは machine のテスト）で1回だけ行い、その名前のディレクトリに作られる。machine のテストは、ビルドが失敗したとき、発火させるケースが期待どおりに発火しないとき、ケースが失敗したとき（失敗したケースの名前を並べる）に失敗する。ケースごとのテストは、ビルドの中のそのケースの結果を報告する。名前は、`CaseSpec` と、`AssertionSpec` の L8 だけのケース・ロードで拒否されるケースでは、ケースごとにビルドしていたときと同じで、`AssertionSpec` のほかのケースは「`<name>: the core signals L6 in its first violating cycle`」の形になった
+- ケースの検査の失敗（ScalaTest の assertion）の後は、次のケースに進む。それ以外の例外（cycle の上限、シミュレーションの異常終了）や、発火させるケースより前に発火した assertion は、ビルドをそこで止め、走らなかったケースのテストも失敗する。環境の失敗（Verilator のビルド、シミュレーションの異常終了など）は、止まったすべてのテストで、その例外をそのまま投げ直す。`scripts/mutation-classify.py` が、mutant を検出したのではなく ERROR と数えるためである
+- RTL の範囲外の machine のケースは、今までどおり、ケースごとに理由付きのスキップとして表示する。新しいケースは、その machine のビルドに自動的に入る。新しい machine のケースを足すときは、その machine の発火させるケースを `CaseSpec`・`AssertionSpec` の `firing` に足す（無ければ machine のテストがその旨で失敗する）
 
 RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。初期値を全 0・全 1 にした RTL の確認（L8 だけに反するカナリア、合法なプログラム、書かれない位置）は、`crosscheck/InitStateSpec` で行う（#129。mvp-2 は `machine-mvp2.json` を全 1 で）。ISA mvp-2 の RTL は、`crosscheck/RtlMvp2Spec` が machine ごとに1回のビルドで、W のケースと乱数の合法・不正な W のプログラムを、期待値・参照モデル・verifier と照合する。ISA.md の命令語と、mvp-0・mvp-1 の命令列の互換性は W-full のビルドだけで確かめ、W-full の変種（レジスタ8本・4 bank × 64 語）のビルドは乱数のプログラムだけを走らせる。不正なプログラムは、テスト用の `CoreDriver.run` の `stopAtViolation` で、最初の違反のサイクルで止める（[docs/VERIFIER.md](../docs/VERIFIER.md)「RTLのassertionとの対応」）。
