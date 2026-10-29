@@ -41,9 +41,12 @@ import vliw.isa._
   *
   * Zeros runs on the default Core only: there every control register (busy, done, pc, length, the
   * write-back schedules, loadStage) starts at its reset value, so zeros tests only the state
-  * without a reset, and the other machines build the same `Core.scala`. The fixed pipeline runs in
-  * ones only: in zeros busy, done and the counter start at their reset values, and its value
-  * registers are never read before they are written.
+  * without a reset, and the other machines build the same `Core.scala`. On mvp-2 the only new state
+  * without a reset is the two banks of the register file, which legal programs never read before
+  * writing them (L8), as `regs`; in zeros the canaries could not show that the mode reached them
+  * (above), and the ones canaries of machine-mvp2 read both banks. The fixed pipeline runs in ones
+  * only: in zeros busy, done and the counter start at their reset values, and its value registers
+  * are never read before they are written.
   */
 class InitStateSpec extends AnyFunSuite with VliwChiselSim {
   private def machineFile(path: java.nio.file.Path) =

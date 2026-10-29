@@ -61,7 +61,7 @@ reset のある状態（PC、busy、done、プログラム長、書戻しの予�
 |---|---|---|
 | `BankedRegisterFile` の `bank0`・`bank1`（mvp-2 の RF。ビットの数は `RegisterFile` の `regs` と同じ） | なし | `regs` と同じ。ホストは reset の後に入力を書き、合法なプログラムは宣言したか書いたレジスタだけを読む（L8）。組は2つの bank のレジスタ2つ |
 | 書戻しの予約表（`WritebackSchedule` の `slot`）の `pair`・`data1` | あり | 今の `RegInit`（項目のすべての欄を 0 にする）に含まれる |
-| `MemorySlot` の `loadWide`（`loadStage` の load が LD.W か） | あり | `loadStage` と同じ `RegInit` |
+| `MemorySlot` の `loadWide`（`loadStage` の load が LD.W か） | あり | `loadStage` と同じく `RegInit`（`RegInit(false.B)`） |
 | `MemorySlot` の `readBank` | なし（変えない） | レーン1 の bank は `(readBank + 1) mod banks` で、組合せ回路で作る。レジスタは足さない |
 | Scratchpad の bank と `_RW0_*` | なし（変えない） | メモリは足さない。各 bank のアクセスは1サイクルに1つのまま |
 | `WriteReservations` の `remaining`、busy、done、pc、プログラム長、`imem` | 変えない | |
@@ -121,4 +121,4 @@ machine description が ISA mvp-2 なら（`config/machine-mvp2.json` など）�
 | `EmitSpec` | SystemVerilog の生成（mvp-0、mvp-1、mvp-2 の W-full・W-reg・latency の変種と、mvp-2 の範囲の両端）と、対応しない構成の拒否（理由の文） |
 | `FixedPipelineSpec` | 固定パイプライン: 計画の検査の各規則、値のレジスタの共有と寿命、Core と同じ範囲の拒否、SystemVerilog（Decoder と RegisterFile がない）、手で計算した例の発行・書戻し・done の cycle（`FixedDriver` は `CoreDriver` と同じ数え方） |
 
-RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。初期値を全 0・全 1 にした RTL の確認（L8 だけに反するカナリア、合法なプログラム、書かれない位置）は、`crosscheck/InitStateSpec` で行う（#129。mvp-2 は `machine-mvp2.json` を全 1 で）。ISA mvp-2 の RTL は、`crosscheck/RtlMvp2Spec` が machine ごとに1回のビルドで、W のケース、乱数の合法・不正な W のプログラム、ISA.md の命令語、mvp-0・mvp-1 の命令列の互換性を、期待値・参照モデル・verifier と照合する。不正なプログラムは、テスト用の `CoreDriver.run` の `stopAtViolation` で、最初の違反のサイクルで止める（[docs/VERIFIER.md](../docs/VERIFIER.md)「RTLのassertionとの対応」）。
+RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。初期値を全 0・全 1 にした RTL の確認（L8 だけに反するカナリア、合法なプログラム、書かれない位置）は、`crosscheck/InitStateSpec` で行う（#129。mvp-2 は `machine-mvp2.json` を全 1 で）。ISA mvp-2 の RTL は、`crosscheck/RtlMvp2Spec` が machine ごとに1回のビルドで、W のケースと乱数の合法・不正な W のプログラムを、期待値・参照モデル・verifier と照合する。ISA.md の命令語と、mvp-0・mvp-1 の命令列の互換性は W-full のビルドだけで確かめ、W-full の変種（レジスタ8本・4 bank × 64 語）のビルドは乱数のプログラムだけを走らせる。不正なプログラムは、テスト用の `CoreDriver.run` の `stopAtViolation` で、最初の違反のサイクルで止める（[docs/VERIFIER.md](../docs/VERIFIER.md)「RTLのassertionとの対応」）。

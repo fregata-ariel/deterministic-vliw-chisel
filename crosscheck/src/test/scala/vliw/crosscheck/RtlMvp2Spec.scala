@@ -20,18 +20,22 @@ import RtlPrograms.canonical
   *
   * One build per machine the RTL implements (W-full, W-reg, the latency variant, and a generated
   * W-full variant), each running many programs (ADR-0013: every `simulate` is a Verilator build):
-  *   - the W cases of the machine: the legal ones against their expectations and the model's trace,
-  *     the illegal ones with [[CoreDriver.run]]'s `stopAtViolation` (the rules the core signals in
-  *     the first violating cycle are some of the case's rules), the L8-only ones to done without a
-  *     signal;
+  *   - the W cases of the machine (the generated variant has none): the legal ones against their
+  *     expectations and the model's trace, the illegal ones with [[CoreDriver.run]]'s
+  *     `stopAtViolation` (the rules the core signals in the first violating cycle are some of the
+  *     case's rules), the L8-only ones to done without a signal;
   *   - random legal programs of [[WPrograms]] against the model (trace, cycles, defined values),
   *     with minimum counts of the shapes that W must exercise;
   *   - random illegal programs of the same generator against the verifier and the model, stopped at
   *     the first violation: the core signals only rules the verifier finds, in the cycle in which
   *     the model stops (one cycle later for L5 on the memory port, docs/VERIFIER.md), and nothing
   *     for programs that break only L8;
-  *   - last, one case whose assertion must really fire, so that the bound assertions of the build
-  *     are checked too.
+  *   - last, in the three builds with cases, one case whose assertion must really fire, so that the
+  *     bound assertions of the build are checked too. The generated variant runs only the random
+  *     programs, in stop mode: no assertion fires there.
+  *
+  * Only the W-full build also decodes ISA.md's example words of mvp-2 and runs the mvp-0 and mvp-1
+  * programs (program compatibility).
   *
   * The cases of `mvp2_rp4` (4 read ports, #57) and `mvp2_vii` (II 2, store latency 2) are outside
   * the RTL's range and shown as ignored, with the reasons of [[CoreParams.check]].
