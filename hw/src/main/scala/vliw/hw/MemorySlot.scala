@@ -120,10 +120,12 @@ class MemorySlot(p: CoreParams) extends Module {
   private val readValue = VecInit(readData)(readBank)
   io.hostReadData := readValue
 
-  // W-full: lane 1 reads the bank after readBank (no register of its own).
+  // W-full: lane 1 reads the bank after readBank (no register of its own): the read data rotated
+  // by one bank, indexed by readBank itself. An index such as readBank + 1 would put the
+  // arithmetic inside the SystemVerilog array index, which Verilator 5.020 widens and rejects
+  // (WIDTHEXPAND).
   private val readValue1 = Option.when(p.hasWideMemory) {
-    val next = Mux(readBank === (p.banks - 1).U, 0.U, (readBank +& 1.U)(bankBits - 1, 0))
-    VecInit(readData)(next)
+    VecInit(Seq.tabulate(p.banks)(b => readData((b + 1) % p.banks)))(readBank)
   }
 
   io.storeCommit.valid := store
