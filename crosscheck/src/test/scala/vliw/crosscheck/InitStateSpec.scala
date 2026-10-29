@@ -24,12 +24,15 @@ import vliw.isa._
   * is that of every other test, at `VLIW_SIM_SEED`. On one core per design and mode:
   *   1. canaries, programs that are illegal only by L8, read an undefined register and an undefined
   *      word of each bank, and commit the pattern (the add canary 1 + the pattern): in ones, the
-  *      mode reached the design;
-  *   1. 50 random legal programs of [[RtlDifferentialSpec]] give the reference model's traces,
-  *      cycles and defined final values;
+  *      mode reached the design. On ISA mvp-2 (W) also a VADD that reads both RF banks, a VMUL that
+  *      broadcasts an undefined register, and an LD.W at an odd address, whose second word is in
+  *      the next row of bank 0;
+  *   1. 50 random legal programs of [[RtlDifferentialSpec]] (of [[RtlMvp2Spec]] on mvp-2) give the
+  *      reference model's traces, cycles and defined final values;
   *   1. every word and register that nothing wrote still holds the pattern. The register whose
-  *      index bits are all 1 can be written at the first reset edge (ADR-0021), so it only has to
-  *      keep the value it had after the first run.
+  *      index bits are all 1 can be written at the first reset edge (ADR-0021), and on mvp-2 the
+  *      pair it belongs to (the reset value of the write-back schedules' pair flag is not there yet
+  *      either), so these only have to keep the value they had after the first run.
   *
   * In zeros, the canaries and the unwritten values cannot show that the mode reached the design:
   * the build passes no `+verilator+rand+reset+`, so Verilator's default initialisation also starts
@@ -48,9 +51,28 @@ class InitStateSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
   private val variants = RtlPrograms.variants(machine)
 
-  private case class Design(label: String, m: MachineDescription, seed: Long, mac: Boolean)
+  /** A core to check: its machine, the seed of its random legal programs, and whether they are the
+    * programs of ISA mvp-1 (MAC) or mvp-2 (W).
+    */
+  private case class Design(
+      label: String,
+      m: MachineDescription,
+      seed: Long,
+      mac: Boolean,
+      w: Boolean = false
+  ) {
+    def programs: Vector[(Vector[Long], Inputs)] =
+      if (w) WPrograms.legalPrograms(m, seed, 50) else RtlPrograms.legalPrograms(m, seed, 50, mac)
+    def usedWords: Set[Int] = if (w) WPrograms.usedWords else RtlPrograms.usedWords
 
-  // The machines and program seeds of RtlDifferentialSpec.
+    /** The programs use r0 up to this register (exclusive). */
+    def usedRegisters: Int = if (w) 6 else 4
+
+    /** The registers the first reset edge can write: r(n-1), and on mvp-2 its pair. */
+    def resetEdge: Seq[Int] = (m.registerCount - (if (w) 2 else 1) until m.registerCount)
+  }
+
+  // The machines and program seeds of RtlDifferentialSpec, and of RtlMvp2Spec for W-full.
   private val mvp0 = Design("mvp-0 default", machine, 314159L, mac = false)
   private val runs = Seq(
     mvp0 -> InitMode.Zeros,
@@ -65,7 +87,13 @@ class InitStateSpec extends AnyFunSuite with VliwChiselSim {
     ) -> InitMode.Ones
   ) ++ variants.zipWithIndex.map { case ((label, m), k) =>
     Design(label, m, 1000L + k, mac = false) -> InitMode.Ones
-  }
+  } :+ (Design(
+    "mvp-2 W-full",
+    machineFile(MachineDescription.Mvp2Path),
+    110L,
+    mac = true,
+    w = true
+  ) -> InitMode.Ones)
 
   private val NoInputs = Inputs(Map.empty, Map.empty)
   private val Mask = 0xffffffffL
@@ -90,46 +118,82 @@ class InitStateSpec extends AnyFunSuite with VliwChiselSim {
     CoreDriver.run(dut, m, encode(m, Vector(Bundle(ComputeOp.Halt))), NoInputs, readBack)
 
   /** On a fresh core: `add r1, r2, r3` with only r2 = 1 declared commits 1 + p; `ld r1, [a]` from
-    * an undeclared word `a` of each bank commits p. The verifier rejects each by L8 alone.
+    * an undeclared word `a` of each bank commits p. On mvp-2, `vadd r0:r1, r2:r3, r4:r5` with only
+    * r2 = r3 = 1 declared commits 1 + p to both registers (r4 and r5 are in the two RF banks),
+    * `vmul r0:r1, r7, r2:r3` broadcasting the undeclared r7 (no canary writes it) with r2 = r3 = 1
+    * commits p twice, and on W-full `ld.w r0:r1, [a]` at the odd `a` = 509 (bank 1, then the next
+    * row of bank 0) commits p twice. The verifier rejects each by L8 alone.
     */
   private def canaries(dut: Core, m: MachineDescription, p: Long): Unit = {
-    def canary(what: String, first: Bundle, waits: String, in: Inputs, expected: Long) = {
+    def canary(what: String, first: Bundle, waits: String, in: Inputs, expected: (Int, Long)*) = {
       val nops = Vector.fill(m.operation(waits).latency - 1)(Bundle.Nop)
       val words = encode(m, (first +: nops) :+ Bundle(ComputeOp.Halt))
       val rules = Verifier.verify(m, words, Verifier.Declaration.of(in)).map(_.rule).toSet
       assert(rules == Set(Rule.UndefinedRead), s"$what: the verifier reports $rules")
       val run = CoreDriver.run(dut, m, words, in, Set.empty)
       assert(run.violations.isEmpty, what)
-      assert(commits(run.trace) == Vector(1 -> expected), what)
+      assert(commits(run.trace) == expected.toVector, what)
     }
     canary(
       "add r1, r2, r3 (r3 undefined)",
       Bundle(ComputeOp.Add(1, 2, 3)),
       "ADD",
       Inputs(Map(2 -> 1L), Map.empty),
-      (1L + p) & Mask
+      1 -> ((1L + p) & Mask)
     )
     lastRow(m).foreach { a =>
       val what = s"ld r1, [$a] (bank ${a % m.banks}, undefined)"
-      canary(what, Bundle(MemoryOp.Ld(1, a)), "LD", NoInputs, p)
+      canary(what, Bundle(MemoryOp.Ld(1, a)), "LD", NoInputs, 1 -> p)
+    }
+    if (m.hasVector) {
+      canary(
+        "vadd r0:r1, r2:r3, r4:r5 (r4 and r5 undefined)",
+        Bundle(ComputeOp.VAdd(0, 2, 4)),
+        "VADD",
+        Inputs(Map(2 -> 1L, 3 -> 1L), Map.empty),
+        0 -> ((1L + p) & Mask),
+        1 -> ((1L + p) & Mask)
+      )
+      canary(
+        "vmul r0:r1, r7, r2:r3 (the broadcast r7 undefined)",
+        Bundle(ComputeOp.VMul(0, 7, 2, broadcast = true)),
+        "VMUL",
+        Inputs(Map(2 -> 1L, 3 -> 1L), Map.empty),
+        0 -> p,
+        1 -> p
+      )
+    }
+    if (m.hasWideMemory) {
+      val a = m.scratchpadWords - 3
+      assert(a % 2 == 1 && m.banks == 2)
+      canary(
+        s"ld.w r0:r1, [$a] (undefined)",
+        Bundle(MemoryOp.LdW(0, a)),
+        "LD.W",
+        NoInputs,
+        0 -> p,
+        1 -> p
+      )
     }
   }
 
-  /** Every word other than those of the programs, and r4 to r(n-2), still hold p; r(n-1) still
-    * holds `kept`, its value after the first run, which is p in zeros. Returns the words checked.
+  /** Every word other than those of the programs, and every register from r(usedRegisters) up to
+    * the ones of the first reset edge, still hold p; those still hold `kept`, their values after
+    * the first run, which are p in zeros. Returns the words checked.
     */
-  private def unwritten(dut: Core, m: MachineDescription, p: Long, kept: BigInt): Int = {
-    val words = (0 until m.scratchpadWords).toSet -- RtlPrograms.usedWords
-    val run = halt(dut, m, words)
+  private def unwritten(dut: Core, d: Design, p: Long, kept: Seq[BigInt]): Int = {
+    val words = (0 until d.m.scratchpadWords).toSet -- d.usedWords
+    val run = halt(dut, d.m, words)
     words.toSeq.sorted.foreach(a =>
       assert(run.memory(a) == BigInt(p), s"[$a] does not keep the pattern")
     )
-    val top = m.registerCount - 1
-    (4 until top).foreach(r =>
-      assert(run.registers(r) == BigInt(p), s"r$r does not keep the pattern")
-    )
-    assert(run.registers(top) == kept, s"r$top was written after the first run")
-    if (p == 0L) assert(kept == 0, s"r$top was written at the first reset edge in zeros")
+    (d.usedRegisters until d.m.registerCount)
+      .filterNot(d.resetEdge.contains)
+      .foreach(r => assert(run.registers(r) == BigInt(p), s"r$r does not keep the pattern"))
+    d.resetEdge.zip(kept).foreach { case (r, k) =>
+      assert(run.registers(r) == k, s"r$r was written after the first run")
+      if (p == 0L) assert(k == 0, s"r$r was written at the first reset edge in zeros")
+    }
     words.size
   }
 
@@ -139,20 +203,20 @@ class InitStateSpec extends AnyFunSuite with VliwChiselSim {
     ) {
       assert(CoreParams.check(d.m).isRight)
       val p = pattern(mode)
-      val programs = RtlPrograms.legalPrograms(d.m, d.seed, 50, d.mac)
-      val top = d.m.registerCount - 1
-      var kept = BigInt(-1)
+      val programs = d.programs
+      var kept = Seq.empty[BigInt]
       var words = 0
       simulateInit(mode)(new Core(CoreParams(d.m))) { dut =>
         canaries(dut, d.m, p)
-        kept = halt(dut, d.m, Set.empty).registers(top)
-        RtlPrograms.compareOn(dut, d.m, programs)
-        words = unwritten(dut, d.m, p, kept)
+        kept = d.resetEdge.map(halt(dut, d.m, Set.empty).registers)
+        RtlPrograms.compareOn(dut, d.m, programs, d.usedWords)
+        words = unwritten(dut, d, p, kept)
       }
       val sv = SvInitCheck.directory(implementation.getDirectory.resolve("primary-sources"))
+      val edge = d.resetEdge.zip(kept).map { case (r, k) => s"r$r ${k.toString(16)}" }
       info(
-        s"${programs.size} programs; $words words and r4..r${top - 1} keep ${p.toHexString}; " +
-          s"r$top after the first run: ${kept.toString(16)}; the SV check covered " +
+        s"${programs.size} programs; $words words and r${d.usedRegisters}..r${d.resetEdge.head - 1} " +
+          s"keep ${p.toHexString}; after the first run: ${edge.mkString(", ")}; the SV check covered " +
           s"${sv.registers} registers and ${sv.memories} memories in ${sv.files} files"
       )
     }

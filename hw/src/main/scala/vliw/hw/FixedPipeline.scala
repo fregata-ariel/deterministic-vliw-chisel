@@ -46,15 +46,22 @@ final case class FixedParams(
 
 object FixedParams {
 
-  /** Why no fixed pipeline is built for `plan` on `machine`: the machines outside the Core's range
-    * (the same reasons as [[CoreParams.unsupported]]), then the plan's violations.
+  /** Why fixed pipelines are not built for an ISA mvp-2 machine (docs/MACHINE.md, ADR-0022). */
+  def isaReason(machine: MachineDescription): Option[String] =
+    Option.when(machine.hasVector)(
+      "fixed pipelines are built for ISA mvp-0 and mvp-1; W (mvp-2) is outside #75 (ADR-0022)"
+    )
+
+  /** Why no fixed pipeline is built for `plan` on `machine`: an ISA mvp-2 machine (W is outside
+    * #75), the machines outside the Core's range (the same reasons as [[CoreParams.unsupported]]),
+    * then the plan's violations.
     */
   def unsupported(
       machine: MachineDescription,
       plan: FixedPlan,
       policy: StoragePolicy = StoragePolicy.ByLifetime
   ): Seq[String] =
-    CoreParams.unsupported(machine) match {
+    (isaReason(machine).toSeq ++ CoreParams.unsupported(machine)) match {
       case Seq() =>
         FixedPlan.violations(machine, plan) match {
           case Seq() =>

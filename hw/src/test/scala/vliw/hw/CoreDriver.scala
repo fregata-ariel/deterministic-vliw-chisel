@@ -8,14 +8,17 @@ import vliw.isa._
 /** Result of one run of the core under ChiselSim.
   *
   * `trace` is the body of a vliw-trace/1 trace (docs/TRACE.md), built from what the core reports on
-  * its observe port; `violations` lists the rules signalled in any cycle.
+  * its observe port; `violations` lists the rules signalled in any cycle. A run that
+  * [[CoreDriver.run]] stopped at its first violation has `stoppedAt` (that cycle), the rules
+  * signalled in that cycle, the trace up to that cycle, and no final state.
   */
 final case class CoreRun(
     cycles: Int,
     trace: Vector[ujson.Obj],
     registers: Vector[BigInt],
     memory: Map[Int, BigInt],
-    violations: Set[Rule]
+    violations: Set[Rule],
+    stoppedAt: Option[Int] = None
 )
 
 /** The program cannot be loaded: it does not fit the instruction memory (checked at load, rule L2).
@@ -28,28 +31,39 @@ object CoreDriver {
 
   /** The issued bundle as the decoder reports it, rebuilt from the decoded fields rather than from
     * the instruction word, so that the trace shows what the slots actually execute (#56). None when
-    * the decoder flags the bundle illegal (L1).
+    * the decoder flags the bundle illegal (L1). On ISA mvp-2, the vector operations, B, LD.W and
+    * ST.W come from `vector`, `broadcast` and `wide`.
     */
   private def decoded(d: DecodedBundle): Option[vliw.isa.Bundle] =
     Option.unless(d.illegal.peek().litToBoolean) {
       def field(x: UInt) = x.peek().litValue.toInt
+      def flag(x: Option[Bool]) = x.exists(_.peek().litToBoolean)
       val compute: ComputeOp =
         if (d.halt.peek().litToBoolean) ComputeOp.Halt
         else if (!d.compute.valid.peek().litToBoolean) ComputeOp.Nop
         else {
           val (rd, a, b) = (field(d.compute.bits.rd), field(d.rs1), field(d.rs2))
+          val (vector, broadcast) = (flag(d.compute.bits.vector), flag(d.compute.bits.broadcast))
           d.compute.bits.kind.peek().litValue match {
-            case k if k == ComputeKind.Add.litValue => ComputeOp.Add(rd, a, b)
-            case k if k == ComputeKind.Sub.litValue => ComputeOp.Sub(rd, a, b)
-            case k if k == ComputeKind.Mac.litValue => ComputeOp.Mac(rd, a, b, field(d.rs3.get))
-            case _                                  => ComputeOp.Mul(rd, a, b)
+            case k if k == ComputeKind.Add.litValue =>
+              if (vector) ComputeOp.VAdd(rd, a, b) else ComputeOp.Add(rd, a, b)
+            case k if k == ComputeKind.Sub.litValue =>
+              if (vector) ComputeOp.VSub(rd, a, b) else ComputeOp.Sub(rd, a, b)
+            case k if k == ComputeKind.Mac.litValue =>
+              val c = field(d.rs3.get)
+              if (vector) ComputeOp.VMac(rd, a, b, c, broadcast) else ComputeOp.Mac(rd, a, b, c)
+            case _ =>
+              if (vector) ComputeOp.VMul(rd, a, b, broadcast) else ComputeOp.Mul(rd, a, b)
           }
         }
       val memory: MemoryOp =
         if (!d.memory.valid.peek().litToBoolean) MemoryOp.Nop
         else {
           val (reg, addr) = (field(d.memory.bits.reg), field(d.memory.bits.addr))
-          if (d.memory.bits.kind.peek().litValue == MemoryKind.Ld.litValue) MemoryOp.Ld(reg, addr)
+          val wide = flag(d.memory.bits.wide)
+          if (d.memory.bits.kind.peek().litValue == MemoryKind.Ld.litValue)
+            if (wide) MemoryOp.LdW(reg, addr) else MemoryOp.Ld(reg, addr)
+          else if (wide) MemoryOp.StW(addr, reg)
           else MemoryOp.St(addr, reg)
         }
       vliw.isa.Bundle(compute, memory)
@@ -101,13 +115,23 @@ object CoreDriver {
     host.start.poke(false.B)
   }
 
+  /** Runs the program to done and reads back the registers and the words `readBack`.
+    *
+    * With `stopAtViolation`, the run instead stops in the first cycle in which the core signals a
+    * violation (`io.violation`), before the clock edge at the end of that cycle: it holds reset
+    * over that edge, so that no assertion fires (every assertion of the core is gated by reset) and
+    * the same core can run the next program, whose `start` resets it again. The core itself never
+    * stalls or stops; this is only how a test reads which rules the core signals and when, for many
+    * programs in one build (docs/VERIFIER.md).
+    */
   def run(
       dut: Core,
       machine: MachineDescription,
       words: Vector[Long],
       inputs: Inputs,
       readBack: Set[Int],
-      maxCycles: Int = 2000
+      maxCycles: Int = 2000,
+      stopAtViolation: Boolean = false
   ): CoreRun = {
     start(dut, machine, words, inputs)
     val host = dut.io.host
@@ -121,7 +145,8 @@ object CoreDriver {
       val o = dut.io.observe
       val busy = dut.io.busy.peek().litToBoolean
       val done = dut.io.done.peek().litToBoolean
-      violations ++= signalled(dut)
+      val now = signalled(dut)
+      violations ++= now
       val issue: ujson.Value =
         if (!busy) ujson.Null
         else
@@ -142,27 +167,34 @@ object CoreDriver {
         "busy" -> busy,
         "done" -> done
       )
-      // Writes performed in this cycle become visible in the next one.
+      if (stopAtViolation && now.nonEmpty) {
+        dut.reset.poke(true.B)
+        dut.clock.step()
+        dut.reset.poke(false.B)
+        return CoreRun(cycle, lines.result(), Vector.empty, Map.empty, now, Some(cycle))
+      }
+      // Writes performed in this cycle become visible in the next one. A pair (mvp-2) is two
+      // commits of one port, in register order; ST.W two words, in address order (docs/TRACE.md).
       val rf = Seq("compute", "memory")
         .zip(o.rfCommit)
         .collect {
           case (port, c) if c.valid.peek().litToBoolean =>
-            ujson.Obj(
-              "reg" -> c.bits.reg.peek().litValue.toInt,
-              "value" -> c.bits.data.peek().litValue.toDouble,
-              "port" -> port
-            )
+            val reg = c.bits.reg.peek().litValue.toInt
+            def commit(r: Int, value: UInt) =
+              ujson.Obj("reg" -> r, "value" -> value.peek().litValue.toDouble, "port" -> port)
+            if (c.bits.pair.exists(_.peek().litToBoolean))
+              Vector(commit(reg, c.bits.data), commit(reg + 1, c.bits.data1.get))
+            else Vector(commit(reg, c.bits.data))
         }
+        .flatten
         .toVector
-      val mem =
-        if (o.memCommit.valid.peek().litToBoolean)
-          Vector(
-            ujson.Obj(
-              "addr" -> o.memCommit.bits.addr.peek().litValue.toInt,
-              "value" -> o.memCommit.bits.data.peek().litValue.toDouble
-            )
+      val mem = (Seq(o.memCommit) ++ o.memCommit1).collect {
+        case c if c.valid.peek().litToBoolean =>
+          ujson.Obj(
+            "addr" -> c.bits.addr.peek().litValue.toInt,
+            "value" -> c.bits.data.peek().litValue.toDouble
           )
-        else Vector.empty
+      }.toVector
       visibleNow = (rf, mem)
       finished = done
       if (!finished) {

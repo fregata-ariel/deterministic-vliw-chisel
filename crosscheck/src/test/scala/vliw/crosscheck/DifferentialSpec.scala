@@ -13,6 +13,7 @@ import vliw.sim.{Commit, ReferenceModel}
   */
 class DifferentialSpec extends AnyFunSuite {
   import DifferentialSpec.{Gen, Judged}
+  import WPrograms.{Shapes, computeWrite, isVector, writing}
 
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
   private val codec = new BundleCodec(machine)
@@ -275,35 +276,6 @@ class DifferentialSpec extends AnyFunSuite {
   private def macs(b: Vector[Bundle]): Vector[(ComputeOp.Mac, Int)] =
     b.zipWithIndex.collect { case (Bundle(op: ComputeOp.Mac, _), s) => (op, s) }
 
-  /** The mnemonic of a Compute operation and the registers it writes (two for W). */
-  private def computeWrite(op: ComputeOp): Option[(String, Seq[Int])] = op match {
-    case ComputeOp.Add(d, _, _)         => Some("ADD" -> Seq(d))
-    case ComputeOp.Sub(d, _, _)         => Some("SUB" -> Seq(d))
-    case ComputeOp.Mul(d, _, _)         => Some("MUL" -> Seq(d))
-    case ComputeOp.Mac(d, _, _, _)      => Some("MAC" -> Seq(d))
-    case ComputeOp.VAdd(d, _, _)        => Some("VADD" -> Seq(d, d + 1))
-    case ComputeOp.VSub(d, _, _)        => Some("VSUB" -> Seq(d, d + 1))
-    case ComputeOp.VMul(d, _, _, _)     => Some("VMUL" -> Seq(d, d + 1))
-    case ComputeOp.VMac(d, _, _, _, _)  => Some("VMAC" -> Seq(d, d + 1))
-    case ComputeOp.Nop | ComputeOp.Halt => None
-  }
-
-  /** The mnemonic of a LD or LD.W and the registers it writes. */
-  private def loadWrite(op: MemoryOp): Option[(String, Seq[Int])] = op match {
-    case MemoryOp.Ld(d, _)                                     => Some("LD" -> Seq(d))
-    case MemoryOp.LdW(d, _)                                    => Some("LD.W" -> Seq(d, d + 1))
-    case MemoryOp.St(_, _) | MemoryOp.StW(_, _) | MemoryOp.Nop => None
-  }
-
-  /** Whether an operation issued before cycle t writes `reg` and its value is not yet visible at t.
-    */
-  private def writing(m: MachineDescription, b: Vector[Bundle], t: Int, reg: Int): Boolean =
-    (0 until t).exists { s =>
-      (computeWrite(b(s).compute) ++ loadWrite(b(s).memory)).exists { case (op, rs) =>
-        rs.contains(reg) && t < s + m.operation(op).latency
-      }
-    }
-
   /** The shapes of MAC that the generator must produce: rd = rs3; rs3 (and neither rs1 nor rs2)
     * being written; MAC and ST in one bundle; a MAC(s) and an ADD, SUB or MUL issued later that
     * commit at the same boundary (L5: at s + 1 with MAC latency 2, MUL at s + 1 or ADD/SUB at s + 2
@@ -385,184 +357,8 @@ class DifferentialSpec extends AnyFunSuite {
         s"$f (tests/machines)" -> load(java.nio.file.Paths.get("tests", "machines", s"$f.json"))
       }
 
-  /** Programs of ISA mvp-2 on r0..r5 (the pairs r0:r1, r2:r3 and r4:r5) and the words 0..5: the
-    * scalar operations, VADD, VSUB, VMUL and VMAC (half of them broadcast, a third of the VMACs
-    * with rd = rs3), and on W-full LD.W and ST.W, at an odd address two times in five. One wide
-    * access in 16 is at 510 or 511, whose second word is 511 or 512 (L7 on 512 words).
-    */
-  private def wProgram(rng: Random, m: MachineDescription): Vector[Bundle] = {
-    def r = rng.nextInt(6)
-    def p = 2 * rng.nextInt(3)
-    def a = rng.nextInt(6)
-    def wide = if (rng.nextInt(16) == 0) 510 + rng.nextInt(2) else rng.nextInt(5)
-    def compute: ComputeOp = rng.nextInt(16) match {
-      case 0 | 1 | 2 => ComputeOp.Nop
-      case 3         => ComputeOp.Add(r, r, r)
-      case 4         => ComputeOp.Sub(r, r, r)
-      case 5         => ComputeOp.Mul(r, r, r)
-      case 6         =>
-        val d = r
-        ComputeOp.Mac(d, r, r, if (rng.nextInt(3) == 0) d else r)
-      case 7 | 8   => ComputeOp.VAdd(p, p, p)
-      case 9       => ComputeOp.VSub(p, p, p)
-      case 10 | 11 =>
-        val b = rng.nextBoolean()
-        val d = p
-        ComputeOp.VMul(d, if (b) r else p, p, b)
-      case 12 | 13 =>
-        val b = rng.nextBoolean()
-        val d = p
-        val x = if (b) r else p
-        ComputeOp.VMac(d, x, p, if (rng.nextInt(3) == 0) d else p, b)
-      case 14 => ComputeOp.Halt
-      case _  => ComputeOp.Nop
-    }
-    def memory: MemoryOp = rng.nextInt(if (m.hasWideMemory) 6 else 4) match {
-      case 0 | 1 => MemoryOp.Nop
-      case 2     => MemoryOp.Ld(r, a)
-      case 3     => MemoryOp.St(a, r)
-      case 4     => MemoryOp.LdW(p, wide)
-      case _     => MemoryOp.StW(wide, p)
-    }
-    val body = Vector.fill(rng.nextInt(8)) {
-      val c = compute
-      Bundle(c, if (c == ComputeOp.Halt) MemoryOp.Nop else memory)
-    }
-    rng.nextInt(10) match {
-      case 0     => body
-      case 1 | 2 => body ++ Vector.fill(rng.nextInt(3))(Bundle.Nop) :+ Bundle(ComputeOp.Halt)
-      case _     => body :+ Bundle.Nop :+ Bundle.Nop :+ Bundle(ComputeOp.Halt)
-    }
-  }
-
-  /** Declares each of r0..r5 and of the words 0..5, 510 and 511 with probability 9/10. */
-  private def wInputs(rng: Random): Inputs =
-    Inputs(
-      (0 until 6).filter(_ => rng.nextInt(10) != 0).map(_ -> (rng.nextLong() & 0xffffffffL)).toMap,
-      ((0 until 6) ++ Seq(510, 511))
-        .filter(_ => rng.nextInt(10) != 0)
-        .map(_ -> (rng.nextLong() & 0xffffffffL))
-        .toMap
-    )
-
-  private def wGen(m: MachineDescription) = Gen(wProgram(_, m), wInputs)
-
-  /** The operand fields of a bundle, each with the registers it reads. */
-  private def fields(b: Bundle): Seq[Seq[Int]] = {
-    def pair(p: Int) = Seq(p, p + 1)
-    def rs1(x: Int, bc: Boolean) = if (bc) Seq(x) else pair(x)
-    val compute = b.compute match {
-      case ComputeOp.Add(_, x, y)         => Seq(Seq(x), Seq(y))
-      case ComputeOp.Sub(_, x, y)         => Seq(Seq(x), Seq(y))
-      case ComputeOp.Mul(_, x, y)         => Seq(Seq(x), Seq(y))
-      case ComputeOp.Mac(_, x, y, z)      => Seq(Seq(x), Seq(y), Seq(z))
-      case ComputeOp.VAdd(_, x, y)        => Seq(pair(x), pair(y))
-      case ComputeOp.VSub(_, x, y)        => Seq(pair(x), pair(y))
-      case ComputeOp.VMul(_, x, y, bc)    => Seq(rs1(x, bc), pair(y))
-      case ComputeOp.VMac(_, x, y, z, bc) => Seq(rs1(x, bc), pair(y), pair(z))
-      case ComputeOp.Nop | ComputeOp.Halt => Nil
-    }
-    val memory = b.memory match {
-      case MemoryOp.St(_, r)  => Seq(Seq(r))
-      case MemoryOp.StW(_, r) => Seq(pair(r))
-      case _                  => Nil
-    }
-    compute ++ memory
-  }
-
-  private def isVector(op: ComputeOp) = op match {
-    case _: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac => true
-    case _                                                                             => false
-  }
-
-  /** The operations of a program that write registers: (issue, port, latency, registers). */
-  private def portUses(m: MachineDescription, b: Vector[Bundle]) =
-    b.zipWithIndex.flatMap { case (x, s) =>
-      computeWrite(x.compute).map { case (op, rs) =>
-        (s, Slot.Compute, m.operation(op).latency, rs)
-      } ++
-        loadWrite(x.memory).map { case (op, rs) => (s, Slot.Memory, m.operation(op).latency, rs) }
-    }
-
-  /** Shapes the W generator must produce, and what each implies. */
-  private object Shapes {
-
-    /** A pair field (or ST.W's source) whose second register, and no other register the bundle
-      * reads, is being written: L3 applies to each register of a pair.
-      */
-    def secondLaneWritten(m: MachineDescription, b: Vector[Bundle]) = b.indices.exists { t =>
-      val fs = fields(b(t))
-      val written = fs.flatten.filter(writing(m, b, t, _)).toSet
-      fs.exists(f => f.size == 2 && written == Set(f(1)))
-    }
-
-    /** Two operations commit through one port at one boundary, one of them moving a pair. */
-    def pairPortClash(m: MachineDescription, b: Vector[Bundle]) = {
-      val uses = portUses(m, b)
-      uses.exists { case (s, p, l, rs) =>
-        rs.size == 2 && uses.exists { case (t, q, k, _) => t != s && q == p && t + k == s + l }
-      }
-    }
-
-    /** One vector operation or LD.W, so one use of a port for two registers. */
-    def pairCommit(m: MachineDescription, b: Vector[Bundle]) = portUses(m, b).exists(_._4.size == 2)
-
-    /** A broadcast rs1 r(x) whose r(x + 1) has no value: a broadcast reads one register. */
-    def broadcastAlone(b: Vector[Bundle], in: Inputs) = b.zipWithIndex.exists {
-      case (Bundle(ComputeOp.VMul(_, x, _, true), _), t)    => undefined(b, in, t, x + 1)
-      case (Bundle(ComputeOp.VMac(_, x, _, _, true), _), t) => undefined(b, in, t, x + 1)
-      case _                                                => false
-    }
-    private def undefined(b: Vector[Bundle], in: Inputs, t: Int, reg: Int) =
-      !in.registers.contains(reg) && (0 until t).forall { s =>
-        (computeWrite(b(s).compute) ++ loadWrite(b(s).memory)).forall(!_._2.contains(reg))
-      }
-
-    /** A register written as half of a pair and, at another time, alone (a partial pair update). */
-    def partialUpdate(m: MachineDescription, b: Vector[Bundle]) = {
-      val uses = portUses(m, b)
-      uses.exists { case (s, _, _, rs) =>
-        rs.size == 2 && uses.exists { case (t, _, _, qs) =>
-          t != s && qs.size == 1 && rs.contains(qs.head)
-        }
-      }
-    }
-
-    /** VMAC or MAC with ST or ST.W: four fields. */
-    def rs3Store(b: Vector[Bundle]) = b.exists {
-      case Bundle(_: ComputeOp.Mac | _: ComputeOp.VMac, _: MemoryOp.St | _: MemoryOp.StW) => true
-      case _                                                                              => false
-    }
-
-    /** LD.W at an odd address: its second word is in the next row of bank 0. */
-    def oddWide(b: Vector[Bundle]) = b.exists {
-      case Bundle(_, MemoryOp.LdW(_, a)) => a % 2 == 1
-      case _                             => false
-    }
-
-    /** The words each bundle loads and stores, with the store latency. */
-    private def loads(x: Bundle) = x.memory match {
-      case MemoryOp.Ld(_, a)  => Seq(a)
-      case MemoryOp.LdW(_, a) => Seq(a, a + 1)
-      case _                  => Nil
-    }
-    private def stores(m: MachineDescription, x: Bundle) = x.memory match {
-      case MemoryOp.St(a, _)  => Seq(a).map(_ -> m.operation("ST").latency)
-      case MemoryOp.StW(a, _) => Seq(a, a + 1).map(_ -> m.operation("ST.W").latency)
-      case _                  => Nil
-    }
-
-    /** A load of a word, at least one being a word of LD.W or ST.W, inside a store's interval. */
-    def wordInFlight(m: MachineDescription, b: Vector[Bundle]) = b.indices.exists { t =>
-      val wide =
-        (x: Bundle) => x.memory.isInstanceOf[MemoryOp.LdW] || x.memory.isInstanceOf[MemoryOp.StW]
-      (0 until t).exists { s =>
-        (wide(b(s)) || wide(b(t))) && stores(m, b(s)).exists { case (w, l) =>
-          loads(b(t)).contains(w) && t < s + l
-        }
-      }
-    }
-  }
+  /** The programs of ISA mvp-2 ([[WPrograms]], shared with the RTL's [[RtlMvp2Spec]]). */
+  private def wGen(m: MachineDescription) = Gen(WPrograms.program(_, m), WPrograms.inputs)
 
   test(
     "ISA mvp-2: verifier and reference model agree on W-full, W-reg, 4 read ports and the variants"

@@ -27,12 +27,13 @@
 | [`w_broadcast`](w_broadcast.json) | 合法 | B=1 の rs1 は1つのレジスタで、両方のレーンに使う。奇数のレジスタ（r1）からのブロードキャストで、r2 は入力宣言しない。rs1 は r[rd+1] でもよく、rd = rs3 の累算は旧い値を読む | 5 cycles、machine-mvp2.json |
 | [`w_lanes`](w_lanes.json) | 合法 | VADD・VSUB・VMUL・VMAC はレーンごとに 2^32 を法とする。桁上がり・借り・積の上位 bit はレーンをまたがない。VMAC の加数は同じレーンの rs3 | 7 cycles、machine-mvp2.json |
 | [`w_ldw_last_words`](w_ldw_last_words.json) | 合法 | 512語の machine で LD.W [510] は語 510 と 511 を読む（合法の端） | 4 cycles、machine-mvp2.json |
-| [`w_ldw_odd_address`](w_ldw_odd_address.json) | 合法 | LD.W・ST.W の奇数の番地: レーン0 は語 a（bank 1）、レーン1 は語 a+1（bank 0 の次の行）。偶数の番地と、ST.W の2語を LD で読み直す | 9 cycles、machine-mvp2.json |
+| [`w_ldw_odd_address`](w_ldw_odd_address.json) | 合法 | LD.W・ST.W の奇数の番地: レーン0 は語 a（bank 1）、レーン1 は語 a+1（bank 0 の次の行）。偶数の番地と、ST.W の2語を LD で読み直す | 9 cycles、machine-mvp2.json、golden trace |
 | [`w_metrics_example`](w_metrics_example.json) | 合法 | docs/METRICS.md の vliw-metrics/3 の例（奇数の番地の LD.W、ブロードキャストの VMUL、ST.W） | 7 cycles、machine-mvp2.json |
 | [`w_mw1_gather`](w_mw1_gather.json) | 合法 | W-reg: スカラーの LD 2つで組を集め、VMUL・VMAC の結果をスカラーの ST 2つで書く | 10 cycles、mvp2_mw1.json |
-| [`w_pair_commits`](w_pair_commits.json) | 合法 | L5 は操作で数える: ベクトル演算と LD.W は2つのレジスタを1回のポートの使用で commit する。同じ境界の VMUL と LD.W は別のポート。VMAC と LD.W、VMUL と ST.W は欄3つ（L11） | 6 cycles、machine-mvp2.json |
+| [`w_pair_commits`](w_pair_commits.json) | 合法 | L5 は操作で数える: ベクトル演算と LD.W は2つのレジスタを1回のポートの使用で commit する。同じ境界の VMUL と LD.W は別のポート。VMAC と LD.W、VMUL と ST.W は欄3つ（L11） | 6 cycles、machine-mvp2.json、golden trace |
 | [`w_partial_pair_update`](w_partial_pair_update.json) | 合法 | 組の部分更新: VMUL の組の r5 だけを、区間が重ならない ADD が書き直す。スカラーの LD 2つで集めた組を VADD が読む | 6 cycles、machine-mvp2.json |
 | [`w_rp4_vmac_store`](w_rp4_vmac_store.json) | 合法 | 読出しポートが4本の構成では、VMAC と ST・ST.W を同じ bundle に置ける（欄4） | 4 cycles、mvp2_rp4.json |
+| [`w_saxpy8_hand`](w_saxpy8_hand.json) | 合法 | W-full の手書きの saxpy8（#110 のオーナーの進め方の1）: a のブロードキャストと rd = rs3 の VMAC 4つ、偶数の番地の LD.W と奇数の番地の ST.W。入力と出力は `crosscheck/HandComputedSpec` と同じ（out(i) = 13(i+1)）。VMAC と ST.W は別の bundle（L11） | 15 cycles、machine-mvp2.json |
 | [`w_vii_ldw_same_bank`](w_vii_ldw_same_bank.json) | 合法 | ST のレイテンシーが2の構成で、書込み中の語 16 と同じ bank の別の語 18（次の行）を LD.W [17] が読める | 5 cycles、mvp2_vii.json |
 | [`w_vii_spaced`](w_vii_spaced.json) | 合法 | 新しい6つの演算の II が2の構成で、各演算をちょうど II 空けて発行する。VADD の直後に VSUB を発行できる。ST.W の語はちょうど s+2 から読める | 10 cycles、mvp2_vii.json |
 | [`w_vlat_spacing`](w_vlat_spacing.json) | 合法 | 新しい演算のレイテンシーを変えた構成（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3）。結果は s+L から見える | 9 cycles、mvp2_vlat.json |
@@ -101,8 +102,9 @@
 | `crosscheck/DifferentialSpec` | 乱数で作ったプログラムで、verifierと参照モデルの判定が一致すること（既定の構成と、レイテンシー・II・容量を変えた4構成）。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json`・`mvp1_rp4.json`・`mvp1_mac3.json` と、MAC の II を2にした構成の4つ。生成器は rd = rs3、書込み中の rs3（L3）、同じ bundle の MAC と ST（読出し3本で L11、4本で合法）、MAC と後の ADD/SUB/MUL の書戻しポートの衝突（L5）を作り、参照モデルが最初に当たる規則はすべて出る（mvp-1 では L11 と、MAC の II が2の構成の L9 を含む）。合法なプログラムで、cyclesとcommit時刻が入力値に依存しないこと。ISA mvp-2 では W の演算を含むプログラムで、`machine-mvp2.json`・`mvp2_mw1.json`・`mvp2_rp4.json`・`mvp2_vlat.json`・`mvp2_vii.json` の5つ。生成器は r0〜r5（組 r0:r1・r2:r3・r4:r5）と語 0〜5 を使い、ブロードキャスト、rd = rs3、奇数の番地の LD.W・ST.W、語 511・512 へのアクセス（W-full の L7）を作る。組だけの commit が合法であること（L5 は操作ごと）、組と別の操作が同じ境界で同じポートを使えば L5、組の2つ目のレジスタだけが書込み中なら L3、ブロードキャストの rs1 の次のレジスタが未定義でも合法、組の部分更新が合法、MAC・VMAC と ST・ST.W の bundle は読出し3本で L11（4本で合法）、ST・ST.W のレイテンシーが2の構成で LD.W・ST.W の語ごとの L10 を確かめ、参照モデルが最初に当たる規則はすべて出る（W-full の L7、`mvp2_vii.json` の L9・L10 を含む） |
 | `crosscheck/Mvp2CompatibilitySpec` | mvp-1 のケースとベンチマークの命令列（`machine-mvp1.json`・`mvp1_rp4.json`）と、mvp-0 の合法なもの（`machine.json`）を、追加したキー以外は同じ mvp-2 の machine（`machine-mvp2.json`・`mvp2_rp4.json`）で実行し、verifier の報告、参照モデルの判定・最終状態・cycles・トレースの本体が同じで、ヘッダは `isa`・`machine`・`machine_revision`・`machine_hash` だけが違うこと（[ISA.md](../../docs/ISA.md)「mvp-2: W」の命令列の互換性） |
 | `sim/MetricsSpec` | 合法な全ケースで、メトリクスの値が命令列と整合すること。ISA mvp-2 では `vliw-metrics/3` の操作の数・レジスタの語の数・転送の語の数（docs/METRICS.md の例を手で計算した値で固定） |
-| `hw/CaseSpec` | 合法な全ケースを RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
-| `hw/AssertionSpec` | 不正な全ケースで、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
+| `hw/CaseSpec` | 合法な全ケース（mvp-2 のものを除く）を RTL で実行し、cycles・最終状態・golden trace が期待値と一致すること |
+| `hw/AssertionSpec` | 不正な全ケース（mvp-2 のものを除く）で、期待した規則の RTL assertion が発火すること（L8 だけのケースは最後まで実行される） |
+| `crosscheck/RtlMvp2Spec` | mvp-2 のケースを、RTL が対応する machine（`machine-mvp2.json`・`mvp2_mw1.json`・`mvp2_vlat.json`）ごとに1回のビルドで実行する（#110 の第3段）。合法なケースは期待値・golden trace・参照モデルのトレースと一致し、不正なケースは最初に違反したサイクルで止めて（`CoreDriver.run` の `stopAtViolation`）、RTL が知らせた規則がケースの規則に含まれ、L8 だけのケースは最後まで実行される。ビルドの最後に、1つのケースで assertion が実際に発火する（`w_vmac_stw_fields` の L11、`w_ldw_on_wreg` の L1、`w_vlat_vmul_mul_port` の L5）。乱数の W のプログラム（`WPrograms`）も同じビルドで参照モデル・verifier と照合する |
 | `crosscheck/CompiledKernelSpec` | DSL のベンチマークを list scheduling と register allocation で命令列にし、最終検査に合格し、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出すこと。ISA mvp-1 では、MUL + ADD を MAC に融合した DAG から、レジスタ16・12・8本で作る。MAC の命令は融合した組の数だけあり、読出し3本の構成では MAC と ST が同じ bundle に無い（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`。RTL はレジスタ16本の構成で、12本・8本の命令列も実行する） |
 | `crosscheck/HandComputedSpec` | ベンチマークを記録した規模で、手で計算した出力と一致すること（vliw と単一発行、参照モデルと RTL）。ISA mvp-1 の MAC を含む命令列でも同じ出力になること（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json`） |
 | `crosscheck/BenchmarkSpec` | `benchmarks/` の記録がソースから生成し直した内容と一致し、記録した命令列が参照モデルと RTL で期待どおりになること |
@@ -110,9 +112,9 @@
 | `crosscheck/ModuloKernelSpec` | ループのベンチマークを Modulo Scheduling（#68）で命令列にし、参照モデルと RTL で DSL の参照実装と同じ結果を、スケジュールどおりの cycles で出し、トレースから読んだ II が記録した II と一致すること（`ModuloTrace`）。ISA mvp-1 では、ループごとの融合の判定（`mvp1_mac3.json` の `dot8` は MII が上がるので融合しない）、II と cycles、融合したループの MAC の命令を確かめる（参照モデルは mvp-1 の3構成、RTL は `machine-mvp1.json` と `mvp1_mac3.json`） |
 | `crosscheck/FixedPipelineKernelSpec` | ベンチマークの固定パイプライン（#75）を ChiselSim で実行し、乱数・全0・全1の入力で DSL の参照実装と同じ出力を、計画どおりの cycles と発行・書戻しの cycle で出すこと。FIR の係数を変えても同じ回路で正しいこと（係数可変） |
 | `crosscheck/RtlDifferentialSpec` | 乱数で作った合法プログラムで、RTL と参照モデルのトレースと最終状態が一致すること（既定の構成と、RTL が対応する範囲でレイテンシー・レジスタ数・bank 数を変えた2構成。ISA mvp-1 では MAC を含むプログラムで、`machine-mvp1.json` と `mvp1_mac3.json`）。RTL のタイミングが入力値に依存しないこと |
-| `crosscheck/InitStateSpec` | すべてのレジスタとメモリを全 0・全 1 から始めた RTL（`simulateInit`、#129）で、L8 だけに反するカナリア（未定義のレジスタと、各 bank の未定義の語を読む）が初期値（add のカナリアは 1 + 初期値）を commit すること、`RtlDifferentialSpec` の合法なプログラム 50 個のトレース・cycles・定義された最終値が参照モデルと一致すること、プログラムが書かない語と r4〜最後から2番目のレジスタが初期値のままであること（番号のすべての bit が 1 のレジスタは、最初の reset の境界で書かれることがあるので、最初の実行の後の値から変わらないこと）。既定の構成は全 0 と全 1、mvp-1 の2構成と `RtlDifferentialSpec` の2構成は全 1 で走らせる。saxpy8 の固定パイプラインを全 1 で、計画どおりの出力・cycles・発行と書戻しの cycle と、書かない語の値。乱数の初期値は、ほかのすべてのテストが受け持つ |
+| `crosscheck/InitStateSpec` | すべてのレジスタとメモリを全 0・全 1 から始めた RTL（`simulateInit`、#129）で、L8 だけに反するカナリア（未定義のレジスタと、各 bank の未定義の語を読む）が初期値（add のカナリアは 1 + 初期値）を commit すること、`RtlDifferentialSpec` の合法なプログラム 50 個のトレース・cycles・定義された最終値が参照モデルと一致すること、プログラムが書かない語と r4〜最後から2番目のレジスタが初期値のままであること（番号のすべての bit が 1 のレジスタは、最初の reset の境界で書かれることがあるので、最初の実行の後の値から変わらないこと）。既定の構成は全 0 と全 1、mvp-1 の2構成と `RtlDifferentialSpec` の2構成は全 1 で走らせる。mvp-2 の `machine-mvp2.json` も全 1 で走らせる（`RtlMvp2Spec` と同じ seed の W の合法なプログラム 50 個。カナリアに、RF の両方の bank を読む VADD、未定義のレジスタのブロードキャストの VMUL、奇数の番地の LD.W を足す。最初の reset の境界で書かれることがあるのは、最上位の組 r14:r15）。saxpy8 の固定パイプラインを全 1 で、計画どおりの出力・cycles・発行と書戻しの cycle と、書かない語の値。乱数の初期値は、ほかのすべてのテストが受け持つ |
 
-RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.json`、#110 の第3段までの mvp-2 の machine）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
+RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.json`、`mvp2_rp4.json`、`mvp2_vii.json`）のケースは、`hw` のテストではスキップとして表示し、検証済みには数えない（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。
 
 新しいケースは `tests/cases/<name>.json` に置けば、上のテストすべてが自動的に対象にする。
 
@@ -131,10 +133,10 @@ RTL が対応しない構成（`slow_units.json`、`ii_units.json`、`mvp1_rp4.j
 | `config/machine-mvp2.json` | ISA mvp-2 の既定の構成（W-full）: mvp-1 に W の演算と LD.W・ST.W を足したもの（[ADR-0022](../../docs/DECISIONS.md)） | `w_*`（下の変種のものを除く）。`crosscheck` の ISA mvp-2 のテスト |
 | `tests/machines/mvp2_mw1.json` | mvp-2 の W-reg: `max_words_per_access` 1 で、LD.W・ST.W が無い | `w_mw1_gather`、`w_ldw_on_wreg`。`crosscheck` の ISA mvp-2 のテスト |
 | `tests/machines/mvp2_rp4.json` | mvp-2 で読出しポートだけ4本（制約なしの比較用。RTL の範囲外） | `w_rp4_vmac_store`。`crosscheck` の ISA mvp-2 のテスト（verifier と参照モデル） |
-| `tests/machines/mvp2_vlat.json` | mvp-2 で新しい演算のレイテンシーだけ変えたもの（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3） | `w_vlat_*`。`crosscheck` の ISA mvp-2 のテスト（RTL は第3段から） |
+| `tests/machines/mvp2_vlat.json` | mvp-2 で新しい演算のレイテンシーだけ変えたもの（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3） | `w_vlat_*`。`crosscheck` の ISA mvp-2 のテスト（RTL を含む） |
 | `tests/machines/mvp2_vii.json` | mvp-2 で新しい6つの演算の II を2、ST と ST.W のレイテンシーを2にしたもの（ST.W のレイテンシーは ST と同じでなければならない。RTL の範囲外） | `w_vii_*`。`crosscheck` の ISA mvp-2 のテスト（verifier と参照モデル） |
 
-mvp-2 の machine を使うケース（`w_*`）は、#110 の第2段で verifier と参照モデルと一緒に足した。期待値は、ほかのケースと同じく [docs/ISA.md](../../docs/ISA.md)「mvp-2: W」から手で導いた。RTL（第3段まで）とコンパイラ（第4〜5段まで）は mvp-2 の machine を理由付きで拒否するので、`hw` のテストはこれらのケースをスキップとして表示する（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。ローダ・エンコーダ・デコーダ・アセンブラは `isa/Mvp2Spec` が確かめる。
+mvp-2 の machine を使うケース（`w_*`）は、#110 の第2段で verifier と参照モデルと一緒に足した。期待値は、ほかのケースと同じく [docs/ISA.md](../../docs/ISA.md)「mvp-2: W」から手で導いた。第3段から、RTL は `machine-mvp2.json`・`mvp2_mw1.json`・`mvp2_vlat.json` のケースを `crosscheck/RtlMvp2Spec` で実行し、`mvp2_rp4.json`・`mvp2_vii.json` のケースは RTL の範囲外としてスキップを表示する。`hw/CaseSpec`・`hw/AssertionSpec` は mvp-2 のケースを除く（ケースごとにビルドすると CI の時間に収まらない）。コンパイラ（第4〜5段まで）は mvp-2 の machine を理由付きで拒否する（[MACHINE.md](../../docs/MACHINE.md)「実装ごとの対応範囲」）。`w_pair_commits` と `w_ldw_odd_address` の golden trace と、`w_saxpy8_hand` は第3段で足した。ローダ・エンコーダ・デコーダ・アセンブラは `isa/Mvp2Spec` が確かめる。
 
 ## mutation チェック
 

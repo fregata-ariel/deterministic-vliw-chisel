@@ -55,6 +55,10 @@ class DecoderSpec extends AnyFunSuite with VliwChiselSim {
         decodes(dut, BigInt((opcode.toLong << 28) | (5 << 24) | (1 << 20) | (2 << 16) | (3 << 12)))
         out.illegal.expect(true.B, s"opcode $opcode with bits 15:12 set")
       }
+      // ISA mvp-2's VMAC word of docs/ISA.md: on mvp-1, Compute opcode 8 is unknown (L1).
+      decodes(dut, BigInt(0x84268800L))
+      out.illegal.expect(true.B, "opcode 8 on mvp-1")
+      out.compute.valid.expect(false.B)
     }
   }
 

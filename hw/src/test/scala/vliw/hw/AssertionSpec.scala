@@ -7,11 +7,17 @@ import vliw.isa._
 
 /** Every illegal case in tests/cases must stop the RTL with an assertion of an expected rule. L8
   * (undefined values) is outside the RTL: the hardware holds no definedness state.
+  *
+  * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, many programs per build of each
+  * machine (#110 stage 3): one build per case here would not fit the CI's time.
   */
 class AssertionSpec extends AnyFunSuite with VliwChiselSim {
   private val FiredRule = """Assertion failed: (L\d+) """.r.unanchored
 
-  private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)
+  private val cases = TestCase
+    .loadAll()
+    .fold(es => fail(es.mkString("\n")), identity)
+    .filter(_.machine.isaVersion != IsaVersion.Mvp2)
 
   /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */
   private def outside(c: TestCase) =

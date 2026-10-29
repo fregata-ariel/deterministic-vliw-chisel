@@ -7,9 +7,16 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.isa._
 
-/** Every legal case in tests/cases, run on the RTL, against its hand-written expectations. */
+/** Every legal case in tests/cases, run on the RTL, against its hand-written expectations.
+  *
+  * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, many programs per build of each
+  * machine (#110 stage 3): one build per case here would not fit the CI's time.
+  */
 class CaseSpec extends AnyFunSuite with VliwChiselSim {
-  private val cases = TestCase.loadAll().fold(es => fail(es.mkString("\n")), identity)
+  private val cases = TestCase
+    .loadAll()
+    .fold(es => fail(es.mkString("\n")), identity)
+    .filter(_.machine.isaVersion != IsaVersion.Mvp2)
 
   /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */
   private def outside(c: TestCase) =

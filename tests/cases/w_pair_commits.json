@@ -46,6 +46,7 @@
       "11": 21,
       "12": 65,
       "13": 161
-    }
+    },
+    "trace": "tests/golden/w_pair_commits.trace.jsonl"
   }
 }

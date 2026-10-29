@@ -14,7 +14,7 @@
 
 `isa` は machine description の `isa_version`（`mvp-0`、`mvp-1`、`mvp-2`）。形式はどの版でも同じである。mvp-1 の MAC は、`issue.compute` に `mac rd, rs1, rs2, rs3` と書き、結果は `port` が `compute` の `rf_commit` に入る（[ISA.md](ISA.md)「mvp-1: MAC」）。
 
-mvp-2 の W（[ISA.md](ISA.md)「mvp-2: W」）も `vliw-trace/1` のままで、キーを足さない（#78 の質問9、[ADR-0022](DECISIONS.md)）。`issue` は [ASM.md](ASM.md) の正規形で書く（例: `vmul r4:r5, r1, r6:r7`、`st.w [20], r4:r5`）。組の commit は、同じ `port` の `rf_commit` 2つ（レジスタ p と p+1）になり、ST.W は `mem_commit` 2つになる。mvp-2 のトレースは、#110 の第2段から参照モデルが出力する（RTL は第3段から）。
+mvp-2 の W（[ISA.md](ISA.md)「mvp-2: W」）も `vliw-trace/1` のままで、キーを足さない（#78 の質問9、[ADR-0022](DECISIONS.md)）。`issue` は [ASM.md](ASM.md) の正規形で書く（例: `vmul r4:r5, r1, r6:r7`、`st.w [20], r4:r5`）。組の commit は、同じ `port` の `rf_commit` 2つ（レジスタ p と p+1）になり、ST.W は `mem_commit` 2つになる。mvp-2 のトレースは、#110 の第2段から参照モデルが、第3段から RTL のテスト（`vliw.hw.CoreDriver`）が出力する。
 
 ## 本体
 
@@ -43,7 +43,7 @@ mvp-2 の W（[ISA.md](ISA.md)「mvp-2: W」）も `vliw-trace/1` のままで�
 
 ## 出力方法
 
-RTL のトレースは、テスト用の `vliw.hw.CoreDriver` がコアの観測ポートから同じ形式で作る。`issue` 欄は、命令語を復号し直すのではなく、RTL の `Decoder` が出した演算の種類・レジスタ・アドレスから組み立てる（#56）。そのため、Decoder の誤りは、値に影響しなくても（例えば可換な演算のソースの入れ替え）トレースの照合で見つかる。L1 に違反する bundle は `?` と表示する。`hw/CaseSpec` が golden trace と、`crosscheck/RtlDifferentialSpec` が参照モデルのトレースと、1行ずつ照合する。
+RTL のトレースは、テスト用の `vliw.hw.CoreDriver` がコアの観測ポートから同じ形式で作る。`issue` 欄は、命令語を復号し直すのではなく、RTL の `Decoder` が出した演算の種類・レジスタ・アドレスから組み立てる（#56）。そのため、Decoder の誤りは、値に影響しなくても（例えば可換な演算のソースの入れ替え）トレースの照合で見つかる。L1 に違反する bundle は `?` と表示する。`hw/CaseSpec` が golden trace と、`crosscheck/RtlDifferentialSpec` が参照モデルのトレースと、1行ずつ照合する。mvp-2 では、組の commit を同じ `port` の2つの `rf_commit`（レジスタ p、p+1 の順）に、ST.W を2つの `mem_commit`（語 a、a+1 の順）にし、ベクトル演算・B・LD.W・ST.W は Decoder の `vector`・`broadcast`・`wide` から組み立てる。`crosscheck/RtlMvp2Spec` が、mvp-2 のケースの golden trace と参照モデルのトレースと照合する。
 
 
 ```sh

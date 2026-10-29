@@ -1,0 +1,74 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_saxpy8_hand",
+  "description": "W-full の手書きの命令列（#110 のオーナーの進め方の1）: saxpy8 の out(i) = a * x(i) + y(i) を、a のブロードキャストの VMAC（rd = rs3 の累算）4つと LD.W・ST.W で書く。入力は crosscheck/HandComputedSpec と同じ a = 3、x = 1..8、y = 10..80 で、out(i) = 13(i+1)。x は語 0..7、y は 8..15、a は 16、out は 17..24（ST.W はすべて奇数の番地）。VMAC と ST.W は同じ bundle に置けない（欄4、L11）。cycles は手で数えた",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0:  nop                                 | ld r1, [16]        ; a, visible from 2",
+    "@1:  nop                                 | ld.w r2:r3, [0]    ; x0 x1, from 3",
+    "@2:  nop                                 | ld.w r4:r5, [8]    ; y0 y1, from 4",
+    "@3:  nop                                 | ld.w r6:r7, [2]    ; x2 x3, from 5",
+    "@4:  vmac r4:r5, r1, r2:r3, r4:r5        | ld.w r8:r9, [10]   ; out0 out1 from 6; y2 y3 from 6",
+    "@5:  nop                                 | ld.w r10:r11, [4]  ; x4 x5, from 7",
+    "@6:  vmac r8:r9, r1, r6:r7, r8:r9        | ld.w r12:r13, [12] ; out2 out3 from 8; y4 y5 from 8",
+    "@7:  nop                                 | st.w [17], r4:r5   ; [17] (bank 1) and [18] (bank 0, next row)",
+    "@8:  vmac r12:r13, r1, r10:r11, r12:r13  | ld.w r2:r3, [6]    ; out4 out5 from 10; x6 x7 from 10",
+    "@9:  nop                                 | ld.w r6:r7, [14]   ; y6 y7, from 11",
+    "@10: nop                                 | st.w [19], r8:r9",
+    "@11: vmac r6:r7, r1, r2:r3, r6:r7        ; out6 out7 from 13; no ST.W beside a VMAC (L11)",
+    "@12: nop                                 | st.w [21], r12:r13",
+    "@13: nop                                 | st.w [23], r6:r7   ; done at E_14",
+    "@14: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 1,
+      "1": 2,
+      "2": 3,
+      "3": 4,
+      "4": 5,
+      "5": 6,
+      "6": 7,
+      "7": 8,
+      "8": 10,
+      "9": 20,
+      "10": 30,
+      "11": 40,
+      "12": 50,
+      "13": 60,
+      "14": 70,
+      "15": 80,
+      "16": 3
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 15,
+    "registers": {
+      "r1": 3,
+      "r2": 7,
+      "r3": 8,
+      "r4": 13,
+      "r5": 26,
+      "r6": 91,
+      "r7": 104,
+      "r8": 39,
+      "r9": 52,
+      "r10": 5,
+      "r11": 6,
+      "r12": 65,
+      "r13": 78
+    },
+    "memory": {
+      "17": 13,
+      "18": 26,
+      "19": 39,
+      "20": 52,
+      "21": 65,
+      "22": 78,
+      "23": 91,
+      "24": 104
+    }
+  }
+}
