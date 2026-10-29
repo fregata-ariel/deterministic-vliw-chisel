@@ -1,0 +1,29 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vii_stw_word_in_flight",
+  "description": "ST.W のレイテンシーが2の構成で、ST.W [4] が書込み中の2つ目の語 5 を LD が読む（L10、語ごと）",
+  "machine": "tests/machines/mvp2_vii.json",
+  "program": [
+    "@0: nop | st.w [4], r2:r3",
+    "@1: nop | ld r6, [5]",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1,
+      "r3": 2
+    },
+    "memory": {
+      "4": 3,
+      "5": 4
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L10"
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_mac_store_form_f",
+  "description": "mvp-2 の L11 は形 F: MAC と ST の bundle は、rs3（r4）と ST のソース（r3）の RF の bank が違っても欄4で不正（形 S なら合法）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: mac r10, r0, r2, r4 | st [0], r3",
+    "@1: nop",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r0": 1,
+      "r2": 2,
+      "r3": 3,
+      "r4": 4
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L11"
+      ]
+    }
+  }
+}

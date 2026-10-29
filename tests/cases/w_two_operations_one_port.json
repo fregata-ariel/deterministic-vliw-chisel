@@ -1,0 +1,26 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_two_operations_one_port",
+  "description": "L5 は操作で数える。VMUL(0) と ADD(1) は、2つの操作がどちらも E_2 に Compute ポートを使うので不正（組の2つのレジスタは1回の使用）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3",
+    "@1: add r6, r1, r2",
+    "@2: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 1,
+      "r2": 2,
+      "r3": 3
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L5"
+      ]
+    }
+  }
+}

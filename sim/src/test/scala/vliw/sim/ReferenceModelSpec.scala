@@ -371,20 +371,168 @@ class ReferenceModelSpec extends AnyFunSuite {
     assert(header("machine_hash").str == mvp1.hash)
   }
 
-  test("ISA mvp-2 is refused until #110 stage 2, not run as mvp-1") {
-    val mvp2 = MachineDescription
-      .load(MachineDescription.Mvp2Path)
-      .fold(es => fail(es.mkString), identity)
-    // An mvp-1 program: legal on mvp-2 by the contract, but the model does not implement mvp-2 yet.
-    val e = intercept[UnsupportedOperationException] {
-      ReferenceModel.run(mvp2, words("add r1, r1, r1\nhalt", mvp2), Inputs(Map(1 -> 1L), Map.empty))
-    }
-    assert(
-      e.getMessage == "ISA mvp-2 is not implemented in the reference model yet (#110 stage 2); " +
-        "machine vliw2-i32-sp2-mac-w2"
+  // ISA mvp-2 (#110 stage 2, docs/ISA.md "mvp-2: W").
+
+  private val mvp2 = MachineDescription
+    .load(MachineDescription.Mvp2Path)
+    .fold(es => fail(es.mkString), identity)
+
+  test("mvp-2 trace: a pair commits as two rf_commit items of one port, ST.W as two mem_commit") {
+    // docs/METRICS.md, the vliw-metrics/3 example: M[0] = 3, M[17] = 5, M[18] = 2^32 - 1.
+    val r = okOn(
+      mvp2,
+      "nop | ld.w r2:r3, [17]\nnop | ld r1, [0]\nnop\nvmul r4:r5, r1, r2:r3\nnop\n" +
+        "nop | st.w [20], r4:r5\nhalt",
+      Map.empty,
+      Map(0 -> 3L, 17 -> 5L, 18 -> 0xffffffffL)
     )
-    // `sim/run` exits 2 with this reason, before it calls run.
-    assert(ReferenceModel.notImplemented(mvp2).contains(e.getMessage))
-    assert(ReferenceModel.notImplemented(mvp1).isEmpty)
+    // Derived by hand: lane 0 of ld.w is word 17 (bank 1), lane 1 word 18 (bank 0, the next row);
+    // vmul broadcasts r1 = 3: 3 * 5 = 15 and 3 * (2^32 - 1) = 2^32 - 3.
+    val expected =
+      """{"cycle":0,"pc":0,"issue":{"compute":"nop","memory":"ld.w r2:r3, [17]"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":1,"pc":1,"issue":{"compute":"nop","memory":"ld r1, [0]"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":2,"pc":2,"issue":{"compute":"nop","memory":"nop"},"rf_commit":[{"reg":2,"value":5,"port":"memory"},{"reg":3,"value":4294967295,"port":"memory"}],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":3,"pc":3,"issue":{"compute":"vmul r4:r5, r1, r2:r3","memory":"nop"},"rf_commit":[{"reg":1,"value":3,"port":"memory"}],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":4,"pc":4,"issue":{"compute":"nop","memory":"nop"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":5,"pc":5,"issue":{"compute":"nop","memory":"st.w [20], r4:r5"},"rf_commit":[{"reg":4,"value":15,"port":"compute"},{"reg":5,"value":4294967293,"port":"compute"}],"mem_commit":[],"busy":true,"done":false}
+        |{"cycle":6,"pc":6,"issue":{"compute":"halt","memory":"nop"},"rf_commit":[],"mem_commit":[{"addr":20,"value":15},{"addr":21,"value":4294967293}],"busy":true,"done":false}
+        |{"cycle":7,"pc":null,"issue":null,"rf_commit":[],"mem_commit":[],"busy":false,"done":true}""".stripMargin
+    assert(canonicalLines(r.trace.bodyLines.mkString("\n")) == canonicalLines(expected))
+    val header = r.trace.header
+    assert(header("trace").str == "vliw-trace/1" && header("isa").str == "mvp-2")
+    assert(
+      header("machine").str == "vliw2-i32-sp2-mac-w2" && header("machine_hash").str == mvp2.hash
+    )
+  }
+
+  test("mvp-2 trace order: the compute port before the memory port, each by register number") {
+    // vmul reads the old r1 in its issue cycle, while ld.w writes r0:r1; both commit at E_2.
+    val r = okOn(
+      mvp2,
+      "vmul r6:r7, r1, r2:r3 | ld.w r0:r1, [0]\nnop\nhalt",
+      Map(1 -> 2L, 2 -> 3L, 3 -> 4L),
+      Map(0 -> 10L, 1 -> 11L)
+    )
+    assert(
+      r.trace.cycles(2).commits == Vector(
+        Commit.Register(6, 6, Slot.Compute),
+        Commit.Register(7, 8, Slot.Compute),
+        Commit.Register(0, 10, Slot.Memory),
+        Commit.Register(1, 11, Slot.Memory)
+      )
+    )
+  }
+
+  test("mvp-2 lanes are modulo 2^32 each, and a broadcast rs1 feeds both lanes") {
+    val m = 0xffffffffL
+    val r = okOn(
+      mvp2,
+      "vadd r4:r5, r0:r1, r2:r3\nvsub r6:r7, r2:r3, r0:r1\nvmul r8:r9, r1, r2:r3\nnop\n" +
+        "vmac r10:r11, r0:r1, r2:r3, r6:r7\nnop\nhalt",
+      Map(0 -> m, 1 -> 1L, 2 -> 1L, 3 -> m)
+    )
+    // (2^32 - 1) + 1 and 1 + (2^32 - 1) are 0 in each lane: no carry from lane 0 into lane 1.
+    assert(r.registers.slice(4, 6) == Vector(Some(0L), Some(0L)))
+    // 1 - (2^32 - 1) = 2 and (2^32 - 1) - 1.
+    assert(r.registers.slice(6, 8) == Vector(Some(2L), Some(m - 1)))
+    // r1 = 1 times r2:r3.
+    assert(r.registers.slice(8, 10) == Vector(Some(1L), Some(m)))
+    // (2^32 - 1) * 1 + 2 = 2^32 + 1 and 1 * (2^32 - 1) + (2^32 - 2) = 2^33 - 3.
+    assert(r.registers.slice(10, 12) == Vector(Some(1L), Some(m - 2)))
+  }
+
+  test("mvp-2 LD.W reads words a and a + 1 as seen in its issue cycle, odd a included") {
+    // ST latency 1: the word 18 stored at cycle 0 is visible to the ld.w at cycle 1, word 17 is not
+    // written. Lane 0 is word 17 (bank 1, row 8) and lane 1 word 18 (bank 0, row 9).
+    val r = okOn(
+      mvp2,
+      "nop | st [18], r1\nnop | ld.w r2:r3, [17]\nnop\nhalt",
+      Map(1 -> 9L),
+      Map(17 -> 4L)
+    )
+    assert(r.registers.slice(2, 4) == Vector(Some(4L), Some(9L)))
+    val w = okOn(mvp2, "nop | st.w [7], r2:r3\nhalt", Map(2 -> 5L, 3 -> 6L))
+    assert(w.memory.slice(7, 9) == Vector(Some(5L), Some(6L)) && w.memory(6).isEmpty)
+  }
+
+  test("mvp-2 runtime checks: per register, per word, and L5 per operation") {
+    val in = Map((0 until 16).map(r => r -> r.toLong): _*)
+    def v(m: MachineDescription, src: String, mem: Map[Int, Long] = Map.empty) =
+      runOn(m, src, in, mem).left.toOption.map(x => (x.rule, x.cycle))
+    // L5: two operations commit through the compute port at E_2; one pair alone is legal.
+    assert(
+      v(mvp2, "vmul r4:r5, r1, r2:r3\nadd r6, r1, r2\nhalt") == Some((Rule.WritebackPort, Some(1)))
+    )
+    assert(
+      v(mvp2, "vmul r4:r5, r1, r2:r3 | ld.w r6:r7, [0]\nnop\nhalt", Map(0 -> 1L, 1 -> 2L)).isEmpty
+    )
+    val vlat = machineFile("mvp2_vlat.json")
+    assert(
+      v(
+        vlat,
+        "nop | ld.w r2:r3, [0]\nnop | ld r4, [2]\nnop\nhalt",
+        Map(0 -> 1L, 1 -> 2L, 2 -> 3L)
+      ) ==
+        Some((Rule.WritebackPort, Some(1)))
+    )
+    // L3 on the second register of a pair, and L4 between a pair and a scalar write.
+    assert(
+      v(mvp2, "vmul r4:r5, r1, r2:r3\nnop | st [0], r5\nnop\nhalt") == Some(
+        (Rule.InFlightRead, Some(1))
+      )
+    )
+    assert(
+      v(mvp2, "vmac r4:r5, r2, r6:r7, r8:r9 | ld r5, [0]\nnop\nhalt", Map(0 -> 1L)) ==
+        Some((Rule.OverlappingWrites, Some(0)))
+    )
+    // A broadcast rs1 reads one register: r2 has no value, and it is not read.
+    val broadcast = runOn(mvp2, "vmul r4:r5, r1, r6:r7\nnop\nhalt", Map(1 -> 2L, 6 -> 3L, 7 -> 4L))
+    assert(broadcast.map(_.registers.slice(4, 6)) == Right(Vector(Some(6L), Some(8L))))
+    val lane = runOn(mvp2, "vadd r4:r5, r2:r3, r6:r7\nhalt", Map(2 -> 1L, 6 -> 1L, 7 -> 1L))
+    assert(lane.left.toOption.map(x => (x.rule, x.cycle)) == Some((Rule.UndefinedRead, Some(0))))
+    // L7 and L8 on the second word.
+    assert(
+      v(mvp2, "nop | ld.w r2:r3, [511]\nnop\nhalt", Map(511 -> 1L)) == Some(
+        (Rule.AddressRange, Some(0))
+      )
+    )
+    assert(v(mvp2, "nop | st.w [511], r2:r3\nhalt") == Some((Rule.AddressRange, Some(0))))
+    assert(
+      v(mvp2, "nop | ld.w r2:r3, [8]\nnop\nhalt", Map(8 -> 1L)) == Some(
+        (Rule.UndefinedRead, Some(0))
+      )
+    )
+    // L10 per word, on a machine whose ST and ST.W take 2 cycles.
+    val vii = machineFile("mvp2_vii.json")
+    val mem = Map(4 -> 1L, 5 -> 2L, 16 -> 3L, 17 -> 4L, 18 -> 5L)
+    assert(
+      v(vii, "nop | st [18], r1\nnop | ld.w r2:r3, [17]\nnop\nhalt", mem) ==
+        Some((Rule.InFlightStoreRead, Some(1)))
+    )
+    assert(v(vii, "nop | st [16], r1\nnop | ld.w r2:r3, [17]\nnop\nhalt", mem).isEmpty)
+    assert(
+      v(vii, "nop | st.w [4], r2:r3\nnop | ld r6, [5]\nnop\nhalt", mem) ==
+        Some((Rule.InFlightStoreRead, Some(1)))
+    )
+    // L9: each new operation has its own unit; L6 and L11 as for the scalar operations.
+    assert(
+      v(vii, "vmul r4:r5, r1, r2:r3\nvmul r6:r7, r1, r2:r3\nnop\nhalt") == Some(
+        (Rule.IssueInterval, Some(1))
+      )
+    )
+    assert(v(vii, "vmul r4:r5, r1, r2:r3\nmul r6, r1, r2\nnop\nhalt").isEmpty)
+    assert(v(vii, "vadd r4:r5, r2:r3, r2:r3\nvsub r6:r7, r2:r3, r2:r3\nhalt").isEmpty)
+    assert(v(mvp2, "vmac r4:r5, r2, r6:r7, r8:r9\nhalt") == Some((Rule.HaltCompletion, Some(1))))
+    assert(
+      v(mvp2, "vmac r4:r5, r2, r6:r7, r8:r9 | st.w [0], r10:r11\nnop\nhalt") == Some(
+        (Rule.ReadPorts, Some(0))
+      )
+    )
+    assert(
+      v(
+        machineFile("mvp2_rp4.json"),
+        "vmac r4:r5, r2, r6:r7, r8:r9 | st.w [0], r10:r11\nnop\nhalt"
+      ).isEmpty
+    )
   }
 }

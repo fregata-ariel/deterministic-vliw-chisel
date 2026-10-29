@@ -1,0 +1,51 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_pair_commits",
+  "description": "L5 は操作で数える。ベクトル演算と LD.W は、2つのレジスタを1回のポートの使用で commit する。同じ境界の VMUL と LD.W は別のポートを使う。続くサイクルの VMUL は E_3 で衝突しない。VMAC と LD.W、VMUL と ST.W の bundle は欄3つで、読出し3本でも合法（L11 は欄で数える）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vmul r4:r5, r1, r2:r3 | ld.w r6:r7, [4] ; both at E_2, one operation per port",
+    "@1: vmul r8:r9, r1, r2:r3                    ; E_3",
+    "@2: vmac r10:r11, r2:r3, r6:r7, r4:r5 | ld.w r12:r13, [6] ; 3 fields, 6 registers",
+    "@3: vmul r14:r15, r1, r8:r9 | st.w [10], r4:r5 ; 3 fields",
+    "@4: nop | st.w [12], r10:r11",
+    "@5: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r1": 3,
+      "r2": 5,
+      "r3": 7
+    },
+    "memory": {
+      "4": 10,
+      "5": 20,
+      "6": 1,
+      "7": 2
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 6,
+    "registers": {
+      "r4": 15,
+      "r5": 21,
+      "r6": 10,
+      "r7": 20,
+      "r8": 15,
+      "r9": 21,
+      "r10": 65,
+      "r11": 161,
+      "r12": 1,
+      "r13": 2,
+      "r14": 45,
+      "r15": 63
+    },
+    "memory": {
+      "10": 15,
+      "11": 21,
+      "12": 65,
+      "13": 161
+    }
+  }
+}

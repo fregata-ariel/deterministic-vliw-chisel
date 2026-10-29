@@ -1,0 +1,24 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_stw_out_of_range",
+  "description": "ST.W [511] は語 511 と 512 に書く。512語の machine では語 512 が範囲外（L7）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: nop | st.w [511], r2:r3",
+    "@1: halt"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1,
+      "r3": 2
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L7"
+      ]
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_odd_pair",
+  "description": "VMAC の rd の組が奇数（r5。0x0000000085268800）は L1。最後は HALT",
+  "machine": "config/machine-mvp2.json",
+  "program_hex": [
+    "0000000085268800",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

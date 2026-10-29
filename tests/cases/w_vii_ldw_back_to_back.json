@@ -1,0 +1,28 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_vii_ldw_back_to_back",
+  "description": "LD.W の II が2の構成で、LD.W を連続するサイクルに発行する（L9）",
+  "machine": "tests/machines/mvp2_vii.json",
+  "program": [
+    "@0: nop | ld.w r2:r3, [0]",
+    "@1: nop | ld.w r4:r5, [2]",
+    "@2: nop",
+    "@3: halt"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 1,
+      "1": 2,
+      "2": 3,
+      "3": 4
+    }
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L9"
+      ]
+    }
+  }
+}

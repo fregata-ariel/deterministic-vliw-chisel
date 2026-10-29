@@ -1,0 +1,21 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_ldw_odd_pair",
+  "description": "LD.W の組が奇数（r11。0x3b08800000000000）は L1。最後は HALT",
+  "machine": "config/machine-mvp2.json",
+  "program_hex": [
+    "3b08800000000000",
+    "00000000f0000000"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L1"
+      ]
+    }
+  }
+}

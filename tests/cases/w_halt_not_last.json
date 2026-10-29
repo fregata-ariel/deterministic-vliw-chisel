@@ -1,0 +1,25 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "w_halt_not_last",
+  "description": "W の演算があっても、HALT は最後の bundle に置く（L2）",
+  "machine": "config/machine-mvp2.json",
+  "program": [
+    "@0: vadd r4:r5, r2:r3, r2:r3",
+    "@1: halt",
+    "@2: nop"
+  ],
+  "inputs": {
+    "registers": {
+      "r2": 1,
+      "r3": 2
+    },
+    "memory": {}
+  },
+  "expect": {
+    "verdict": {
+      "illegal": [
+        "L2"
+      ]
+    }
+  }
+}

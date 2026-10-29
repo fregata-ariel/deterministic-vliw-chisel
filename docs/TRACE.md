@@ -14,7 +14,7 @@
 
 `isa` は machine description の `isa_version`（`mvp-0`、`mvp-1`、`mvp-2`）。形式はどの版でも同じである。mvp-1 の MAC は、`issue.compute` に `mac rd, rs1, rs2, rs3` と書き、結果は `port` が `compute` の `rf_commit` に入る（[ISA.md](ISA.md)「mvp-1: MAC」）。
 
-mvp-2 の W（[ISA.md](ISA.md)「mvp-2: W」）も `vliw-trace/1` のままで、キーを足さない（#78 の質問9、[ADR-0022](DECISIONS.md)）。`issue` は [ASM.md](ASM.md) の正規形で書く（例: `vmul r4:r5, r1, r6:r7`、`st.w [20], r4:r5`）。組の commit は、同じ `port` の `rf_commit` 2つ（レジスタ p と p+1）になり、ST.W は `mem_commit` 2つになる。mvp-2 のトレースは、#110 の第2段で参照モデルが出力する。
+mvp-2 の W（[ISA.md](ISA.md)「mvp-2: W」）も `vliw-trace/1` のままで、キーを足さない（#78 の質問9、[ADR-0022](DECISIONS.md)）。`issue` は [ASM.md](ASM.md) の正規形で書く（例: `vmul r4:r5, r1, r6:r7`、`st.w [20], r4:r5`）。組の commit は、同じ `port` の `rf_commit` 2つ（レジスタ p と p+1）になり、ST.W は `mem_commit` 2つになる。mvp-2 のトレースは、#110 の第2段から参照モデルが出力する（RTL は第3段から）。
 
 ## 本体
 

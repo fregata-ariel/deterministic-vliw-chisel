@@ -219,7 +219,7 @@ Memory word は mvp-0 と同じ。Compute word は次のとおり。
 
 - 演算: Compute スロットの VADD・VSUB・VMUL・VMAC（mvp-2 の machine は必ず持つ）と、Memory スロットの LD.W・ST.W（`scratchpad.max_words_per_access` が2の machine だけが持つ）。2の machine を W-full、1の machine を W-reg と呼ぶ（[MACHINE.md](MACHINE.md)）
 - 命令語の互換性: スカラーの opcode と `register_file.count` が mvp-1 の machine と同じ mvp-2 の machine（既定の machine は `config/machine-mvp1.json` とそうである）では、その mvp-1 の machine で合法な命令語は、どれも同じ操作に decode される。bit 11 を立てた MAC は、MAC の bits 11:0 が予約のままなので、L1 で不正のままである
-- 命令列の互換性: mvp-2 で足したキーを除いて mvp-1 の machine と同じ mvp-2 の machine（スカラーの演算の opcode・latency・II、`register_file.count`・`read_ports`、Scratchpad の容量（`banks`・`words_per_bank`）、`instruction_memory.bundles` が同じもの。既定の machine は `config/machine-mvp1.json` とそうである）では、その mvp-1 の machine で合法な命令列は合法のままで、タイミングも同じである。スカラーの演算については L1〜L11 がどれも変わらないからである（L5 は操作ごと、L11 は欄の数で数えるので、mvp-1 の形のままである）。どれかのキーが違えば、判定は変わり得る（例: Scratchpad が小さければ L7、`read_ports` が違えば L11、レジスタ数が少なければ L1）。#110 の第2段で、mvp-1 のケースとベンチマークの命令列を mvp-2 で実行し、判定・出力・cycles・トレースの本体が同じことを確かめる（ヘッダの `isa`・`machine`・`machine_revision`・`machine_hash` だけが違う）
+- 命令列の互換性: mvp-2 で足したキーを除いて mvp-1 の machine と同じ mvp-2 の machine（スカラーの演算の opcode・latency・II、`register_file.count`・`read_ports`、Scratchpad の容量（`banks`・`words_per_bank`）、`instruction_memory.bundles` が同じもの。既定の machine は `config/machine-mvp1.json` とそうである）では、その mvp-1 の machine で合法な命令列は合法のままで、タイミングも同じである。スカラーの演算については L1〜L11 がどれも変わらないからである（L5 は操作ごと、L11 は欄の数で数えるので、mvp-1 の形のままである）。どれかのキーが違えば、判定は変わり得る（例: Scratchpad が小さければ L7、`read_ports` が違えば L11、レジスタ数が少なければ L1）。#110 の第2段から、mvp-1 のケースとベンチマークの命令列を mvp-2 で実行し、判定・出力・cycles・トレースの本体が同じことを確かめている（ヘッダの `isa`・`machine`・`machine_revision`・`machine_hash` だけが違う。`crosscheck/Mvp2CompatibilitySpec`）
 
 ### 用語
 

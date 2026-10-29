@@ -6,7 +6,7 @@
 sbt "sim/run tests/cases/isa_example.json --metrics out.json"
 ```
 
-実装は `vliw.sim.Metrics`。参照モデルで完了した（合法な）実行だけについて記録する。ISA `mvp-0` の記録は `vliw-metrics/1`、`mvp-1` の記録は `vliw-metrics/2`、`mvp-2` の記録は `vliw-metrics/3` である（「[版の扱い](#版の扱い)」）。`vliw-metrics/3` は #110 の第2段で参照モデルと一緒に実装する。それまでは、`Metrics` は mvp-2 の machine を例外で拒否する（黙って `/1` を書かないため）。
+実装は `vliw.sim.Metrics`。参照モデルで完了した（合法な）実行だけについて記録する。ISA `mvp-0` の記録は `vliw-metrics/1`、`mvp-1` の記録は `vliw-metrics/2`、`mvp-2` の記録は `vliw-metrics/3` である（「[版の扱い](#版の扱い)」）。`vliw-metrics/3` は #110 の第2段で参照モデルと一緒に実装した（第1段では、黙って `/1` を書かないように、`Metrics` が mvp-2 の machine を例外で拒否していた）。
 
 ## 例（ISA例）
 
@@ -71,7 +71,7 @@ sbt "sim/run tests/cases/isa_example.json --metrics out.json"
 |---|---|
 | `mvp-0` | `vliw-metrics/1`（上の形式。mvp-1 を入れても変えない） |
 | `mvp-1` | `vliw-metrics/2`（下の「[vliw-metrics/2](#vliw-metrics2isa-mvp-1)」） |
-| `mvp-2` | `vliw-metrics/3`（下の「[vliw-metrics/3](#vliw-metrics3isa-mvp-2)」。#110 の第2段で実装する） |
+| `mvp-2` | `vliw-metrics/3`（下の「[vliw-metrics/3](#vliw-metrics3isa-mvp-2)」。#110 の第2段で実装した） |
 
 ## vliw-metrics/2（ISA mvp-1）
 
@@ -121,7 +121,7 @@ halt
 
 ## vliw-metrics/3（ISA mvp-2）
 
-ISA mvp-2（W。[ISA.md](ISA.md)「mvp-2: W」）の記録の形式である（#78 の質問9、[ADR-0022](DECISIONS.md)）。形式はここで決め、実装は #110 の第2段で参照モデルと一緒に行う。W では、1つの操作が2つのレジスタや2語を動かすので、次の3種類の数を分けて記録する。
+ISA mvp-2（W。[ISA.md](ISA.md)「mvp-2: W」）の記録の形式である（#78 の質問9、[ADR-0022](DECISIONS.md)）。形式は #110 の第1段で決め、第2段で参照モデルと一緒に実装した。W では、1つの操作が2つのレジスタや2語を動かすので、次の3種類の数を分けて記録する。
 
 | 種類 | キー |
 |---|---|
@@ -143,7 +143,7 @@ ISA mvp-2（W。[ISA.md](ISA.md)「mvp-2: W」）の記録の形式である（#
 | `issue.register_reads.banks`（新） | RF の bank ごとの、読んだレジスタの数: `[{"bank":0,"registers":n0},{"bank":1,"registers":n1}]` |
 | `issue.register_reads.bundles_by_reads` | `vliw-metrics/2` と同じ（bundle ごとの欄の数。キーは `"0"` から `read_ports` まで） |
 | `issue.rs3_with_store`（`mac_with_st` を置き換える） | (MAC か VMAC) と (ST か ST.W) を同じ bundle に置いた数。`read_ports` 3 の合法な命令列では常に0。`read_ports` 4 では、3本では置けない bundle の数になる |
-| `writeback.<port>.commits` | そのポートで commit した**操作**の数（L5 と同じく、ポートを使った回数） |
+| `writeback.<port>.commits` | そのポートで commit した**操作**の数（L5 と同じく、ポートを使った回数）。実装は、そのポートの `rf_commit` があるトレースの行を数える。L5 により、1つの行の同じポートの commit は1つの操作のものだからである（[TRACE.md](TRACE.md)） |
 | `writeback.<port>.registers`（新） | そのポートで書いたレジスタの数。組は2、スカラーは1 |
 | `writeback.<port>.utilization` | `commits / cycles` |
 | `scratchpad.read_operations` / `write_operations`（新） | LD + LD.W / ST + ST.W の回数 |
@@ -153,7 +153,7 @@ ISA mvp-2（W。[ISA.md](ISA.md)「mvp-2: W」）の記録の形式である（#
 
 `vliw-metrics/1` と `/2` では、どの操作も1つのレジスタか1語しか動かさないので、操作の数と語の数は一致する。そのため、古い記録のキーの意味は、そのまま `/3` の語の数にも操作の数にも読める。
 
-例（`config/machine-mvp2.json`。入力は M[0]=3、M[17]=5、M[18]=0xFFFFFFFF。手で計算した値で、第2段の `MetricsSpec` で固定する）:
+例（`config/machine-mvp2.json`。入力は M[0]=3、M[17]=5、M[18]=0xFFFFFFFF。手で計算した値で、`sim/MetricsSpec` で固定している。同じ命令列はテストケース `w_metrics_example` にもある）:
 
 ```text
 @0: nop | ld.w r2:r3, [17]

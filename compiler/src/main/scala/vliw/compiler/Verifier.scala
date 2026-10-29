@@ -15,15 +15,12 @@ final case class Finding(rule: Rule, cycle: Option[Int], message: String) {
   * and the issue cycles of each operation; each rule is then a check over these tables. All
   * violations are reported. The verifier does not use the reference model (ADR-0002).
   *
-  * ISA mvp-2 (W) comes with #110 stage 2: until then [[verify]] refuses mvp-2 machines.
+  * ISA mvp-2 (W, docs/ISA.md "mvp-2: W"): a pair field is one operand field that reads two
+  * registers, a vector operation or LD.W writes two registers as one operation, and LD.W and ST.W
+  * access two words. The hazard rules (L3, L4, L8) are checked per register and L7, L8 and L10 per
+  * word; L5 counts operations, and L11 operand fields (form F).
   */
 object Verifier {
-
-  /** The W operations of mvp-2, which no check reaches: [[verify]] refuses mvp-2 machines first. */
-  private def notYet(op: Product): Nothing =
-    throw new UnsupportedOperationException(
-      s"$op: ISA mvp-2 is not implemented in the verifier yet (#110 stage 2)"
-    )
 
   /** Declared inputs: only which locations the host sets matters, not their values. */
   final case class Declaration(registers: Set[Int], memory: Set[Int])
@@ -31,18 +28,11 @@ object Verifier {
     def of(inputs: Inputs): Declaration = Declaration(inputs.registers.keySet, inputs.memory.keySet)
   }
 
-  /** Why [[verify]] refuses `machine`: ISA mvp-2 until #110 stage 2. `compiler/run verify` exits 2
-    * with it (an input error), not 1 (illegal).
-    */
-  def notImplemented(machine: MachineDescription): Option[String] =
-    IsaVersion.notImplemented(machine, "the verifier", "stage 2")
-
   def verify(
       machine: MachineDescription,
       words: Vector[Long],
       declared: Declaration
   ): Vector[Finding] = {
-    notImplemented(machine).foreach(r => throw new UnsupportedOperationException(r))
     val codec = new BundleCodec(machine)
     val decoded = words.map(codec.decode)
     val encoding = decoded.zipWithIndex.collect { case (Left(e), i) =>
@@ -64,27 +54,60 @@ object Verifier {
     }
   }
 
-  /** Register write `[issue, issue + latency)`; the value is visible from `issue + latency`. */
+  /** Register write `[issue, issue + latency)` by operation `op`; the value is visible from
+    * `issue + latency`. A vector operation or LD.W writes the two registers of its pair with one
+    * `op`, so that it uses its write-back port once (L5).
+    */
   private final case class Write(
       reg: Int,
       issue: Int,
       latency: Int,
       port: Option[Slot],
-      what: String
+      what: String,
+      op: Int
   ) {
     def end: Int = issue + latency
   }
-  private final case class Read(reg: Int, cycle: Int, what: String)
-  private final case class Access(addr: Int, cycle: Int, store: Boolean, latency: Int)
+
+  /** Operand field read in its issue cycle: register `reg`, or with `pair` the pair r(reg),
+    * r(reg+1) of ISA mvp-2. L11 counts fields; L3 and L8 check each register a field reads.
+    */
+  private final case class Read(reg: Int, cycle: Int, what: String, pair: Boolean = false) {
+    def registers: Vector[Read] =
+      if (pair) Vector(Read(reg, cycle, what), Read(reg + 1, cycle, what)) else Vector(this)
+    def name: String = if (pair) s"r$reg:r${reg + 1}" else s"r$reg"
+  }
+
+  /** Scratchpad word `addr`, read or written by an operation issued in `cycle` at address `base`.
+    * LD and ST access their one word (`base` = `addr`); LD.W and ST.W (`wide`) access `base` and
+    * `base` + 1.
+    */
+  private final case class Access(
+      addr: Int,
+      cycle: Int,
+      store: Boolean,
+      latency: Int,
+      base: Int,
+      wide: Boolean
+  ) {
+    def op: String = s"${if (store) "st" else "ld"}${if (wide) ".w" else ""} [$base]"
+
+    /** How messages name the access: `ld [5]`, or `ld.w [4] (word 5)` for one word of two. */
+    def name: String = if (wide) s"$op (word $addr)" else op
+  }
   private final case class Issue(mnemonic: String, cycle: Int, what: String)
 
-  /** Static tables extracted from the program. */
+  /** Static tables extracted from the program. `reads` has one row per operand field. */
   private final case class Summary(
       writes: Vector[Write],
       reads: Vector[Read],
       accesses: Vector[Access],
       issues: Vector[Issue]
-  )
+  ) {
+
+    /** One row per register read: a pair field reads two registers. */
+    def registerReads: Vector[Read] = reads.flatMap(_.registers)
+  }
   private object Summary {
     def apply(machine: MachineDescription, bundles: Vector[Bundle]): Summary = {
       def lat(m: String) = machine.operation(m).latency
@@ -93,10 +116,21 @@ object Verifier {
       val accesses = Vector.newBuilder[Access]
       val issues = Vector.newBuilder[Issue]
       bundles.zipWithIndex.foreach { case (b, s) =>
+        // Each slot issues at most one operation per cycle, which these ids name.
+        val (computeOp, memoryOp) = (2 * s, 2 * s + 1)
         val text = Disassembler.compute(b.compute)
         def rrr(d: Int, x: Int, y: Int, m: String): Unit = {
           reads += Read(x, s, text); reads += Read(y, s, text)
-          writes += Write(d, s, lat(m), Some(Slot.Compute), text)
+          writes += Write(d, s, lat(m), Some(Slot.Compute), text, computeOp)
+          issues += Issue(m, s, text)
+        }
+        // W: rd and rs2 are pairs, and rs1 is a pair or, broadcast, one register. One operation
+        // writes both registers of rd.
+        def vector(d: Int, x: Int, y: Int, broadcast: Boolean, m: String): Unit = {
+          reads += Read(x, s, text, pair = !broadcast); reads += Read(y, s, text, pair = true)
+          Seq(d, d + 1).foreach { r =>
+            writes += Write(r, s, lat(m), Some(Slot.Compute), text, computeOp)
+          }
           issues += Issue(m, s, text)
         }
         b.compute match {
@@ -104,25 +138,36 @@ object Verifier {
           case ComputeOp.Sub(d, x, y)         => rrr(d, x, y, "SUB")
           case ComputeOp.Mul(d, x, y)         => rrr(d, x, y, "MUL")
           case ComputeOp.Mac(d, x, y, z)      => rrr(d, x, y, "MAC"); reads += Read(z, s, text)
+          case ComputeOp.VAdd(d, x, y)        => vector(d, x, y, broadcast = false, "VADD")
+          case ComputeOp.VSub(d, x, y)        => vector(d, x, y, broadcast = false, "VSUB")
+          case ComputeOp.VMul(d, x, y, bc)    => vector(d, x, y, bc, "VMUL")
+          case ComputeOp.VMac(d, x, y, z, bc) =>
+            vector(d, x, y, bc, "VMAC"); reads += Read(z, s, text, pair = true)
           case ComputeOp.Nop | ComputeOp.Halt => ()
-          case op: ComputeOp.VAdd             => notYet(op)
-          case op: ComputeOp.VSub             => notYet(op)
-          case op: ComputeOp.VMul             => notYet(op)
-          case op: ComputeOp.VMac             => notYet(op)
         }
         val mtext = Disassembler.memory(b.memory)
+        def access(a: Int, store: Boolean, m: String, wide: Boolean): Unit = {
+          (if (wide) Seq(a, a + 1) else Seq(a)).foreach { w =>
+            accesses += Access(w, s, store, lat(m), a, wide)
+          }
+          issues += Issue(m, s, mtext)
+        }
         b.memory match {
           case MemoryOp.Ld(d, a) =>
-            writes += Write(d, s, lat("LD"), Some(Slot.Memory), mtext)
-            accesses += Access(a, s, store = false, lat("LD"))
-            issues += Issue("LD", s, mtext)
+            writes += Write(d, s, lat("LD"), Some(Slot.Memory), mtext, memoryOp)
+            access(a, store = false, "LD", wide = false)
           case MemoryOp.St(a, r) =>
             reads += Read(r, s, mtext)
-            accesses += Access(a, s, store = true, lat("ST"))
-            issues += Issue("ST", s, mtext)
-          case MemoryOp.Nop     => ()
-          case op: MemoryOp.LdW => notYet(op)
-          case op: MemoryOp.StW => notYet(op)
+            access(a, store = true, "ST", wide = false)
+          case MemoryOp.LdW(d, a) =>
+            Seq(d, d + 1).foreach { r =>
+              writes += Write(r, s, lat("LD.W"), Some(Slot.Memory), mtext, memoryOp)
+            }
+            access(a, store = false, "LD.W", wide = true)
+          case MemoryOp.StW(a, r) =>
+            reads += Read(r, s, mtext, pair = true)
+            access(a, store = true, "ST.W", wide = true)
+          case MemoryOp.Nop => ()
         }
       }
       Summary(writes.result(), reads.result(), accesses.result(), issues.result())
@@ -152,10 +197,10 @@ object Verifier {
       }
   }
 
-  // L3: no read of r strictly inside a write interval [s, s+L) of r.
+  // L3: no read of r strictly inside a write interval [s, s+L) of r; each register of a pair field.
   private def inFlightReads(sum: Summary): Vector[Finding] =
     for {
-      r <- sum.reads
+      r <- sum.registerReads
       w <- sum.writes
       if w.reg == r.reg && w.issue < r.cycle && r.cycle < w.end
     } yield Finding(
@@ -164,7 +209,8 @@ object Verifier {
       s"`${r.what}` reads r${r.reg} while `${w.what}` (cycle ${w.issue}) writes it; visible from cycle ${w.end}"
     )
 
-  // L4: write intervals of the same register are disjoint.
+  // L4: write intervals of the same register are disjoint. A pair write is one interval per
+  // register, so it overlaps any write to either register.
   private def overlappingWrites(sum: Summary): Vector[Finding] =
     sum.writes.groupBy(_.reg).toVector.sortBy(_._1).flatMap { case (reg, ws) =>
       val sorted = ws.sortBy(w => (w.issue, w.end))
@@ -181,16 +227,17 @@ object Verifier {
       )
     }
 
-  // L5: at most one commit per write-back port per boundary.
+  // L5: at most one operation commits per write-back port per boundary. A vector operation or LD.W
+  // commits its two registers with one use of the port, so writes are counted by operation.
   private def writebackPorts(sum: Summary): Vector[Finding] =
     sum.writes
-      .collect { case w @ Write(_, _, _, Some(port), _) => (port, w.end) -> w }
+      .collect { case w @ Write(_, _, _, Some(port), _, _) => (port, w.end) -> w }
       .groupBy(_._1)
       .toVector
       .sortBy { case ((port, end), _) => (end, port.name) }
+      .map { case (key, ws) => key -> ws.map(_._2).distinctBy(_.op).sortBy(_.issue) }
       .collect {
-        case ((port, end), ws) if ws.size > 1 =>
-          val users = ws.map(_._2).sortBy(_.issue)
+        case ((port, end), users) if users.size > 1 =>
           Finding(
             Rule.WritebackPort,
             Some(users.last.issue),
@@ -199,12 +246,13 @@ object Verifier {
           )
       }
 
-  // L6: everything issued before the final HALT at h completes by E_h.
+  // L6: everything issued before the final HALT at h completes by E_h. One finding per operation:
+  // the two writes of a pair and the two words of ST.W are one operation.
   private def haltCompletion(bundles: Vector[Bundle], sum: Summary): Vector[Finding] =
     bundles.lastOption.filter(_.compute == ComputeOp.Halt).toVector.flatMap { _ =>
       val h = bundles.size - 1
-      val late = sum.writes.map(w => (w.issue, w.end, w.what)) ++
-        sum.accesses.filter(_.store).map(a => (a.cycle, a.cycle + a.latency, s"st [${a.addr}]"))
+      val late = (sum.writes.map(w => (w.issue, w.end, w.what)) ++
+        sum.accesses.filter(_.store).map(a => (a.cycle, a.cycle + a.latency, a.op))).distinct
       late.filter(_._2 > h).sortBy(_._1).map { case (issue, end, what) =>
         Finding(
           Rule.HaltCompletion,
@@ -214,19 +262,21 @@ object Verifier {
       }
     }
 
-  // L7: scratchpad addresses within the machine's capacity.
+  // L7: every word accessed is within the machine's capacity (LD.W and ST.W: both words).
   private def addressRange(machine: MachineDescription, sum: Summary): Vector[Finding] =
     sum.accesses.filter(_.addr >= machine.scratchpadWords).map { a =>
       Finding(
         Rule.AddressRange,
         Some(a.cycle),
-        s"address ${a.addr} is outside the scratchpad (0..${machine.scratchpadWords - 1})"
+        (if (a.wide) s"`${a.op}`: " else "") +
+          s"address ${a.addr} is outside the scratchpad (0..${machine.scratchpadWords - 1})"
       )
     }
 
-  // L8: every read has a declared input or a write (register or store) that is visible by then.
+  // L8: every read has a declared input or a write (register or store) that is visible by then;
+  // per register, and per word for LD.W.
   private def undefinedReads(sum: Summary, declared: Declaration): Vector[Finding] = {
-    val regs = sum.reads
+    val regs = sum.registerReads
       .filterNot { r =>
         declared.registers.contains(r.reg) || sum.writes
           .exists(w => w.reg == r.reg && w.end <= r.cycle)
@@ -248,7 +298,7 @@ object Verifier {
         Finding(
           Rule.UndefinedRead,
           Some(l.cycle),
-          s"ld [${l.addr}] reads a word that has no value yet"
+          s"${l.name} reads a word that has no value yet"
         )
       )
     regs ++ loads
@@ -269,19 +319,21 @@ object Verifier {
     }
 
   // L11: the operand fields of a bundle read at most `read_ports` registers. Reads are counted per
-  // field, so one register read by two fields counts twice.
+  // field, so one register read by two fields counts twice, and a pair field counts once (form F).
   private def readPorts(machine: MachineDescription, sum: Summary): Vector[Finding] =
     sum.reads.groupBy(_.cycle).toVector.sortBy(_._1).collect {
       case (cycle, rs) if rs.size > machine.readPorts =>
+        val fields = if (rs.exists(_.pair)) "operand fields" else "registers"
         Finding(
           Rule.ReadPorts,
           Some(cycle),
-          s"the bundle reads ${rs.size} registers (${rs.map(r => s"r${r.reg}").mkString(", ")}); " +
+          s"the bundle reads ${rs.size} $fields (${rs.map(_.name).mkString(", ")}); " +
             s"the register file has ${machine.readPorts} read ports"
         )
     }
 
-  // L10: no load of a word strictly inside the interval [s, s+L) of a store to it.
+  // L10: no load of a word strictly inside the interval [s, s+L) of a store to it; per word, so the
+  // second word of LD.W, in the next row of its bank when the address is odd, is checked alike.
   private def inFlightStoreReads(sum: Summary): Vector[Finding] =
     for {
       l <- sum.accesses
@@ -291,6 +343,6 @@ object Verifier {
     } yield Finding(
       Rule.InFlightStoreRead,
       Some(l.cycle),
-      s"ld [${l.addr}] reads the word while `st [${st.addr}]` (cycle ${st.cycle}) writes it; visible from cycle ${st.cycle + st.latency}"
+      s"${l.name} reads the word while `${st.name}` (cycle ${st.cycle}) writes it; visible from cycle ${st.cycle + st.latency}"
     )
 }

@@ -238,19 +238,192 @@ class VerifierSpec extends AnyFunSuite {
     assert(on(ii2, "mac r4, r1, r2, r3\nmul r5, r1, r2\nnop\nhalt") == Set.empty)
   }
 
-  test("ISA mvp-2 is refused until #110 stage 2, not verified as mvp-1") {
-    val mvp2 = MachineDescription
-      .load(MachineDescription.Mvp2Path)
-      .fold(es => fail(es.mkString("\n")), identity)
-    val e = intercept[UnsupportedOperationException] {
-      Verifier.verify(mvp2, Vector(0xf0000000L), Verifier.Declaration(Set.empty, Set.empty))
-    }
+  // ISA mvp-2 (#110 stage 2, docs/ISA.md "mvp-2: W").
+
+  private val mvp2 = MachineDescription
+    .load(MachineDescription.Mvp2Path)
+    .fold(es => fail(es.mkString("\n")), identity)
+
+  /** Declares r0..r15 and every word of a 512-word scratchpad. */
+  private val every = Verifier.Declaration((0 until 16).toSet, (0 until 512).toSet)
+  private def findingsOn(
+      m: MachineDescription,
+      src: String,
+      declared: Verifier.Declaration = every
+  ) =
+    Verifier.verify(m, words(src, m), declared)
+  private def onW(m: MachineDescription, src: String): Set[String] =
+    findingsOn(m, src).map(_.rule.id).toSet
+
+  test("the mvp-2 examples table of docs/ISA.md (read_ports 3, L11 form F)") {
+    def r(src: String) = onW(mvp2, src)
+    assert(r("vmul r4:r5, r1, r2:r3\nadd r6, r1, r2\nhalt") == Set("L5"))
+    assert(r("vmul r4:r5, r1, r2:r3\nvmul r6:r7, r1, r2:r3\nnop\nhalt") == Set.empty)
+    assert(r("mul r1, r2, r3\nadd r4, r5, r6\nhalt") == Set("L5"))
+    assert(r("vmul r4:r5, r1, r2:r3\nmul r8, r5, r1\nnop\nhalt") == Set("L3"))
     assert(
-      e.getMessage == "ISA mvp-2 is not implemented in the verifier yet (#110 stage 2); " +
-        "machine vliw2-i32-sp2-mac-w2"
+      r("vmul r4:r5, r1, r2:r3\nnop\nadd r5, r1, r2\nvadd r6:r7, r4:r5, r8:r9\nhalt") == Set.empty
     )
-    // `compiler/run verify` exits 2 with this reason, before it calls verify.
-    assert(Verifier.notImplemented(mvp2).contains(e.getMessage))
-    assert(Verifier.notImplemented(mvp1).isEmpty && Verifier.notImplemented(machine).isEmpty)
+    assert(r("vmac r4:r5, r2, r6:r7, r8:r9 | ld r5, [0]\nnop\nhalt") == Set("L4"))
+    assert(r("vmac r4:r5, r2, r6:r7, r8:r9 | st [0], r1\nnop\nhalt") == Set("L11"))
+    assert(
+      onW(
+        machineFile("mvp2_rp4.json"),
+        "vmac r4:r5, r2, r6:r7, r8:r9 | st [0], r1\nnop\nhalt"
+      ).isEmpty
+    )
+    assert(r("mac r10, r0, r2, r4 | st [0], r3\nnop\nhalt") == Set("L11"))
+    assert(r("vmul r4:r5, r1, r2:r3 | st.w [0], r6:r7\nnop\nhalt") == Set.empty)
+    assert(r("nop | ld.w r2:r3, [510]\nnop\nhalt") == Set.empty)
+    // Word 512 is outside the scratchpad: no input can name it, and no store here writes it (L8).
+    assert(r("nop | ld.w r2:r3, [511]\nnop\nhalt") == Set("L7", "L8"))
+    val m8 = Verifier.Declaration((0 until 16).toSet, Set(8))
+    assert(findingsOn(mvp2, "nop | ld.w r2:r3, [8]\nnop\nhalt", m8).map(_.rule.id) == Vector("L8"))
+    assert(r("vmac r4:r5, r2, r6:r7, r8:r9\nhalt") == Set("L6"))
+  }
+
+  test("mvp-2 L5 counts operations: a pair commits through one use of its port") {
+    // One vector operation and one LD.W at the same boundary, each with two registers.
+    assert(onW(mvp2, "vmul r4:r5, r1, r2:r3 | ld.w r6:r7, [0]\nnop\nhalt").isEmpty)
+    // Two operations at E_2 on the compute port; the message names each operation once.
+    val f = findingsOn(mvp2, "vmul r4:r5, r1, r2:r3\nvadd r6:r7, r2:r3, r2:r3\nhalt")
+    assert(f.map(f => (f.rule.id, f.cycle.get)) == Vector(("L5", 1)))
+    assert(
+      f.head.message == "the compute write-back port is used 2 times at E_2: " +
+        "`vmul r4:r5, r1, r2:r3` (cycle 0), `vadd r6:r7, r2:r3, r2:r3` (cycle 1)",
+      f.head.message
+    )
+    // LD.W at latency 3 and LD one cycle later share E_3 on the memory port.
+    val vlat = machineFile("mvp2_vlat.json")
+    assert(onW(vlat, "nop | ld.w r2:r3, [0]\nnop | ld r4, [2]\nnop\nhalt") == Set("L5"))
+    assert(onW(vlat, "vmul r4:r5, r1, r2:r3\nmul r6, r1, r2\nnop\nhalt") == Set("L5"))
+    assert(onW(vlat, "vadd r4:r5, r2:r3, r2:r3\nadd r6, r1, r2\nhalt") == Set("L5"))
+  }
+
+  test("mvp-2 L3, L4 and L8 are per register: both registers of a pair, one of a broadcast") {
+    val none = Verifier.Declaration(Set(1, 6, 7), Set.empty)
+    // A broadcast rs1 reads r1 only, so r2 needs no value.
+    assert(findingsOn(mvp2, "vmul r4:r5, r1, r6:r7\nnop\nhalt", none).isEmpty)
+    // A pair field reads r6 and r7, and r7 has no value.
+    val f = findingsOn(
+      mvp2,
+      "vmul r4:r5, r1, r6:r7\nnop\nhalt",
+      Verifier.Declaration(Set(1, 6), Set.empty)
+    )
+    assert(f.map(_.message) == Vector("`vmul r4:r5, r1, r6:r7` reads r7, which has no value yet"))
+    // The second register of a pair is being written: by a vector operation, and by LD.W.
+    assert(
+      onW(mvp2, "vadd r4:r5, r2:r3, r2:r3 | ld.w r6:r7, [0]\n| st.w [2], r6:r7\nnop\nhalt") == Set(
+        "L3"
+      )
+    )
+    assert(onW(mvp2, "vmul r4:r5, r1, r2:r3\nnop | st [0], r5\nnop\nhalt") == Set("L3"))
+    // A pair write overlaps a scalar write to either register, in flight or in the same bundle.
+    assert(onW(mvp2, "vmul r4:r5, r1, r2:r3\nnop | ld r5, [0]\nnop\nhalt") == Set("L4"))
+    assert(onW(mvp2, "add r5, r1, r2 | ld.w r4:r5, [0]\nnop\nhalt") == Set("L4"))
+    // The accumulator form reads the old pair; a broadcast rs1 may be r(rd + 1).
+    assert(onW(mvp2, "vmac r4:r5, r5, r6:r7, r4:r5\nnop\nhalt").isEmpty)
+  }
+
+  test("mvp-2 L7, L8 and L10 are per word for LD.W and ST.W, whatever bank and row a word is in") {
+    val vii = machineFile("mvp2_vii.json") // ST and ST.W latency 2; the new operations II 2
+    def onVii(src: String, declared: Verifier.Declaration = every) =
+      Verifier.verify(vii, words(src, vii), declared)
+    // ld.w [17]: word 18 is in bank 0, the row after word 17's; a store to it is in flight.
+    val f = onVii("| st [18], r1\n| ld.w r2:r3, [17]\nnop\nhalt")
+    assert(f.map(f => (f.rule.id, f.cycle.get)) == Vector(("L10", 1)))
+    assert(
+      f.head.message == "ld.w [17] (word 18) reads the word while `st [18]` (cycle 0) writes it; " +
+        "visible from cycle 2"
+    )
+    // Word 16 is in the same bank as word 18 but is not read.
+    assert(onVii("| st [16], r1\n| ld.w r2:r3, [17]\nnop\nhalt").isEmpty)
+    // The second word of ST.W, read while it is being written.
+    val g = onVii("| st.w [4], r2:r3\n| ld r6, [5]\nnop\nhalt")
+    assert(
+      g.map(_.message) == Vector(
+        "ld [5] reads the word while `st.w [4] (word 5)` (cycle 0) writes it; visible from cycle 2"
+      )
+    )
+    // L8: word 9 has no value, and words written by ST.W are visible from s + L.
+    val m8 = Verifier.Declaration((0 until 16).toSet, Set(8))
+    assert(
+      findingsOn(mvp2, "nop | ld.w r2:r3, [8]\nnop\nhalt", m8).map(_.message) ==
+        Vector("ld.w [8] (word 9) reads a word that has no value yet")
+    )
+    val noMemory = Verifier.Declaration((0 until 16).toSet, Set.empty)
+    assert(
+      findingsOn(mvp2, "nop | st.w [8], r2:r3\nnop | ld.w r4:r5, [8]\nnop\nhalt", noMemory).isEmpty
+    )
+    assert(
+      onVii("nop | st.w [8], r2:r3\nnop | ld r4, [9]\nnop\nhalt", noMemory).map(_.rule.id).toSet ==
+        Set("L8", "L10")
+    )
+    // L7: ST.W [511] writes word 512.
+    val l7 = findingsOn(mvp2, "nop | st.w [511], r2:r3\nhalt")
+    assert(
+      l7.map(_.message) == Vector("`st.w [511]`: address 512 is outside the scratchpad (0..511)")
+    )
+    // L8 does not tell stores by range: an earlier ST.W [511] (itself L7) gives word 512 a value,
+    // so the later LD.W [511] is L7 and not L8 (docs/VERIFIER.md, L8).
+    assert(
+      findingsOn(mvp2, "nop | st.w [511], r2:r3\nnop | ld.w r4:r5, [511]\nnop\nhalt")
+        .map(f => (f.rule.id, f.cycle)) == Vector(("L7", Some(0)), ("L7", Some(1)))
+    )
+  }
+
+  test("mvp-2 L6 reports an operation once, though it writes two registers or two words") {
+    val f = findingsOn(mvp2, "vmac r4:r5, r2, r6:r7, r8:r9 | ld.w r10:r11, [0]\nhalt")
+    assert(
+      f.map(_.message) == Vector(
+        "`vmac r4:r5, r2, r6:r7, r8:r9` (cycle 0) completes at E_2, after HALT at cycle 1",
+        "`ld.w r10:r11, [0]` (cycle 0) completes at E_2, after HALT at cycle 1"
+      )
+    )
+    val vii = machineFile("mvp2_vii.json")
+    assert(
+      findingsOn(vii, "nop | st.w [0], r2:r3\nhalt").map(_.message) ==
+        Vector("`st.w [0]` (cycle 0) completes at E_2, after HALT at cycle 1")
+    )
+  }
+
+  test("mvp-2 L9: each new operation has its own unit and II") {
+    val vii = machineFile("mvp2_vii.json")
+    def onVii(src: String) = onW(vii, src)
+    assert(onVii("vmul r4:r5, r1, r2:r3\nvmul r6:r7, r1, r2:r3\nnop\nhalt") == Set("L9"))
+    assert(onVii("vadd r4:r5, r2:r3, r2:r3\nvsub r6:r7, r2:r3, r2:r3\nhalt").isEmpty)
+    assert(onVii("vmul r4:r5, r1, r2:r3\nmul r6, r1, r2\nnop\nhalt").isEmpty)
+    assert(onVii("| ld.w r2:r3, [0]\n| ld.w r4:r5, [2]\nnop\nhalt") == Set("L9"))
+    assert(onVii("| st.w [0], r2:r3\n| st.w [2], r4:r5\nnop\nhalt") == Set("L9"))
+    assert(onVii("| ld.w r2:r3, [0]\n| ld r4, [2]\nnop\nhalt").isEmpty)
+  }
+
+  test("mvp-2 L11 counts operand fields: a pair or a broadcast is one field") {
+    // VMAC with pairs reads six registers in three fields, with LD.W it is still three.
+    assert(onW(mvp2, "vmac r4:r5, r2:r3, r6:r7, r8:r9 | ld.w r10:r11, [0]\nnop\nhalt").isEmpty)
+    val f = findingsOn(mvp2, "vmac r4:r5, r2, r6:r7, r8:r9 | st.w [0], r10:r11\nnop\nhalt")
+    assert(
+      f.map(_.message) == Vector(
+        "the bundle reads 4 operand fields (r2, r6:r7, r8:r9, r10:r11); the register file has 3 read ports"
+      )
+    )
+    // Form F counts fields whatever RF bank they read: r4 (bank 0) and r3 (bank 1).
+    assert(
+      findingsOn(mvp2, "mac r10, r0, r2, r4 | st [0], r3\nnop\nhalt").map(_.message) == Vector(
+        "the bundle reads 4 registers (r0, r2, r4, r3); the register file has 3 read ports"
+      )
+    )
+  }
+
+  test("mvp-2 L1: odd pairs, the broadcast bit outside VMUL and VMAC, LD.W on W-reg") {
+    val halt = 0x00000000f0000000L
+    def l1(m: MachineDescription, word: Long) =
+      Verifier.verify(m, Vector(word, halt), every).map(f => (f.rule.id, f.cycle))
+    Seq(0x0000000085268800L, 0x0000000074360000L, 0x0000000054260800L, 0x3b08800000000000L)
+      .foreach(w => assert(l1(mvp2, w) == Vector(("L1", Some(0))), f"$w%016x"))
+    assert(l1(machineFile("mvp2_mw1.json"), 0x3a08800000000000L) == Vector(("L1", Some(0))))
+    assert(l1(mvp1, 0x0000000084268800L) == Vector(("L1", Some(0))))
+    // The same words with even pairs and B on VMAC decode (vmac r4:r5, r2, r6:r7, r8:r9).
+    assert(Verifier.verify(mvp2, Vector(0x0000000084268800L, 0L, halt), every).isEmpty)
   }
 }
