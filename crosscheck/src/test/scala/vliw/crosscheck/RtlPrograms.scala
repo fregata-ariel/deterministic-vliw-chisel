@@ -99,17 +99,19 @@ object RtlPrograms {
   }
 
   /** Runs every program on the core `dut` built for `m` and on the reference model: the traces must
-    * be identical cycle by cycle, and so must every location that the program defines.
+    * be identical cycle by cycle, and so must every location that the program defines, which must
+    * be among `readBack`.
     */
   def compareOn(
       dut: Core,
       m: MachineDescription,
-      programs: Vector[(Vector[Long], Inputs)]
+      programs: Vector[(Vector[Long], Inputs)],
+      readBack: Set[Int] = usedWords
   ): Unit = {
     val c = new BundleCodec(m)
     programs.zipWithIndex.foreach { case ((words, in), i) =>
       val model = ReferenceModel.run(m, words, in).fold(v => fail(s"#$i: $v"), identity)
-      val rtl = CoreDriver.run(dut, m, words, in, usedWords)
+      val rtl = CoreDriver.run(dut, m, words, in, readBack)
       val listing =
         s"${m.machineId} #$i\n" + Disassembler.program(c.decodeAll(words).toOption.get)
       assert(rtl.violations.isEmpty, listing)
@@ -126,6 +128,37 @@ object RtlPrograms {
       }
       model.memory.zipWithIndex.collect { case (Some(v), a) =>
         assert(rtl.memory(a) == BigInt(v), s"[$a]\n$listing")
+      }
+    }
+  }
+
+  /** Runs each program on the core `dut` for `m` again with other input values: the cycles and the
+    * commit timing stay the same.
+    */
+  def sameTimingOn(
+      dut: Core,
+      m: MachineDescription,
+      programs: Vector[(Vector[Long], Inputs)],
+      rng: Random
+  ): Unit = {
+    def timing(t: Vector[ujson.Obj]) = t.map { line =>
+      val l = ujson.read(ujson.write(line))
+      l("rf_commit").arr.foreach(_.obj.remove("value"))
+      l("mem_commit").arr.foreach(_.obj.remove("value"))
+      canonical(l)
+    }
+    programs.foreach { case (words, in) =>
+      val reference = CoreDriver.run(dut, m, words, in, Set.empty)
+      (0 until 3).foreach { _ =>
+        val other = Inputs(
+          in.registers.map { case (k, _) => k -> (rng.nextLong() & 0xffffffffL) },
+          in.memory.map { case (k, _) =>
+            k -> (rng.nextLong() & 0xffffffffL)
+          }
+        )
+        val run = CoreDriver.run(dut, m, words, other, Set.empty)
+        assert(run.cycles == reference.cycles)
+        assert(timing(run.trace) == timing(reference.trace))
       }
     }
   }

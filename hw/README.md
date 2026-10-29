@@ -47,29 +47,42 @@ reset のある状態（PC、busy、done、プログラム長、書戻しの予�
 
 | reset のない状態 | 場所 |
 |---|---|
-| RF のレジスタ | `RegisterFile` の `regs` |
+| RF のレジスタ | `RegisterFile` の `regs`（mvp-2 では `BankedRegisterFile` の `bank0`・`bank1`） |
 | 命令メモリ | `Core` の `imem` |
 | Scratchpad の bank と、その読出しポートのレジスタ（firtool が足す `_RW0_*`） | `MemorySlot` の `banks` |
 | 読み出した bank の番号 | `MemorySlot` の `readBank` |
 | 固定パイプラインの値のレジスタ | `FixedPipeline` の `regs` |
 
-ただし、最初の reset の境界で RF に書込みが起きることがある。書戻しの予約表と `loadStage` には reset があるが、その境界ではまだ初期値を持っており、RF への書込みは reset 中も止まらないからである。全 1 では、両方のポートが、番号のすべての bit が 1 のレジスタ（16本なら r15、8本なら r7）に書く（残るのは Memory のポートの値）。全 0 では何も書かない。乱数では、行き先も値も乱数になり、busy・pc・プログラム長の初期値しだいで、その境界に命令が1つ発行され、ST が Scratchpad に書くこともある。この境界の書込みがあるので、ホストは reset の後に入力を書く（下の「構成」）。そうすれば、書かれるのは未定義の位置だけで、合法なプログラムの結果は変わらない。この書込みを RTL で止めるかは、状態を足す #110・#112 で決める（ADR-0021）。
+ただし、最初の reset の境界で RF に書込みが起きることがある。書戻しの予約表と `loadStage` には reset があるが、その境界ではまだ初期値を持っており、RF への書込みは reset 中も止まらないからである。全 1 では、両方のポートが、番号のすべての bit が 1 のレジスタ（16本なら r15、8本なら r7）に書く（残るのは Memory のポートの値）。mvp-2 では、予約表の項目の組の印（`pair`）と `loadWide` も全 1 から始まるので、そのレジスタの組（16本なら r14:r15）に書く（`machine-mvp2.json` の試行では、どちらも 0 が残った）。全 0 では何も書かない。乱数では、行き先も値も乱数になり、busy・pc・プログラム長の初期値しだいで、その境界に命令が1つ発行され、ST が Scratchpad に書くこともある。この境界の書込みがあるので、ホストは reset の後に入力を書く（下の「構成」）。そうすれば、書かれるのは未定義の位置だけで、合法なプログラムの結果は変わらない。この書込みを RTL で止めるかは、状態を足す #110・#112 で決める（ADR-0021）。#110 の第3段（W）は、止めなくても合法なプログラムの結果が変わらないので、今の振る舞いを保ち、止めるかどうかはオーナーへの問いとして残した（ADR-0021 の 2026-10-29 の補足）。
+
+#110 の第3段で足した状態は、次のとおりに分ける（ADR-0021 の 2026-10-29 の補足）。
+
+| 状態 | reset | 理由 |
+|---|---|---|
+| `BankedRegisterFile` の `bank0`・`bank1`（mvp-2 の RF。ビットの数は `RegisterFile` の `regs` と同じ） | なし | `regs` と同じ。ホストは reset の後に入力を書き、合法なプログラムは宣言したか書いたレジスタだけを読む（L8）。組は2つの bank のレジスタ2つ |
+| 書戻しの予約表（`WritebackSchedule` の `slot`）の `pair`・`data1` | あり | 今の `RegInit`（項目のすべての欄を 0 にする）に含まれる |
+| `MemorySlot` の `loadWide`（`loadStage` の load が LD.W か） | あり | `loadStage` と同じく `RegInit`（`RegInit(false.B)`） |
+| `MemorySlot` の `readBank` | なし（変えない） | レーン1 の bank は `(readBank + 1) mod banks` で、組合せ回路で作る。レジスタは足さない |
+| Scratchpad の bank と `_RW0_*` | なし（変えない） | メモリは足さない。各 bank のアクセスは1サイクルに1つのまま |
+| `WriteReservations` の `remaining`、busy、done、pc、プログラム長、`imem` | 変えない | |
 
 ## 構成（Phase 1）
 
 | モジュール | 役割 |
 |---|---|
 | `Core` | トップ。Instruction memory（`Mem`、組合せ読出し）、PC、start/busy/done、ホストポート、観測ポート（PC、Decoder の出力、commit）、違反信号と assertion（[docs/VERIFIER.md](../docs/VERIFIER.md)） |
-| `Decoder` | 64bit bundle のデコードと、規則 L1 の検出（`vliw.isa.BundleCodec` とは独立に実装）。mvp-1 では MAC も |
+| `Decoder` | 64bit bundle のデコードと、規則 L1 の検出（`vliw.isa.BundleCodec` とは独立に実装）。mvp-1 では MAC も、mvp-2 では W の演算も |
 | `RegisterFile` | 3R/2W のレジスタファイル。ポート2は ST のソース、mvp-1 の MAC では rs3 を読む |
+| `BankedRegisterFile` | mvp-2 のレジスタファイル。偶数と奇数のレジスタの2つの bank で、bank ごとに 3R/2W。組の読出しと書込み |
 | `WriteReservations` | レジスタごとの書込み区間（L3・L4・L6 の検出用） |
-| `ComputeSlot` | ADD/SUB/MUL（mvp-1 では MAC も）と、Compute書戻しポートの予約表 |
-| `MemorySlot` | bank分割した Scratchpad、LD/ST と、Memory書戻しポートの予約表 |
+| `ComputeSlot` | ADD/SUB/MUL（mvp-1 では MAC も、mvp-2 では VADD/VSUB/VMUL/VMAC も）と、Compute書戻しポートの予約表 |
+| `VectorLane` | mvp-2 のベクトル演算のレーン1（2つ目の 32×32 の乗算器）。#57 で面積を分けて測るため、別のモジュールにした |
+| `MemorySlot` | bank分割した Scratchpad、LD/ST（W-full では LD.W・ST.W も）と、Memory書戻しポートの予約表 |
 | `WritebackSchedule` | 1つの書戻しポートの予約表。E_(s+L) での書込みと、L5 の検出 |
-| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（II=1、LD L>=2、ST L=1、読出しポート3本）を検査し、`CoreParams.check` で範囲外の理由をすべて返す（[docs/MACHINE.md](../docs/MACHINE.md)「実装ごとの対応範囲」） |
+| `CoreParams` | machine description からのパラメータ。RTLが対応する範囲（全演算の II=1、LD・LD.W の L>=2、ST・ST.W の L=1、読出しポート3本）を全演算で検査し、`CoreParams.check` で範囲外の理由をすべて返す（[docs/MACHINE.md](../docs/MACHINE.md)「実装ごとの対応範囲」） |
 | `FixedPipeline` | 資源条件を揃えた固定パイプライン（#75、[ADR-0017](../docs/DECISIONS.md)）。命令メモリ・命令制御・RF を持たず、静的なスケジュール（`FixedPlan`）をサイクルカウンタで実行する。`ComputeSlot` と `MemorySlot` をそのまま使う。値は32bit のレジスタ（`StoragePolicy`）。start/done と cycles の数え方は `Core` と同じ（E_T の cycle T を HALT とみなし、T+1 cycles） |
 | `FixedPlan` | 固定パイプラインの計画（各操作の発行サイクルと読む値）と、組み立て時の検査（スロット、L3、L5、L7、L9。verifier とは独立）。値のレジスタの割り当てと、その寿命の検査 |
-| `FixedParams` | 固定パイプラインのパラメータ。対応する machine は `Core` と同じで、`CoreParams.unsupported` と同じ理由で拒否する |
+| `FixedParams` | 固定パイプラインのパラメータ。対応する machine は ISA mvp-0・mvp-1 の `Core` と同じで、`CoreParams.unsupported` と同じ理由で拒否する。mvp-2 の machine は、その前に自分の理由で拒否する（ADR-0022） |
 
 ホストは停止中に、reset の後で、命令・レジスタ・Scratchpad を書き込み、プログラム長を与えて start をかける（`CoreDriver.start` と同じ）。最初の reset の境界は RF や Scratchpad に書くことがあるので（上の「初期状態」）、reset の前に書いた値は残るとは限らない。実行中は内部状態を変更しない。
 
@@ -83,16 +96,29 @@ machine description に MAC があれば（`config/machine-mvp1.json` など）�
 - `CoreParams`: `read_ports` 4 は範囲外（読出し4本の RTL は #57）。MAC の ii は1だけ。MAC の latency は、MUL と同じくローダの範囲全体（1〜8）
 - `FixedPipeline` は MAC を使わない。mvp-1 の machine では、`ComputeSlot` の3つ目のオペランドを0に固定する
 
+## ISA mvp-2（W、#110）
+
+machine description が ISA mvp-2 なら（`config/machine-mvp2.json` など）、RTL は W を実装する（[docs/ISA.md](../docs/ISA.md)「mvp-2: W」、[ADR-0022](../docs/DECISIONS.md)。#110 の第3段）。mvp-0 と mvp-1 の machine では、W の論理を一切作らない。`config/machine.json`・`config/machine-mvp1.json`・`tests/machines/mvp1_mac3.json` から出力する SystemVerilog は、第3段の前と1 byte も変わらない（48 ファイルの sha256 で確かめた）。
+
+- `CoreParams`: W-full と W-reg（RF の bank ごとに `read_ports` 3）を受け付ける。ii と latency は machine の全演算で確かめ、`read_ports` 4（#57）、II が1でない演算、LD.W の latency 1、ST・ST.W の latency 2 以上を理由付きで拒否する
+- `Decoder`: VADD・VSUB・VMUL・VMAC は、種類 Add・Sub・Mul・Mac に `vector` を付けて decode する（`ComputeKind` を増やすと mvp-0・mvp-1 の幅が変わるため）。B（bit 11）は `broadcast`、LD.W・ST.W は Ld・St に `wide` を付ける。組の欄は偶数、予約 bit は演算ごと（L1）。VMAC の rs3 は MAC と同じ bits 15:12
+- `BankedRegisterFile`: bank 0 が偶数、bank 1 が奇数のレジスタを持つ。欄 k はどちらの bank もポート k で行 `reg >> 1` を読み、スカラーの欄は自分の bank の値、組の欄は両方の bank の値、ブロードキャストの rs1 は自分の bank の値だけを使う（ISA.md の形 S のデータ経路）。書込みは、スカラーなら `reg(0)` の bank に、組なら両方の bank の行 `reg >> 1` に書く。ポート2は、MAC・VMAC の rs3 か ST・ST.W のソースを読む
+- `ComputeSlot`: レーン0 は今のデータ経路（乗算器を MUL・MAC・VMUL・VMAC で共有する）、レーン1 は `VectorLane`（2つ目の乗算器）。ベクトル演算は自分の latency を machine description から取り、予約表に組の項目1つとして入る（L5 は操作で数える）
+- `MemorySlot`: LD.W・ST.W の語 a はレーン0、a+1 はレーン1。a+1 の bank がレーン1 の行と ST.W のデータを取る（2 bank で a が奇数なら、レーンが入れ替わり、bank 0 は次の行）。各 bank のアクセスは1サイクルに1つのまま。レーン1 の読出しは `(readBank + 1) mod banks` の bank から取る。どちらかの語が範囲外なら、どちらにもアクセスしない（L7）。LD.W は自分の latency で、組の項目として予約表に入る
+- `WriteReservations`: 組の予約は両方のレジスタを、組の問い合わせは両方のレジスタを見る（L3・L4 はレジスタごと）
+- `Core`: L11 は「（MAC か VMAC）かつ（ST か ST.W）」。同じ bundle の Compute と LD の書込み先は、レジスタの集合で比べる（L4）。観測ポートは組の commit（`pair`・`data1`）と ST.W の語 a+1（`memCommit1`）を出す。start・busy・pc・done・HALT、ストールしない方針は変えない
+- `FixedPipeline` は W を使わず、mvp-2 の machine を拒否する
+
 ## テスト
 
 | テスト | 内容 |
 |---|---|
 | 単体（`RegisterFileSpec` ほか） | 各モジュールのタイミングと違反信号 |
-| `DecoderSpec` | MAC の欄、予約 bit、レジスタ数を超える rs3、mvp-0 に MAC がないこと |
+| `DecoderSpec` | MAC の欄、予約 bit、レジスタ数を超える rs3、mvp-0 に MAC がないこと、mvp-1 では VMAC の opcode 8 が未知であること |
 | `CoreSpec` | ISA例、HALT のみ、再スタート。mvp-1: ポート2の読出し、MAC と ST の L11、MUL・LD・MAC・ST・ADD の命令列（MAC の latency 2 と 3） |
-| `CaseSpec` | `tests/cases` の全ての合法ケース（cycles、最終状態、golden trace） |
-| `AssertionSpec` | `tests/cases` の全ての不正ケース（期待した規則の assertion） |
-| `EmitSpec` | SystemVerilog の生成（mvp-0 と mvp-1）と、対応しない構成の拒否 |
+| `CaseSpec` | `tests/cases` の全ての合法ケース（cycles、最終状態、golden trace）。mvp-2 のケースは `crosscheck/RtlMvp2Spec` |
+| `AssertionSpec` | `tests/cases` の全ての不正ケース（期待した規則の assertion）。mvp-2 のケースは `crosscheck/RtlMvp2Spec` |
+| `EmitSpec` | SystemVerilog の生成（mvp-0、mvp-1、mvp-2 の W-full・W-reg・latency の変種と、mvp-2 の範囲の両端）と、対応しない構成の拒否（理由の文） |
 | `FixedPipelineSpec` | 固定パイプライン: 計画の検査の各規則、値のレジスタの共有と寿命、Core と同じ範囲の拒否、SystemVerilog（Decoder と RegisterFile がない）、手で計算した例の発行・書戻し・done の cycle（`FixedDriver` は `CoreDriver` と同じ数え方） |
 
-RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。初期値を全 0・全 1 にした RTL の確認（L8 だけに反するカナリア、合法なプログラム、書かれない位置）は、`crosscheck/InitStateSpec` で行う（#129）。
+RTL と参照モデルの乱数による突き合わせは、`crosscheck/RtlDifferentialSpec` で行う。初期値を全 0・全 1 にした RTL の確認（L8 だけに反するカナリア、合法なプログラム、書かれない位置）は、`crosscheck/InitStateSpec` で行う（#129。mvp-2 は `machine-mvp2.json` を全 1 で）。ISA mvp-2 の RTL は、`crosscheck/RtlMvp2Spec` が machine ごとに1回のビルドで、W のケースと乱数の合法・不正な W のプログラムを、期待値・参照モデル・verifier と照合する。ISA.md の命令語と、mvp-0・mvp-1 の命令列の互換性は W-full のビルドだけで確かめ、W-full の変種（レジスタ8本・4 bank × 64 語）のビルドは乱数のプログラムだけを走らせる。不正なプログラムは、テスト用の `CoreDriver.run` の `stopAtViolation` で、最初の違反のサイクルで止める（[docs/VERIFIER.md](../docs/VERIFIER.md)「RTLのassertionとの対応」）。

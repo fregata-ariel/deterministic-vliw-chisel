@@ -1,0 +1,7 @@
+{"cycle":0,"pc":0,"issue":{"compute":"vmul r4:r5, r1, r2:r3","memory":"ld.w r6:r7, [4]"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+{"cycle":1,"pc":1,"issue":{"compute":"vmul r8:r9, r1, r2:r3","memory":"nop"},"rf_commit":[],"mem_commit":[],"busy":true,"done":false}
+{"cycle":2,"pc":2,"issue":{"compute":"vmac r10:r11, r2:r3, r6:r7, r4:r5","memory":"ld.w r12:r13, [6]"},"rf_commit":[{"reg":4,"value":15,"port":"compute"},{"reg":5,"value":21,"port":"compute"},{"reg":6,"value":10,"port":"memory"},{"reg":7,"value":20,"port":"memory"}],"mem_commit":[],"busy":true,"done":false}
+{"cycle":3,"pc":3,"issue":{"compute":"vmul r14:r15, r1, r8:r9","memory":"st.w [10], r4:r5"},"rf_commit":[{"reg":8,"value":15,"port":"compute"},{"reg":9,"value":21,"port":"compute"}],"mem_commit":[],"busy":true,"done":false}
+{"cycle":4,"pc":4,"issue":{"compute":"nop","memory":"st.w [12], r10:r11"},"rf_commit":[{"reg":10,"value":65,"port":"compute"},{"reg":11,"value":161,"port":"compute"},{"reg":12,"value":1,"port":"memory"},{"reg":13,"value":2,"port":"memory"}],"mem_commit":[{"addr":10,"value":15},{"addr":11,"value":21}],"busy":true,"done":false}
+{"cycle":5,"pc":5,"issue":{"compute":"halt","memory":"nop"},"rf_commit":[{"reg":14,"value":45,"port":"compute"},{"reg":15,"value":63,"port":"compute"}],"mem_commit":[{"addr":12,"value":65},{"addr":13,"value":161}],"busy":true,"done":false}
+{"cycle":6,"pc":null,"issue":null,"rf_commit":[],"mem_commit":[],"busy":false,"done":true}

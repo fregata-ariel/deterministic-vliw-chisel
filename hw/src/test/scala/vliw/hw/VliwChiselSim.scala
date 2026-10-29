@@ -22,13 +22,14 @@ import svsim.verilator.Backend.CompilationSettings.Parallelism
   * register and memory starts from Verilator's random numbers ([[InitMode.Urandom]]; a test can
   * choose all zeros or all ones instead, [[VliwChiselSim.simulateInit]]). Registers with a reset
   * get their reset value at the first reset edge. The state without a reset keeps its initial value
-  * until written: the registers of the register file (`RegisterFile.regs`), the instruction memory
-  * (`Core.imem`), the scratchpad banks (`MemorySlot.banks`, with the registers of their read ports
-  * that firtool adds, `_RW0_*`), the bank of the last read (`MemorySlot.readBank`) and the value
-  * registers of a fixed pipeline (`FixedPipeline.regs`). The first reset edge itself can write the
-  * register file: the write-back schedules and `loadStage` still hold their initial values at that
-  * edge, and register writes are not stopped by reset (with all ones, both ports write the register
-  * whose index bits are all 1; ADR-0021). The host therefore loads its inputs after reset
+  * until written: the registers of the register file (`RegisterFile.regs`, on ISA mvp-2
+  * `BankedRegisterFile.bank0` and `bank1`), the instruction memory (`Core.imem`), the scratchpad
+  * banks (`MemorySlot.banks`, with the registers of their read ports that firtool adds, `_RW0_*`),
+  * the bank of the last read (`MemorySlot.readBank`) and the value registers of a fixed pipeline
+  * (`FixedPipeline.regs`). The first reset edge itself can write the register file: the write-back
+  * schedules and `loadStage` still hold their initial values at that edge, and register writes are
+  * not stopped by reset (with all ones, both ports write the register whose index bits are all 1,
+  * on mvp-2 its pair; ADR-0021). The host therefore loads its inputs after reset
   * ([[CoreDriver.start]]).
   *
   * Where the random numbers start without `+verilator+seed+` depends on the Verilator version, and

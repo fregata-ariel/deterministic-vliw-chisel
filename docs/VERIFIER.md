@@ -50,23 +50,23 @@ sbt "compiler/run verify tests/cases/isa_example.json ..."
 
 ## RTLのassertionとの対応
 
-ISA mvp-2 の RTL は #110 の第3段で作る。それまでは `CoreParams` が mvp-2 の machine を拒否し、`hw` のテストは mvp-2 のケースをスキップとして表示する。
-
 RTL（`vliw.hw.Core`）は、違反をサイクルごとの信号（`io.violation`）として出し、シミュレーション用の `assert` で停止する。メッセージは `L3 (read of a register being written) at pc 1` のように規則IDで始まる。合法なプログラムでは発火せず、ストールで違反を隠すことはしない。
 
 | 規則 | RTLでの検出 |
 |---|---|
-| L1 符号化 | `Decoder` が、未知opcode・予約bit・NOP/HALT のオペランドbit・範囲外のレジスタ・HALT と memory操作の組合せを検出する |
+| L1 符号化 | `Decoder` が、未知opcode・予約bit・NOP/HALT のオペランドbit・範囲外のレジスタ・HALT と memory操作の組合せを検出する。mvp-2 では、奇数の組の欄、VADD・VSUB の B、演算ごとの予約 bit（VMUL は bits 15:12 と 10:0、VMAC は 10:0、LD.W・ST.W は 14:0）、W-reg の LD.W・ST.W の opcode も |
 | L2 プログラム形状 | 命令領域を超えるプログラムは、ロード時に拒否する（ホストが書き込めない）。実行中は、PC がプログラム長に達した場合と、最後以外の bundle の HALT で発火する |
-| L3 書込み中の読出し | `WriteReservations` で、読むレジスタ（rs1、rs2、ST のソース、mvp-1 の MAC の rs3）が書込み中なら発火する |
-| L4 書込み区間の重複 | 書込み中のレジスタへの新しい書込みと、同じ bundle の Compute と LD の書込み先の一致で発火する |
-| L5 書戻しポート | `WritebackSchedule` が、同じ境界に予約済みのポートへの書込みを検出する |
+| L3 書込み中の読出し | `WriteReservations` で、読むレジスタ（rs1、rs2、ST のソース、mvp-1 の MAC の rs3）が書込み中なら発火する。mvp-2 では、組の欄（ST.W のソースと VMAC の rs3 を含む）は両方のレジスタを問い合わせ、ブロードキャストの rs1 は1つのレジスタを問い合わせる |
+| L4 書込み区間の重複 | 書込み中のレジスタへの新しい書込みと、同じ bundle の Compute と LD の書込み先の一致で発火する。mvp-2 では、ベクトル演算と LD.W の書込みは組の両方のレジスタを予約し、同じ bundle の書込み先はレジスタの集合で比べる（`vmac r4:r5, … \| ld r5, [0]` も） |
+| L5 書戻しポート | `WritebackSchedule` が、同じ境界に予約済みのポートへの書込みを検出する。mvp-2 のベクトル演算と LD.W は、組を1つの項目として予約するので、操作で数える。LD と LD.W の latency が違う構成（`mvp2_vlat.json` など）の Memory ポートの衝突は、後の load の値が予約表に入るとき、つまり後の load の発行の1サイクル後に発火する（pc は次の bundle を指す）。ほかの規則は、違反した bundle の発行サイクルに発火する |
 | L6 HALT時の完了 | HALT の発行時に、書込み予約・予約表・LD の取り込み段のいずれかが残っていれば発火する |
-| L7 アドレス範囲 | `MemorySlot` が、容量を超えるアドレスを検出する（そのアクセスは行わない） |
+| L7 アドレス範囲 | `MemorySlot` が、容量を超えるアドレスを検出する（そのアクセスは行わない）。LD.W・ST.W は語 a+1 も確かめ、どちらかが範囲外なら、どちらの語にもアクセスしない |
 | L8 未定義値 | RTL は値の定義状態を持たないので対象外。verifier と参照モデルだけで検査する |
 | L9 発行間隔、L10 書込み中のメモリ語の読出し | RTL が対応する構成（全 II が1、ST のレイテンシー1）では起こらない。それ以外の構成は `CoreParams` が拒否する（[MACHINE.md](MACHINE.md)「実装ごとの対応範囲」） |
-| L11 読出しポート | mvp-1 で、MAC と ST が同じ bundle にあると発火する（読出し4、ポート3本）。`read_ports` 4 の構成は `CoreParams` が拒否する。mvp-0 では起こらないので、信号を作らない |
+| L11 読出しポート | mvp-1 で、MAC と ST が同じ bundle にあると発火する（読出し4、ポート3本）。mvp-2 では「（MAC か VMAC）かつ（ST か ST.W）」（欄4、形 F）。`read_ports` 4 の構成は `CoreParams` が拒否する。mvp-0 では起こらないので、信号を作らない |
 
 このほか、ホストが実行中に状態を変更すると `HOST` の assertion が発火する。
 
-`hw/AssertionSpec` は、`tests/cases` のすべての不正ケースについて、期待した規則の assertion が発火することを確かめる。RTL が対応しない構成（ST のレイテンシー2など）のケースはスキップし、その旨を表示する。
+`hw/AssertionSpec` は、`tests/cases` のすべての不正ケース（mvp-2 のものを除く）について、期待した規則の assertion が発火することを確かめる。RTL が対応しない構成（ST のレイテンシー2など）のケースはスキップし、その旨を表示する。
+
+mvp-2 のケースは、`crosscheck/RtlMvp2Spec` が RTL の対応する machine ごとに1回のビルドで実行する（ケースごとにビルドすると、CI の時間に収まらない）。1つの DUT で多くのプログラムを走らせるため、テスト用の `CoreDriver.run` に `stopAtViolation` を用意した。違反の信号（`io.violation`）が最初に立ったサイクルで、知らせた規則とサイクルを記録し、そのサイクルの終わりのクロックの境界の間 reset を立てて返す。生成される assertion はどれも reset で止められている（`if (~Core.reset & Core.io_violation_*)`）ので、その境界では発火せず、次のプログラムの `start` がコアを reset し直す。違反の信号は assertion の条件そのものなので、知らせた規則とサイクルは、assertion が発火する規則とサイクルである。これはテストの側の仕組みで、RTL はストールも停止もしない。不正なケースでは、最初に違反したサイクルで知らせた規則が、ケースの規則（L8 を除く）に含まれることを確かめ、L8 だけのケースは最後まで実行されることを確かめる。乱数の不正なプログラムでは、知らせた規則が verifier の見つけた規則に含まれ（最後の bundle でない HALT は L2 で、RTL はその HALT でも L6 を確かめるので、L2 と一緒の L6 は除く。verifier は L6 を最後の bundle の HALT でだけ確かめる）、止まったサイクルが参照モデルの最初の違反のサイクル（上の Memory ポートの L5 だけは、その1サイクル後）であることを確かめる。ケースを走らせる3つのビルド（`machine-mvp2.json`・`mvp2_mw1.json`・`mvp2_vlat.json`）の最後には、それぞれ1つのケース（`w_vmac_stw_fields` の L11、`w_ldw_on_wreg` の L1、`w_vlat_vmul_mul_port` の L5）を `stopAtViolation` なしで走らせ、assertion が実際に発火することを確かめる。4つ目のビルド（W-full の変種。レジスタ8本・4 bank × 64 語・latency を混ぜたもの）はケースを持たず、乱数のプログラムを `stopAtViolation` で走らせるだけで、assertion を発火させない。mvp-0・mvp-1 のケースでは、`hw/AssertionSpec` が、ケースごとに assertion の発火を確かめるままである。

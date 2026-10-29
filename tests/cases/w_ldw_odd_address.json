@@ -39,6 +39,7 @@
       "34": "0x22222222",
       "42": 7,
       "43": 9
-    }
+    },
+    "trace": "tests/golden/w_ldw_odd_address.trace.jsonl"
   }
 }

@@ -145,17 +145,17 @@ machine description の契約は3段に分かれる。ローダが受け付け�
 |---|---|---|
 | 形式 | `MachineDescription` のローダ | 上の「検証規則」の表 |
 | 意味論 | `Verifier`（`compiler`）、`ReferenceModel`（`sim`） | ローダが受け付ける全構成。latency と ii の意味は [ISA.md](ISA.md) の実行意味論と L1〜L10、`read_ports` の意味は L11（#77）。mvp-2 は #110 の第2段で加えた（下） |
-| RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD の latency が2以上、ST の latency が1。ほかの値はローダの範囲全体。mvp-1 では、加えて `read_ports` が3（読出し4本の RTL は #57 で足す。ADR-0018）。mvp-2 は #110 の第3段で扱う（下） |
-| 固定パイプライン（#75） | `FixedParams`（`hw`） | RTL と同じ。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017） |
+| RTL | `CoreParams`（`hw`） | 全演算の ii が1、LD・LD.W の latency が2以上、ST・ST.W の latency が1。ほかの値はローダの範囲全体。mvp-1・mvp-2 では、加えて `read_ports` が3（mvp-2 では RF の bank ごと。読出し4本の RTL は #57 で足す。ADR-0018）。ii と latency は、決まった演算の一覧ではなく machine の全演算で確かめる。mvp-2 は #110 の第3段で加えた（下） |
+| 固定パイプライン（#75） | `FixedParams`（`hw`） | ISA mvp-0・mvp-1 で、RTL と同じ範囲。`CoreParams.unsupported` と同じ理由で拒否する（ADR-0017）。mvp-2 の machine は、その前に自分の理由で拒否する（下） |
 
 RTL が対応しない理由は次のとおり。
 
 | 制約 | 理由 |
 |---|---|
 | ii が1 | 全演算器を毎サイクル発行できるパイプラインにしている。II が2以上の演算器の予約は実装していない |
-| LD の latency が2以上 | Scratchpad は同期読出しメモリで、発行の次のサイクルに値が出る |
-| ST の latency が1 | 書込みを発行の境界で行う。2以上にすると、STの書込みと後続のLDの読出しが同じ bank で同じ境界に重なり得る。1RW の bank でこれを扱う設計は未定 |
-| `read_ports` が3（mvp-1） | RF は 3R/2W のまま。ポート2のアドレスを MAC の rs3 と ST のソースで切り替える（MAC と ST が同じ bundle にあると L11）。読出し4本の RTL は #57（ADR-0018） |
+| LD・LD.W の latency が2以上 | Scratchpad は同期読出しメモリで、発行の次のサイクルに値が出る |
+| ST・ST.W の latency が1 | 書込みを発行の境界で行う。2以上にすると、STの書込みと後続のLDの読出しが同じ bank で同じ境界に重なり得る。1RW の bank でこれを扱う設計は未定 |
+| `read_ports` が3（mvp-1、mvp-2） | RF は 3R/2W のまま（mvp-2 では RF の bank ごとに 3R/2W）。ポート2のアドレスを MAC・VMAC の rs3 と ST・ST.W のソースで切り替える（両方が同じ bundle にあると L11）。読出し4本の RTL は #57（ADR-0018） |
 
 mvp-2（W）の範囲は次のとおりで、#110 の各段で実装する（○の括弧の中が、その段）。
 
@@ -166,10 +166,10 @@ mvp-2（W）の範囲は次のとおりで、#110 の各段で実装する（○
 | W-full、RF の bank ごとに `read_ports` 4 | ○ | ○（第2段） | × | 読出し4本の RTL は #57（ADR-0018） |
 | ii が1でない（新しい演算を含む） | ○ | ○（第2段） | × | 上の「ii が1」と同じ |
 | LD.W の latency が2未満、ST・ST.W の latency が1でない | ○ | ○（第2段） | × | 上の LD・ST と同じ理由 |
-| 固定パイプライン（#75） | — | — | × | MAC と同じ扱い（[PHASE3.md](PHASE3.md)） |
+| 固定パイプライン（#75） | — | — | × | #75 は mvp-0・mvp-1 の固定パイプラインで、W は範囲の外（`FixedParams` が自分の理由で拒否する。ADR-0022） |
 
-その段が入るまでは、mvp-2 の machine を mvp-1 として扱わずに、理由付きで拒否する。mvp-1 として扱うと、黙って誤るからである（RTL は W の命令語を未知の opcode として実行し、コンパイラは mvp-2 の名前で mvp-1 の命令列を作る）。`KernelCompiler.prepare`・`ModuloCompiler.prepare` は理由を返し（第4〜5段まで）、`CoreParams.unsupported` は理由を返す（第3段まで。`FixedParams` も同じ理由で拒否する）。`ReferenceModel`・`Metrics`（`sim`）と `Verifier`（`compiler`）、`compiler/run verify` と `sim/run` は、第1段では例外を投げるか入力の誤り（終了コード2）で終わっていたが、第2段で mvp-2 を扱うようになった（`Metrics` は `vliw-metrics/3` を書く）。第3段では、`CoreParams.unsupported` と `computeLatencies` を、決まった演算の一覧ではなく machine の全演算で数えるように直す（今のままだと、新しい演算の ii が1でなくても受け付け、`maxLatency` が小さくなり得る）。
+その段が入るまでは、mvp-2 の machine を mvp-1 として扱わずに、理由付きで拒否する。mvp-1 として扱うと、黙って誤るからである（RTL は W の命令語を未知の opcode として実行し、コンパイラは mvp-2 の名前で mvp-1 の命令列を作る）。`KernelCompiler.prepare`・`ModuloCompiler.prepare` は理由を返す（第4〜5段まで）。`CoreParams.unsupported` も第2段までは理由を返していた（`FixedParams` も同じ理由で拒否していた）。`ReferenceModel`・`Metrics`（`sim`）と `Verifier`（`compiler`）、`compiler/run verify` と `sim/run` は、第1段では例外を投げるか入力の誤り（終了コード2）で終わっていたが、第2段で mvp-2 を扱うようになった（`Metrics` は `vliw-metrics/3` を書く）。第3段で RTL が W-full と W-reg（RF の bank ごとに `read_ports` 3）を実装し、`CoreParams` はその拒否をやめた。同時に、`CoreParams.unsupported` と `computeLatencies`・`maxLatency` を、決まった演算の一覧ではなく machine の全演算で数えるように直した（直さないと、新しい演算の ii が1でなくても受け付け、`maxLatency` が小さくなり得た）。理由は、ii、LD・LD.W の latency、ST・ST.W の latency、`read_ports` の順に並ぶ。`FixedParams` は、mvp-2 の machine を、`CoreParams` の理由の前に自分の理由 `fixed pipelines are built for ISA mvp-0 and mvp-1; W (mvp-2) is outside #75 (ADR-0022)` で拒否する（mvp-1 の MAC のように受け付けて使わないのではなく、拒否する。#110 の第3段の既定）。
 
 `CoreParams.check` は、範囲外の設定を理由付きですべて返す。`sbt "hw/run [dir] [machine.json]"` は理由を表示して終了し、`CoreParams` を直接作ると組み立て時に例外になる。
 
-RTL のテスト（`hw`）は、範囲外の構成のケースを、理由を付けてスキップとして表示し、検証済みには数えない。範囲内の別の構成（レイテンシー、レジスタ数、bank 数を変えたもの）は、`crosscheck/RtlDifferentialSpec` で RTL と参照モデルを照合する。範囲の両端（latency 1 と 8、レジスタ1個と16個、Scratchpad 1 word と 512 word、命令領域 1 と 4096 bundle）は `hw/EmitSpec` で組み立てられることを確かめる。
+RTL のテスト（`hw`）は、範囲外の構成のケースを、理由を付けてスキップとして表示し、検証済みには数えない。範囲内の別の構成（レイテンシー、レジスタ数、bank 数を変えたもの）は、`crosscheck/RtlDifferentialSpec` で RTL と参照モデルを照合する。範囲の両端（latency 1 と 8、レジスタ1個と16個、Scratchpad 1 word と 512 word、命令領域 1 と 4096 bundle）は `hw/EmitSpec` で組み立てられることを確かめる。mvp-2 のケースは、`crosscheck/RtlMvp2Spec` が RTL の対応する machine（`config/machine-mvp2.json`・`mvp2_mw1.json`・`mvp2_vlat.json`）ごとに1回のビルドで実行し、範囲外の `mvp2_rp4.json`・`mvp2_vii.json` のケースはスキップとして表示する。範囲内の別の構成（W-full で、レジスタ8個、4 bank × 64 word、latency を混ぜたもの）も `RtlMvp2Spec` で参照モデルと照合する。mvp-2 の範囲の両端（レジスタ2個と16個、W-full の bank 2 と 512、W-reg の bank 1、新しい演算の latency 1 と 8（LD.W は 2 と 8）、命令領域 1 と 4096 bundle）は `hw/EmitSpec` で組み立てる。

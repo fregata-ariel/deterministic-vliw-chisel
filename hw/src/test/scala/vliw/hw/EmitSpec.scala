@@ -113,19 +113,88 @@ class EmitSpec extends AnyFunSuite {
     }
   }
 
-  test("mvp-2: the RTL refuses every mvp-2 machine until #110 stage 3") {
-    val reason = "ISA mvp-2 is not implemented in the RTL yet (#110 stage 3); machine "
-    val mvp2 =
-      MachineDescription.load(MachineDescription.Mvp2Path).fold(es => fail(es.mkString), identity)
-    (mvp2 +: Seq("mvp2_mw1.json", "mvp2_rp4.json", "mvp2_vlat.json", "mvp2_vii.json")
-      .map(machineFile)).foreach { m =>
-      val reasons = CoreParams.check(m).left.getOrElse(fail(s"${m.machineId} was accepted"))
-      assert(reasons.head == reason + m.machineId, reasons)
-      assertThrows[IllegalArgumentException](CoreParams(m))
+  // ISA mvp-2 (#110 stage 3, docs/ISA.md "mvp-2: W").
+  private val mvp2 =
+    MachineDescription.load(MachineDescription.Mvp2Path).fold(es => fail(es.mkString), identity)
+  private def editedMvp2(edit: ujson.Value => Unit) = {
+    val v = ujson.read(mvp2.canonicalJson)
+    edit(v)
+    MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
+  }
+  private def emit(m: MachineDescription) =
+    ChiselStage.emitSystemVerilog(new Core(CoreParams(m)), firtoolOpts = Emit.FirtoolOptions)
+
+  test(
+    "mvp-2: W-full, W-reg and the latency variant elaborate; the W logic is in its own modules"
+  ) {
+    val sv = (mvp2 +: Seq("mvp2_mw1.json", "mvp2_vlat.json").map(machineFile)).map { m =>
+      assert(CoreParams.check(m).isRight, m.machineId)
+      m.machineId -> emit(m)
+    }.toMap
+    sv.values.foreach { s =>
+      assert(s.contains("module BankedRegisterFile(") && s.contains("module VectorLane("))
+      assert(!s.contains("module RegisterFile("))
+      assert(s.contains("L11 (more register reads than read ports)"))
     }
-    // W-full, W-reg and the latency variant are otherwise within the RTL's range (stage 3).
-    (mvp2 +: Seq("mvp2_mw1.json", "mvp2_vlat.json").map(machineFile)).foreach { m =>
-      assert(CoreParams.unsupported(m).size == 1, m.machineId)
+    // LD.W and ST.W, lane 1 of the store and the word a+1, on W-full only.
+    val full = sv(mvp2.machineId)
+    assert(full.contains("io_storeData1") && full.contains("io_observe_memCommit1"))
+    assert(full.contains("L7 (scratchpad address out of range)"), "word a+1 can be 512")
+    val reg = sv("vliw2-i32-sp2-mac-w2-mw1")
+    assert(!reg.contains("io_storeData1") && !reg.contains("memCommit1") && !reg.contains("wide"))
+  }
+
+  test("mvp-2: 4 read ports, II above 1 and store latency 2 are refused with every reason") {
+    def reasons(m: MachineDescription) =
+      CoreParams.check(m).left.getOrElse(fail(s"${m.machineId} was accepted"))
+    assert(
+      reasons(machineFile("mvp2_rp4.json")) == Seq(
+        "read_ports is 4; the RTL has 3 register read ports per RF bank, port 2 shared by the rs3 of MAC and VMAC and the Memory source of ST and ST.W (4 read ports come in #57, ADR-0018)"
+      )
+    )
+    val ii = "; the RTL issues every unit every cycle and supports only II 1"
+    val store = "has latency 2; the RTL supports only 1 (stores write at the issue edge)"
+    assert(
+      reasons(machineFile("mvp2_vii.json")) ==
+        Seq("VADD", "VSUB", "VMUL", "VMAC", "LD.W", "ST.W").map(op => s"$op has II 2$ii") ++
+        Seq(s"ST $store", s"ST.W $store")
+    )
+    val ldw = reasons(editedMvp2(_("operations")("LD.W")("latency") = 1))
+    assert(
+      ldw == Seq("LD.W has latency 1; the RTL needs at least 2 (synchronous-read scratchpad)"),
+      ldw
+    )
+    Seq("mvp2_rp4.json", "mvp2_vii.json").foreach { f =>
+      assertThrows[IllegalArgumentException](CoreParams(machineFile(f)))
+    }
+  }
+
+  test("mvp-2: the ends of the loader's ranges elaborate") {
+    val vector = Seq("VADD", "VSUB", "VMUL", "VMAC")
+    def ends(latency: Int, registers: Int, banks: Int, words: Int, bundles: Int, wide: Boolean) =
+      editedMvp2 { v =>
+        vector.foreach(op => v("operations")(op)("latency") = latency)
+        v("register_file")("count") = registers
+        v("scratchpad")("banks") = banks
+        v("scratchpad")("words_per_bank") = words
+        v("scratchpad")("bank_mapping") = s"word_address_mod_$banks"
+        v("scratchpad")("row_mapping") = s"word_address_div_$banks"
+        v("instruction_memory")("bundles") = bundles
+        if (wide) v("operations")("LD.W")("latency") = latency.max(2)
+        else {
+          v("scratchpad")("max_words_per_access") = 1
+          v("operations").obj.remove("LD.W")
+          v("operations").obj.remove("ST.W")
+        }
+      }
+    Seq(
+      ends(1, 2, 2, 256, 1, wide = true),
+      ends(8, 16, 512, 1, 4096, wide = true),
+      ends(1, 2, 1, 512, 4096, wide = false),
+      ends(8, 16, 1, 1, 1, wide = false)
+    ).foreach { m =>
+      assert(CoreParams.check(m).isRight, m.registerCount)
+      emit(m)
     }
   }
 }

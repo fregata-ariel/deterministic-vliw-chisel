@@ -1,6 +1,6 @@
 # テストケース形式（vliw-testcase/1）
 
-verifier、参照モデル、Phase 1 のRTLテストが共有する、手作りの期待値の形式。ファイルは `tests/cases/<name>.json` に置き、ローダは `vliw.isa.TestCase`。
+verifier、参照モデル、Phase 1 のRTLテストが共有する、手作りの期待値の形式。ファイルは `tests/cases/<name>.json` に置き、ローダは `vliw.isa.TestCase`。ISA mvp-2 のケースは、RTL では `crosscheck/RtlMvp2Spec` が machine ごとに1回のビルドで実行し、RTL の範囲外の machine（`mvp2_rp4.json`・`mvp2_vii.json`）のケースはスキップとして表示する（#110 の第3段。[tests/cases/README.md](../tests/cases/README.md)）。
 
 期待値は人が書く。実装の出力をそのまま期待値にしない（[ADR-0002](DECISIONS.md)）。
 

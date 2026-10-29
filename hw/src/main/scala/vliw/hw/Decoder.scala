@@ -4,17 +4,18 @@ import chisel3._
 import chisel3.util._
 
 class DecodedBundle(val p: CoreParams) extends Bundle {
-  val compute = Valid(new ComputeOperation(p.regBits))
+  val compute = Valid(new ComputeOperation(p.regBits, p.hasVector))
   val rs1 = UInt(p.regBits.W)
   val rs2 = UInt(p.regBits.W)
 
-  /** MAC's rs3 (ISA mvp-1 only). */
+  /** The rs3 of MAC (ISA mvp-1 and mvp-2) and of VMAC (mvp-2). */
   val rs3 = Option.when(p.hasMac)(UInt(p.regBits.W))
   val halt = Bool()
-  val memory = Valid(new MemoryOperation(p.regBits))
+  val memory = Valid(new MemoryOperation(p.regBits, p.hasWideMemory))
 
   /** The word is not a valid bundle (rule L1): unknown opcode, non-zero reserved or operand bits, a
-    * register outside the register file, or HALT with a memory operation.
+    * register outside the register file, an odd pair field (mvp-2), or HALT with a memory
+    * operation.
     */
   val illegal = Bool()
 }
@@ -30,6 +31,12 @@ class DecoderIO(val p: CoreParams) extends Bundle {
   * description. The compute word is bits 31:0 and the memory word bits 63:32. On ISA mvp-1, MAC
   * puts rs3 in bits 15:12 and keeps bits 11:0 reserved (docs/ISA.md, "mvp-1: MAC"); on mvp-0 there
   * is no MAC logic, and its opcode is unknown.
+  *
+  * On ISA mvp-2 (docs/ISA.md, "mvp-2: W"), VADD, VSUB, VMUL and VMAC decode as the kinds Add, Sub,
+  * Mul and Mac with `vector` set, and B (bit 11) as `broadcast`; LD.W and ST.W (W-full only) as Ld
+  * and St with `wide` set. Their pair fields must be even (a broadcast rs1 may be odd), and their
+  * reserved bits are VADD/VSUB 15:0, VMUL 15:12 and 10:0, VMAC 10:0, LD.W/ST.W 14:0. On W-reg the
+  * opcodes of LD.W and ST.W are unknown, as those of the vector operations are on mvp-0 and mvp-1.
   */
 class Decoder(p: CoreParams) extends Module {
   val io = IO(new DecoderIO(p))
@@ -43,11 +50,21 @@ class Decoder(p: CoreParams) extends Module {
   private val (rd, rdOk) = reg(c(27, 24))
   private val (rs1, rs1Ok) = reg(c(23, 20))
   private val (rs2, rs2Ok) = reg(c(19, 16))
+  // ISA mvp-2: the vector operations take the kinds, and so the datapath, of ADD, SUB, MUL, MAC.
+  private val vectorKinds =
+    if (p.hasVector)
+      Seq(
+        p.opcode("VADD") -> ComputeKind.Add,
+        p.opcode("VSUB") -> ComputeKind.Sub,
+        p.opcode("VMUL") -> ComputeKind.Mul,
+        p.opcode("VMAC") -> ComputeKind.Mac
+      )
+    else Nil
   private val kinds = Seq(
     p.opcode("ADD") -> ComputeKind.Add,
     p.opcode("SUB") -> ComputeKind.Sub,
     p.opcode("MUL") -> ComputeKind.Mul
-  ) ++ p.macOpcode.map(_ -> ComputeKind.Mac)
+  ) ++ p.macOpcode.map(_ -> ComputeKind.Mac) ++ vectorKinds
   private val cIsArith = kinds.map { case (code, _) => cOp === code.U }.reduce(_ || _)
   private val cIsHalt = cOp === p.machine.haltOpcode.U
   private val cNoOperands = c(27, 0) === 0.U
@@ -57,9 +74,28 @@ class Decoder(p: CoreParams) extends Module {
   private val cLowIllegal = mac.fold(c(15, 0) =/= 0.U) { case (isMac, (_, rs3Ok)) =>
     Mux(isMac, c(11, 0) =/= 0.U || !rs3Ok, c(15, 0) =/= 0.U)
   }
+
+  // mvp-2: whether the word is a vector operation, and whether its pair fields, B and reserved
+  // bits break L1. rs1 is a pair unless B is set; B is allowed only on VMUL and VMAC; VMAC's rs3
+  // is a pair, decoded from the bits 15:12 of MAC's rs3.
+  private val vector = Option.when(p.hasVector) {
+    val isVector = vectorKinds.map { case (code, _) => cOp === code.U }.reduce(_ || _)
+    val isVmul = cOp === p.opcode("VMUL").U
+    val isVmac = cOp === p.opcode("VMAC").U
+    val b = c(11)
+    val rs3Ok = mac.get._2._2
+    val oddPair = c(24) || c(16) || (!b && c(20)) || (isVmac && c(12))
+    val reserved = Mux(
+      isVmac,
+      c(10, 0) =/= 0.U || !rs3Ok,
+      Mux(isVmul, c(15, 12) =/= 0.U || c(10, 0) =/= 0.U, c(15, 0) =/= 0.U)
+    )
+    (isVector, oddPair || reserved)
+  }
   private val cIllegal = Mux(
     cIsArith,
-    cLowIllegal || !rdOk || !rs1Ok || !rs2Ok,
+    vector.fold(cLowIllegal) { case (isVector, bad) => Mux(isVector, bad, cLowIllegal) } ||
+      !rdOk || !rs1Ok || !rs2Ok,
     Mux(cOp === p.machine.nopOpcode.U || cIsHalt, !cNoOperands, true.B)
   )
 
@@ -69,6 +105,8 @@ class Decoder(p: CoreParams) extends Module {
     kinds.map { case (code, k) => (cOp === code.U) -> k }
   )
   io.out.compute.bits.rd := rd
+  io.out.compute.bits.vector.zip(vector).foreach { case (out, (isVector, _)) => out := isVector }
+  io.out.compute.bits.broadcast.foreach(_ := c(11))
   io.out.rs1 := rs1
   io.out.rs2 := rs2
   io.out.rs3.zip(mac).foreach { case (out, (_, (rs3, _))) => out := rs3 }
@@ -80,16 +118,24 @@ class Decoder(p: CoreParams) extends Module {
   private val mIsLd = mOp === p.opcode("LD").U
   private val mIsSt = mOp === p.opcode("ST").U
   private val mIsNop = mOp === p.machine.nopOpcode.U
+  // W-full: LD.W and ST.W, whose register is a pair (even); bits 14:0 are reserved as for LD/ST.
+  private val wide = Option.when(p.hasWideMemory)(
+    (mOp === p.opcode("LD.W").U, mOp === p.opcode("ST.W").U)
+  )
+  private def orWide(ldSt: Bool): Bool = wide.fold(ldSt) { case (ldw, stw) => ldSt || ldw || stw }
   private val mIllegal = Mux(
-    mIsLd || mIsSt,
-    m(14, 0) =/= 0.U || !mRegOk,
+    orWide(mIsLd || mIsSt),
+    wide.fold(m(14, 0) =/= 0.U || !mRegOk) { case (ldw, stw) =>
+      m(14, 0) =/= 0.U || !mRegOk || ((ldw || stw) && m(24))
+    },
     Mux(mIsNop, m(27, 0) =/= 0.U, true.B)
   )
 
-  io.out.memory.valid := (mIsLd || mIsSt) && !mIllegal
-  io.out.memory.bits.kind := Mux(mIsLd, MemoryKind.Ld, MemoryKind.St)
+  io.out.memory.valid := orWide(mIsLd || mIsSt) && !mIllegal
+  io.out.memory.bits.kind := Mux(wide.fold(mIsLd)(w => mIsLd || w._1), MemoryKind.Ld, MemoryKind.St)
   io.out.memory.bits.reg := mReg
   io.out.memory.bits.addr := m(23, 15)
+  io.out.memory.bits.wide.zip(wide).foreach { case (out, (ldw, stw)) => out := ldw || stw }
 
   io.out.illegal := cIllegal || mIllegal || (cIsHalt && !mIsNop)
 }
