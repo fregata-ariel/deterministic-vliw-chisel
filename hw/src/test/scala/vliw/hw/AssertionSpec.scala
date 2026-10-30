@@ -1,76 +1,88 @@
 package vliw.hw
 
-import chisel3.simulator.Exceptions.AssertionFailed
-import org.scalatest.funsuite.AnyFunSuite
-
 import vliw.isa._
 
-/** Every illegal case in tests/cases must stop the RTL with an assertion of an expected rule. L8
+/** Every illegal case in tests/cases must stop the RTL with a violation of an expected rule. L8
   * (undefined values) is outside the RTL: the hardware holds no definedness state.
   *
-  * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, many programs per build of each
-  * machine (#110 stage 3): one build per case here would not fit the CI's time.
+  * One build per machine (#110 Q3, [[CaseBuildSpec]]): the illegal cases of the machine in turn,
+  * each stopped in the first cycle in which the core signals a violation (the condition of an
+  * assertion), whose rules must be some of the case's; then the machine's firing case again, whose
+  * assertion must really fire with its rule, at the pc at which it stopped. The firing cases differ
+  * from those of [[CaseSpec]] but on `mvp1_mac3`, whose only illegal case is `mac3_mul_port`
+  * ([[CaseBuildSpec]]).
+  *
+  * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, in the same way.
   */
-class AssertionSpec extends AnyFunSuite with VliwChiselSim {
-  private val FiredRule = """Assertion failed: (L\d+) """.r.unanchored
+class AssertionSpec extends CaseBuildSpec {
+  import CaseBuildSpec._
 
-  private val cases = TestCase
-    .loadAll()
-    .fold(es => fail(es.mkString("\n")), identity)
-    .filter(_.machine.isaVersion != IsaVersion.Mvp2)
+  protected val firing: Set[String] = AssertionSpec.firing
 
-  /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */
-  private def outside(c: TestCase) =
-    CoreParams.check(c.machine).left.toOption.get.map(_.takeWhile(_ != ';')).mkString(", ")
-  private val illegal = cases.collect {
-    case c @ TestCase(_, _, _, _, _, _, Expectation(Verdict.Illegal(r), _, _, _, _)) =>
-      (c, r)
-  }
-
-  private def supported(c: TestCase) = CoreParams.check(c.machine).isRight
+  private val illegal = cases.filter(rulesOf(_).nonEmpty)
 
   test("illegal cases exist for every rule the RTL checks") {
-    val covered = illegal.filter(x => supported(x._1)).flatMap(_._2).toSet
+    val covered = illegal.filter(outside(_).isEmpty).flatMap(rulesOf).toSet
     // L9 needs an II above 1 and L10 a store latency above 1: neither occurs on a machine the RTL
     // implements (CoreParams).
     val unreachable = Set[Rule](Rule.UndefinedRead, Rule.IssueInterval, Rule.InFlightStoreRead)
     assert((Rule.all.toSet -- unreachable).subsetOf(covered), covered.map(_.id))
   }
 
-  illegal.foreach { case (c, rules) =>
-    val rtlRules = rules - Rule.UndefinedRead
-    if (!supported(c)) {
-      ignore(s"${c.name}: outside the RTL's range (${outside(c)})") {}
-    } else if (rtlRules.isEmpty) {
-      test(s"${c.name}: L8 only, so the RTL runs to completion without an assertion") {
-        simulate(new Core(CoreParams(c.machine))) { dut =>
-          CoreDriver.run(dut, c.machine, c.words, c.inputs, Set.empty)
+  /** The test of `c` in the build of its machine: its name and its run. */
+  private def step(c: TestCase): Step = {
+    val rules = rtlRules(c)
+    def run(dut: Core) =
+      CoreDriver.run(dut, c.machine, c.words, c.inputs, Set.empty, stopAtViolation = true)
+    if (rules.isEmpty)
+      Step(
+        c,
+        s"${c.name}: L8 only, so the RTL runs to completion without an assertion",
+        dut => {
+          val r = run(dut)
+          assert(
+            r.stoppedAt.isEmpty && r.violations.isEmpty,
+            s"${c.name}: signalled ${r.violations.map(_.id)} at cycle ${r.stoppedAt}"
+          )
         }
-      }
-    } else if (c.words.size > c.machine.instructionMemoryBundles) {
-      test(s"${c.name}: rejected when loading (L2)") {
-        simulate(new Core(CoreParams(c.machine))) { dut =>
-          val e =
-            intercept[LoadRejected](CoreDriver.run(dut, c.machine, c.words, c.inputs, Set.empty))
-          assert(e.getMessage.startsWith("L2"))
-          assert(rtlRules.contains(Rule.ProgramShape))
+      )
+    else if (c.words.size > c.machine.instructionMemoryBundles)
+      Step(
+        c,
+        s"${c.name}: rejected when loading (L2)",
+        dut => {
+          val e = intercept[LoadRejected](run(dut))
+          assert(e.getMessage.startsWith("L2"), s"${c.name}: ${e.getMessage}")
+          assert(rules.contains(Rule.ProgramShape), s"${c.name}: ${rules.map(_.id)}")
         }
-      }
-    } else {
-      test(
-        s"${c.name}: an assertion of ${rtlRules.map(_.id).toSeq.sorted.mkString(" or ")} fires"
-      ) {
-        val e = intercept[AssertionFailed] {
-          simulate(new Core(CoreParams(c.machine))) { dut =>
-            CoreDriver.run(dut, c.machine, c.words, c.inputs, Set.empty)
-          }
+      )
+    else
+      Step(
+        c,
+        s"${c.name}: the core signals ${rules.map(_.id).toSeq.sorted.mkString(" or ")} in its first violating cycle",
+        dut => {
+          val r = run(dut)
+          assert(
+            r.stoppedAt.nonEmpty && r.violations.nonEmpty && r.violations.subsetOf(rules),
+            s"${c.name}: signalled ${r.violations.map(_.id)} at cycle ${r.stoppedAt}, " +
+              s"expected some of ${rules.map(_.id)}"
+          )
         }
-        e.getMessage match {
-          case FiredRule(id) =>
-            assert(rtlRules.map(_.id).contains(id), s"fired $id: ${e.getMessage}")
-          case _ => fail(s"no rule id in: ${e.getMessage}")
-        }
-      }
-    }
+      )
   }
+
+  byMachine(illegal.filter(outside(_).isEmpty)).foreach { case (m, cs) =>
+    build(m, "illegal", cs.map(step))
+  }
+
+  illegal.foreach { c =>
+    outside(c).foreach(why => ignore(s"${c.name}: outside the RTL's range ($why)") {})
+  }
+}
+
+object AssertionSpec {
+
+  /** The firing case of each machine of the illegal cases (L2, L7, L5 and L3). */
+  val firing: Set[String] =
+    Set("halt_not_last", "address_out_of_range", "mac3_mul_port", "mac_rs3_in_flight")
 }

@@ -3,49 +3,76 @@ package vliw.hw
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 
-import org.scalatest.funsuite.AnyFunSuite
-
 import vliw.isa._
 
-/** Every legal case in tests/cases, run on the RTL, against its hand-written expectations.
+/** Every legal case in tests/cases, run on the RTL, against its hand-written expectations: no
+  * violation, the cycles, the final state and the golden trace.
   *
-  * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, many programs per build of each
-  * machine (#110 stage 3): one build per case here would not fit the CI's time.
+  * One build per machine (#110 Q3, [[CaseBuildSpec]]): the legal cases of the machine in turn, then
+  * one illegal case of the machine whose assertion must really fire, so that a legal case that
+  * signals nothing is known to have run with live assertions. The firing cases differ from those of
+  * [[AssertionSpec]] but on `mvp1_mac3`, whose only illegal case is `mac3_mul_port`
+  * ([[CaseBuildSpec]]).
+  *
+  * The cases of ISA mvp-2 (W) run in `crosscheck/RtlMvp2Spec`, in the same way.
   */
-class CaseSpec extends AnyFunSuite with VliwChiselSim {
-  private val cases = TestCase
-    .loadAll()
-    .fold(es => fail(es.mkString("\n")), identity)
-    .filter(_.machine.isaVersion != IsaVersion.Mvp2)
+class CaseSpec extends CaseBuildSpec {
+  import CaseBuildSpec._
 
-  /** The unsupported settings of a case's machine, in short form (docs/MACHINE.md). */
-  private def outside(c: TestCase) =
-    CoreParams.check(c.machine).left.toOption.get.map(_.takeWhile(_ != ';')).mkString(", ")
+  protected val firing: Set[String] = CaseSpec.firing
 
   private def canonical(v: ujson.Value): String =
     Json.canonical(v).fold(e => fail(e.message), identity)
 
-  cases.filter(_.expect.verdict == Verdict.Legal).foreach { c =>
-    if (CoreParams.check(c.machine).isLeft)
-      ignore(s"${c.name}: outside the RTL's range (${outside(c)})") {}
-    else
-      test(s"${c.name}: cycles, final state and trace match the expectations") {
-        simulate(new Core(CoreParams(c.machine))) { dut =>
-          val r = CoreDriver.run(dut, c.machine, c.words, c.inputs, c.expect.memory.keySet)
-          assert(r.violations.isEmpty, s"violations: ${r.violations.map(_.id)}")
-          c.expect.cycles.foreach(n => assert(r.cycles == n))
-          c.expect.registers.foreach { case (reg, v) =>
-            assert(r.registers(reg) == BigInt(v), s"r$reg")
-          }
-          c.expect.memory.foreach { case (a, v) => assert(r.memory(a) == BigInt(v), s"[$a]") }
-          c.expect.trace.foreach { path =>
-            val golden = new String(Files.readAllBytes(path), StandardCharsets.UTF_8).linesIterator
-              .filter(_.nonEmpty)
-              .map(l => canonical(ujson.read(l)))
-              .toVector
-            assert(r.trace.map(canonical) == golden)
-          }
-        }
-      }
+  /** Runs `c` and checks it against its expectations. */
+  private def check(c: TestCase)(dut: Core): Unit = {
+    val r = CoreDriver.run(
+      dut,
+      c.machine,
+      c.words,
+      c.inputs,
+      c.expect.memory.keySet,
+      stopAtViolation = true
+    )
+    assert(
+      r.violations.isEmpty,
+      s"${c.name}: violations ${r.violations.map(_.id)} at cycle ${r.stoppedAt.getOrElse("?")}"
+    )
+    c.expect.cycles.foreach(n => assert(r.cycles == n, s"${c.name}: cycles"))
+    c.expect.registers.foreach { case (reg, v) =>
+      assert(r.registers(reg) == BigInt(v), s"${c.name}: r$reg")
+    }
+    c.expect.memory.foreach { case (a, v) =>
+      assert(r.memory(a) == BigInt(v), s"${c.name}: [$a]")
+    }
+    c.expect.trace.foreach { path =>
+      val golden = new String(Files.readAllBytes(path), StandardCharsets.UTF_8).linesIterator
+        .filter(_.nonEmpty)
+        .map(l => canonical(ujson.read(l)))
+        .toVector
+      assert(r.trace.map(canonical) == golden, s"${c.name}: golden trace")
+    }
   }
+
+  private val legal = cases.filter(_.expect.verdict == Verdict.Legal)
+
+  byMachine(legal.filter(outside(_).isEmpty)).foreach { case (m, cs) =>
+    build(
+      m,
+      "legal",
+      cs.map(c =>
+        Step(c, s"${c.name}: cycles, final state and trace match the expectations", check(c))
+      )
+    )
+  }
+
+  legal.foreach { c =>
+    outside(c).foreach(why => ignore(s"${c.name}: outside the RTL's range ($why)") {})
+  }
+}
+
+object CaseSpec {
+
+  /** The firing case of each machine of the legal cases (L6, L5 and L4). */
+  val firing: Set[String] = Set("early_halt_mul", "mac3_mul_port", "mac_overlapping_ld")
 }
