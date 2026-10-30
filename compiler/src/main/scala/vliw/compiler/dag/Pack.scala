@@ -107,13 +107,66 @@ object Pack {
   def pack(scalar: Dag): Packing = new Packer(scalar).run()
 
   /** The candidate store pairs of rule 1, as the lower word w of `(w, w + 1)`, in the order they
-    * are tried: every w whose words w and w + 1 are both stored, by address from the lowest, over
-    * all output words. A candidate is skipped when an earlier one paired one of its words, so a
-    * word whose lower pair is rejected can still pair with the next word (既定).
+    * are tried. The candidates are every w whose words w and w + 1 are both stored, over all output
+    * words. They are tried in two passes (#110 stage 4, Q1 (b): the recommended reading, awaiting
+    * the owner's answer): first the gather-free candidates (`gatherFree`) by address from the
+    * lowest, then every candidate by address from the lowest. A candidate is skipped when an
+    * earlier one paired one of its words, so within a pass the lower of two overlapping candidates
+    * wins, and a word whose lower pair is rejected can still pair with the next word (既定).
+    *
+    * Rule 1 as written (one pass, Q1 (a)) is `byAddress` alone; nothing else changes.
     */
   def storePairs(dag: Dag): Vector[Int] = {
     val stored = dag.nodes.collect { case Node.Store(a, _) => a }.toSet
-    stored.toVector.sorted.filter(w => stored(adjacent(w)))
+    val byAddress = stored.toVector.sorted.filter(w => stored(adjacent(w)))
+    byAddress.filter(gatherFree(dag, _)) ++ byAddress
+  }
+
+  /** Whether the store pair `(w, w + 1)` of the fused DAG `dag` needs no gather apart from rule 3's
+    * adjacent LDs (pass 1 of `storePairs`). Words w and w + 1 are each stored once, and their
+    * values are the same operation (ADD, SUB, MUL or MAC; a copy of two LDs does not count). The
+    * lockstep walk of the two trees, as `Pack.pack` walks them (the multiplicand equal in both
+    * lanes moves to rs1), reaches only: the same operation in both lanes, whose fields are walked
+    * in order; the same node in both lanes at the rs1 of a MUL or MAC (a broadcast); LD(u) in lane
+    * 0 and LD(u + 1) in lane 1, where no ST of the DAG writes u or u + 1 (LD.W on W-full, a gather
+    * of the two LDs on W-reg). It depends on the DAG's shape alone, so W-full and W-reg have the
+    * same pass 1 (ADR-0012).
+    */
+  def gatherFree(dag: Dag, w: Int): Boolean = {
+    val values = dag.nodes.collect { case Node.Store(a, v) => a -> v }.groupMap(_._1)(_._2)
+    val memo = mutable.Map.empty[(Int, Int, Boolean), Boolean]
+    // The lanes v0 and v1 at a field that may be a broadcast (a multiplication's rs1) or not.
+    def lanes(v0: Int, v1: Int, broadcast: Boolean): Boolean =
+      if (v0 == v1) broadcast
+      else
+        memo.get((v0, v1, broadcast)) match {
+          case Some(free) => free
+          case None       =>
+            val free = (dag.nodes(v0), dag.nodes(v1)) match {
+              case (Node.Load(u0), Node.Load(u1)) =>
+                u1 == u0 + 1 && !dag.written(u0) && !dag.written(u1)
+              case _ => operation(v0, v1)
+            }
+            memo((v0, v1, broadcast)) = free
+            free
+        }
+    def operation(v0: Int, v1: Int): Boolean = (dag.nodes(v0), dag.nodes(v1)) match {
+      case (Node.Compute(op, a0, b0), Node.Compute(op1, a1, b1)) if op == op1 =>
+        fields(op == Op.Mul, Vector((a0, a1), (b0, b1)))
+      case (Node.Mac(a0, b0, c0), Node.Mac(a1, b1, c1)) =>
+        fields(multiply = true, Vector((a0, a1), (b0, b1), (c0, c1)))
+      case _ => false
+    }
+    def fields(multiply: Boolean, operands: Vector[(Int, Int)]): Boolean = {
+      val (a, b) = (operands(0), operands(1))
+      val ordered =
+        if (multiply && a._1 != a._2 && b._1 == b._2) b +: a +: operands.drop(2) else operands
+      ordered.zipWithIndex.forall { case ((x0, x1), k) => lanes(x0, x1, multiply && k == 0) }
+    }
+    (values.getOrElse(w, Nil), values.getOrElse(adjacent(w), Nil)) match {
+      case (Seq(v0), Seq(v1)) => v0 != v1 && operation(v0, v1)
+      case _                  => false
+    }
   }
 
   /** Rule 1: the output word that word `w` pairs with (ST.W [w] writes `w` and `w + 1`). */
@@ -176,7 +229,8 @@ private final class Packer(d: Dag) {
     Packing(
       d,
       built.dag,
-      state.pairs.map(p => PackedPair(p.w, built.src(p.root))),
+      // By address: the two passes of `Pack.storePairs` may accept out of address order.
+      state.pairs.sortBy(_.w).map(p => PackedPair(p.w, built.src(p.root))),
       lanes,
       state.copies.size
     )

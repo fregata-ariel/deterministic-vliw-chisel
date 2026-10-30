@@ -19,8 +19,7 @@ class HandComputedSpec extends AnyFunSuite with VliwChiselSim {
   private val machine = MachineDescription.load().fold(es => fail(es.mkString("\n")), identity)
 
   /** The cases compiled for `m` in both issue modes. On ISA mvp-1 every program has MAC; on mvp-2
-    * with `packs` (W-full and W-reg) every one packs: no kernel fallback. Other mvp-2 machines may
-    * fall back (`mvp2_vlat`); the fallbacks are shown.
+    * with `packs` every one packs: no kernel fallback. Without `packs`, a fallback is shown.
     */
   private def compiled(m: MachineDescription, packs: Boolean = false) = for {
     (k, in, out, expected) <- cases
@@ -83,11 +82,12 @@ class HandComputedSpec extends AnyFunSuite with VliwChiselSim {
   }
 
   // ISA mvp-2 (#110 stage 4): the same outputs from W code, on W-full, W-reg, the latency and II
-  // variants and read_ports 4 (the reference model only; the RTL runs them in RtlMvp2Spec).
+  // variants and read_ports 4 (the reference model only; the RTL runs them in RtlMvp2Spec). Every
+  // case packs on all five (matmul3 on mvp2_vlat too, with rule 1's two passes: #110 stage 4, Q1).
   test("ISA mvp-2: hand-computed outputs on the reference model, both issue modes") {
     def file(f: String) = load(java.nio.file.Paths.get("tests", "machines", s"$f.json"))
-    Seq(load(MachineDescription.Mvp2Path), file("mvp2_mw1")).foreach(onModel(_, packs = true))
-    Seq("mvp2_vlat", "mvp2_rp4", "mvp2_vii").map(file).foreach(onModel(_))
+    val machines = Seq("mvp2_mw1", "mvp2_vlat", "mvp2_rp4", "mvp2_vii").map(file)
+    (load(MachineDescription.Mvp2Path) +: machines).foreach(onModel(_, packs = true))
   }
 }
 
