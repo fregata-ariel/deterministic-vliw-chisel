@@ -167,6 +167,9 @@ class PackSpec extends AnyFunSuite {
         val p = prep.packing.get
         val out0 = prep.layout.elem("out", 0)
         val label = s"${k.name} on ${m.machineId}"
+        // Every candidate is gather-free: pass 1 tries them all by address (and pairs as one pass).
+        val candidates = (out0 until out0 + n - 1).toVector
+        assert(Pack.storePairs(p.scalar) == candidates ++ candidates, label)
         assert(p.pairs.map(_.addr) == (0 until n / 2).map(i => out0 + 2 * i).toVector, label)
         val odd = Option.when(n % 2 == 1)(ScalarLane(out0 + n - 1, LaneReason.NoNeighbour))
         assert(p.scalarLanes == odd.toVector, label)
@@ -191,17 +194,112 @@ class PackSpec extends AnyFunSuite {
     assert(w.dag.resourceLowerBound == 33)
   }
 
-  test("matmul3 under rule 1 as written: (c0,c1) .. (c6,c7) with gathers, c8 scalar (Q1)") {
-    val p = packed(Benchmarks.matmul(3), full)
-    // a at 0..8, b at 9..17, c at 18..26. (c2, c3) = (c(0,2), c(1,0)) gathers a(0,m), a(1,m)
-    // and b(m,2), b(m,0); the other pairs broadcast a(i,m) and read b(m,j), b(m,j+1) by LD.W.
-    assert(p.pairs.map(_.addr) == Vector(18, 20, 22, 24))
-    assert(p.scalarLanes == Vector(ScalarLane(26, LaneReason.NoNeighbour)))
-    assert(p.count("LD.W") == 6 && p.count("LD") == 15 && p.count("ST.W") == 4)
-    assert(p.count("ST") == 1 && p.gathers == 6 && p.dag.resourceLowerBound == 27)
-    assert(p.count("VMUL") == 4 && p.count("VMAC") == 8 && p.count("MUL") == 1)
-    assert(p.count("MAC") == 2)
-    checkPacking(p, "matmul3")
+  test("matmul3, rule 1 in two passes (Q1 (b)): the row pairs (c(i,0), c(i,1)), c(i,2) scalar") {
+    // a at 0..8, b at 9..17, c at 18..26. Pass 1 tries the gather-free candidates: in each row
+    // (c(i,0), c(i,1)) and (c(i,1), c(i,2)), which broadcast a(i,m) and read b(m,j), b(m,j+1).
+    // The lower one pairs, so (c(i,1), c(i,2)) is skipped. The cross-row candidates (c(i,2),
+    // c(i+1,0)) need gathers of a(i,m), a(i+1,m) and b(m,2), b(m,0), and pass 2 skips them: c(i+1,0)
+    // is already paired. Rule 1 as written (one pass, Q1 (a)) pairs (c0,c1) .. (c6,c7) instead,
+    // with 6 gathers on W-full (26 Memory operations, slot bound 27) and c8 scalar.
+    val f = packed(Benchmarks.matmul(3), full)
+    assert(Pack.storePairs(f.scalar) == Vector(18, 19, 21, 22, 24, 25) ++ (18 to 25))
+    val lanes = Vector(20, 23, 26).map(ScalarLane(_, LaneReason.NoNeighbour))
+    assert(f.pairs.map(_.addr) == Vector(18, 21, 24) && f.scalarLanes == lanes)
+    assert(f.dag.nodes.collect { case Node.LoadW(a) => a }.sorted == Vector(9, 12, 15))
+    assert(f.dag.nodes.collect { case Node.StoreW(a, _) => a }.sorted == Vector(18, 21, 24))
+    assert(f.dag.nodes.collect { case Node.Store(a, _) => a }.sorted == Vector(20, 23, 26))
+    assert(f.count("LD") == 12 && f.count("LD.W") == 3 && f.gathers == 0 && f.broadcasts == 9)
+    assert(f.count("VMUL") == 3 && f.count("VMAC") == 6 && f.count("MUL") == 3)
+    assert(f.count("MAC") == 6 && f.count("ST.W") == 3 && f.count("ST") == 3)
+    assert(f.dag.resourceLowerBound == 22 && f.dag.cyclesLowerBound == 10)
+    // W-reg pairs the same rows. Each gather (b(m,0), b(m,1)) is read by the 3 rows (rule 6).
+    val w = packed(Benchmarks.matmul(3), mw1)
+    assert(w.pairs.map(_.addr) == Vector(18, 21, 24) && w.scalarLanes == lanes)
+    val laneStores = w.dag.nodes.collect { case Node.StoreLane(a, _, _) => a }.sorted
+    assert(laneStores == Vector(18, 19, 21, 22, 24, 25))
+    assert(w.count("LD") == 18 && w.count("ST") == 9 && w.laneStores == 6 && w.copies == 0)
+    assert(w.count("VMUL") == 3 && w.count("VMAC") == 6 && w.count("MUL") == 3)
+    assert(w.count("MAC") == 6 && w.dag.resourceLowerBound == 28)
+    assert(
+      w.dag.gathers.map(g => (w.dag.nodes(g.lo), w.dag.nodes(g.hi))).toSet ==
+        (0 until 3).map(m => (Node.Load(9 + 3 * m), Node.Load(10 + 3 * m))).toSet
+    )
+    assert(w.gathers == 3)
+    w.dag.gathers.foreach(g => assert(w.dag.nodes.count(_.sources.contains(g)) == 3, g))
+    Seq(f, w).foreach(checkPacking(_, "matmul3"))
+  }
+
+  test("rule 1's two passes: pass 1 pairs a gather-free candidate first; pairs by address") {
+    // [10] = [0] + [2]; [11] = [3] + [4]; [12] = [4] + [5]: only (11, 12) is gather-free, so
+    // pass 1 pairs it and (10, 11) is skipped. Rule 1 as written would pair (10, 11), with two
+    // gathers, and leave 12 scalar.
+    val differ = Seq(
+      Write(10, add(r(0), r(2))),
+      Write(11, add(r(3), r(4))),
+      Write(12, add(r(4), r(5)))
+    )
+    for (m <- Seq(full, mw1)) {
+      val p = pack(m, differ: _*)
+      assert(Pack.storePairs(p.scalar) == Vector(11, 10, 11), m.machineId)
+      assert(p.pairs.map(_.addr) == Vector(11), m.machineId)
+      assert(p.scalarLanes == Vector(ScalarLane(10, LaneReason.NoNeighbour)), m.machineId)
+      checkPacking(p, s"passes differ on ${m.machineId}")
+    }
+    // W-full: LD.W [3] and LD.W [4]. W-reg: the gathers (ld 3, ld 4) and (ld 4, ld 5), with a copy
+    // of ld 4 for the second.
+    val f = pack(full, differ: _*)
+    assert(f.dag.nodes.collect { case Node.LoadW(a) => a }.sorted == Vector(3, 4))
+    assert(f.gathers == 0)
+    val w = pack(mw1, differ: _*)
+    assert(w.gathers == 2 && w.copies == 1 && w.dag.nodes.count(_ == Node.Load(4)) == 2)
+    // [10] = [0] + [5]; [11] = [3] + [6]; [12] = [1] * [2]: no candidate is gather-free, so pass
+    // 1 is empty and the pairs are those of rule 1 as written: (10, 11), with a gather.
+    val empty = Seq(
+      Write(10, add(r(0), r(5))),
+      Write(11, add(r(3), r(6))),
+      Write(12, mul(r(1), r(2)))
+    )
+    for (m <- Seq(full, mw1)) {
+      val p = pack(m, empty: _*)
+      assert(Pack.storePairs(p.scalar) == Vector(10, 11), m.machineId)
+      assert(p.pairs.map(_.addr) == Vector(10) && p.gathers >= 1, m.machineId)
+      assert(p.scalarLanes == Vector(ScalarLane(12, LaneReason.NoNeighbour)), m.machineId)
+      checkPacking(p, s"pass 1 empty on ${m.machineId}")
+    }
+    // [10] = [0] + [5]; [11] = [3] + [6]; [12] = [1] + [8]; [13] = [2] + [9]: pass 1 accepts
+    // (12, 13), then pass 2 accepts (10, 11). `pairs` is by address, as rule 1 as written gives.
+    val late = Seq(
+      Write(10, add(r(0), r(5))),
+      Write(11, add(r(3), r(6))),
+      Write(12, add(r(1), r(8))),
+      Write(13, add(r(2), r(9)))
+    )
+    for (m <- Seq(full, mw1)) {
+      val p = pack(m, late: _*)
+      assert(Pack.storePairs(p.scalar) == Vector(12, 10, 11, 12), m.machineId)
+      assert(p.pairs.map(_.addr) == Vector(10, 12) && p.scalarLanes.isEmpty, m.machineId)
+      checkPacking(p, s"pairs by address on ${m.machineId}")
+    }
+  }
+
+  test(
+    "Pack.gatherFree: the same operation at the root, broadcasts at rs1, adjacent unwritten LDs"
+  ) {
+    def free(ws: Write*) = Pack.gatherFree(pack(full, ws: _*).scalar, 10)
+    // saxpy8 (out at 17..24): a broadcast at the MAC's rs1, x and y adjacent.
+    val saxpy = prepared(Benchmarks.saxpy(8), full).dag
+    assert((17 to 23).forall(Pack.gatherFree(saxpy, _)))
+    // [10] = [0] * [5]; [11] = [1] * [5]: the multiplicand equal in both lanes moves to rs1.
+    assert(free(Write(10, mul(r(0), r(5))), Write(11, mul(r(1), r(5)))))
+    // Not gather-free: a copy of two LDs (no operation at the root); the same value outside a
+    // multiplication's rs1; adjacent LDs of a word that is written; LDs in the other lane order;
+    // different operations; a word stored twice.
+    assert(!free(Write(10, r(0)), Write(11, r(1))))
+    assert(!free(Write(10, add(r(0), r(5))), Write(11, add(r(1), r(5)))))
+    assert(!free(Write(10, add(r(0), r(2))), Write(11, add(r(1), r(3))), Write(0, r(4))))
+    assert(!free(Write(10, add(r(1), r(2))), Write(11, add(r(0), r(3)))))
+    assert(!free(Write(10, add(r(0), r(2))), Write(11, sub(r(1), r(3)))))
+    assert(!free(Write(10, add(r(0), r(2))), Write(10, r(4)), Write(11, add(r(1), r(3)))))
   }
 
   test("rule 2: the same value in both lanes is a broadcast only at a multiplication's rs1") {
@@ -295,6 +393,8 @@ class PackSpec extends AnyFunSuite {
     // [13] = ([1] + [3]) * [7] (no MUL + ADD to fuse). Rule 6 alone would share one VADD between
     // the pairs (10, 11) and (12, 13). (10, 11) is not packed: [12]'s MUL reads [0] + [2] and is not
     // walked yet (a scalar). (12, 13) is not packed either: [10]'s SUB is now a scalar reader.
+    // Both are gather-free, so pass 1 tries (10, 11) and then (12, 13), and their words take the
+    // reason of that first rejection. Pass 2 tries (10, 11) and (11, 12), and on W-reg (12, 13).
     val ws = Seq(
       Write(10, sub(add(r(0), r(2)), r(4))),
       Write(11, sub(add(r(1), r(3)), r(5))),
@@ -307,21 +407,14 @@ class PackSpec extends AnyFunSuite {
     val sum = w.scalar.nodes.indexOf(Node.Compute(Op.Add, ld(0), ld(2)))
     assert(sum >= 0)
     val elsewhere = LaneReason.NeededElsewhere(sum)
-    assert(
-      w.scalarLanes == Vector(
-        ScalarLane(10, elsewhere),
-        ScalarLane(11, elsewhere),
-        ScalarLane(12, LaneReason.RootDiffers),
-        ScalarLane(13, elsewhere)
-      )
-    )
+    assert(Pack.storePairs(w.scalar) == Vector(10, 12, 10, 11, 12))
+    // W-reg: (11, 12) would be `RootDiffers` in pass 2, but its words were rejected in pass 1.
+    assert(w.scalarLanes == (10 to 13).map(ScalarLane(_, elsewhere)).toVector)
     assert(w.nothingToPack)
-    // W-full packs only (11, 12), as the ST.W of a root gather: no vector operation.
+    // W-full packs only (11, 12) in pass 2, as the ST.W of a root gather: no vector operation.
     val f = pack(full, ws: _*)
     assert(f.pairs.map(_.addr) == Vector(11) && f.pairs.head.root.isInstanceOf[Src.Gather])
-    assert(
-      f.scalarLanes == Vector(ScalarLane(10, elsewhere), ScalarLane(13, LaneReason.NoNeighbour))
-    )
+    assert(f.scalarLanes == Vector(ScalarLane(10, elsewhere), ScalarLane(13, elsewhere)))
     assert(f.vectorOperations == 0)
     Seq(w, f).foreach(checkPacking(_, "rule 6 across store pairs"))
   }

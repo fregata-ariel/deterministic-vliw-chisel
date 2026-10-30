@@ -71,11 +71,18 @@ class WCompilerSpec extends AnyFunSuite {
   /** The other columns of COMPILER.md's results ("結果（W、16 レジスタ）") for `c`: cycles, the dependence
     * and slot bounds of the DAG scheduled, the chosen attempt and `heldByReadPorts`.
     */
-  private def recorded(c: CompiledKernel, cycles: Int, slots: Int, held: Int): Unit = {
+  private def recorded(
+      c: CompiledKernel,
+      cycles: Int,
+      slots: Int,
+      held: Int,
+      dependences: Int = 6,
+      attempt: String = "critical-path, no register limit"
+  ): Unit = {
     val label = s"${c.kernel.name} on ${c.machine.machineId}"
     assert(c.cycles == cycles, label)
-    assert(c.dag.cyclesLowerBound == 6 && c.dag.resourceLowerBound == slots, label)
-    assert(c.allocated.attempt.toString == "critical-path, no register limit", label)
+    assert(c.dag.cyclesLowerBound == dependences && c.dag.resourceLowerBound == slots, label)
+    assert(c.allocated.attempt.toString == attempt, label)
     assert(c.allocated.schedule.heldByReadPorts == held, label)
   }
 
@@ -150,6 +157,66 @@ class WCompilerSpec extends AnyFunSuite {
       assert(operations(c) == ops, m.machineId)
       invariants(c)
       (0 until 3).foreach(_ => computes(c, RandomKernels.values(c.kernel, rng)))
+    }
+  }
+
+  test("fir4x8 and matmul3 on W-full, W-reg and read_ports 4: the COMPILER.md records") {
+    val rng = new Random(1108L)
+    val fir4x8 = Benchmarks.fir(Seq(1L, 2L, 3L, 4L), 8)
+    val matmul3 = Benchmarks.matmul(3)
+    val (limited, unlimited) =
+      ("critical-path, 16 registers, load reserve 0", "program-order, no register limit")
+    // The COMPILER.md records. The #78 estimates (information, not targets) are 26, 35, 28 and
+    // 32: fir4x8 on W-full copies 4 LD.W (rematerialization, which the estimate does not count),
+    // and on W-reg the estimate numbers the packed DAG's nodes in another order (COMPILER.md).
+    val firOps = Map("VMUL" -> 4, "VMAC" -> 12)
+    val matmulOps = Map("VMUL" -> 3, "VMAC" -> 6, "MUL" -> 3, "MAC" -> 6)
+    val rows = Seq(
+      (fir4x8, full, 25, 12, 19, limited, 2, firOps ++ Map("LD" -> 4, "LD.W" -> 14, "ST.W" -> 4)),
+      (fir4x8, mw1, 37, 12, 33, unlimited, 6, firOps ++ Map("LD" -> 24, "ST" -> 8)),
+      (
+        matmul3,
+        full,
+        28,
+        10,
+        22,
+        unlimited,
+        0,
+        matmulOps ++ Map("LD" -> 12, "LD.W" -> 3) ++
+          Map("ST.W" -> 3, "ST" -> 3)
+      ),
+      (matmul3, mw1, 32, 10, 28, limited, 4, matmulOps ++ Map("LD" -> 18, "ST" -> 9))
+    )
+    for ((k, m, cycles, dependences, slots, attempt, held, ops) <- rows) {
+      val c = compiled(k, m)
+      val label = s"${k.name} on ${m.machineId}"
+      assert(c.simd.isInstanceOf[Simd.Packed], label)
+      recorded(c, cycles, slots, held, dependences, attempt)
+      assert(operations(c) == ops, label)
+      invariants(c)
+      (0 until 3).foreach(_ => computes(c, RandomKernels.values(k, rng)))
+    }
+    // matmul3 (a at 0..8, b at 9..17, c at 18..26): the row pairs of rule 1's two passes.
+    val f = compiled(matmul3, full)
+    val memory = f.bundles.map(_.memory)
+    assert(memory.collect { case MemoryOp.LdW(_, a) => a }.sorted == Vector(9, 12, 15))
+    assert(memory.collect { case MemoryOp.StW(a, _) => a }.sorted == Vector(18, 21, 24))
+    assert(memory.collect { case MemoryOp.St(a, _) => a }.sorted == Vector(20, 23, 26))
+    f.simd match {
+      case Simd.Packed(p) =>
+        assert(p.scalarLanes == Vector(20, 23, 26).map(ScalarLane(_, LaneReason.NoNeighbour)))
+      case other => fail(other.toString)
+    }
+    val w = compiled(matmul3, mw1)
+    assert(w.bundles.map(_.memory).collect { case MemoryOp.St(a, _) => a }.sorted == (18 to 26))
+    assert(w.dag.gathers.size == 3)
+    // read_ports 4 (the estimates are 26 and 24): VMAC and ST.W share a bundle.
+    for ((k, cycles) <- Seq(fir4x8 -> 23, matmul3 -> 24)) {
+      val c = compiled(k, rp4)
+      assert(c.simd.isInstanceOf[Simd.Packed] && c.cycles == cycles, k.name)
+      assert(c.allocated.attempt.toString == limited && c.bundles.exists(fourFields), k.name)
+      invariants(c)
+      (0 until 3).foreach(_ => computes(c, RandomKernels.values(k, rng)))
     }
   }
 
