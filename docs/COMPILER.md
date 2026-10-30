@@ -606,7 +606,7 @@ ADR-0023 のとおり、資源は1サイクルに1回の使用のままで、新
 | 演算器（L9） | mnemonic ごと。VMAC は MAC の演算器を使わない。レーンの ST は ST の演算器を使う |
 | 3本目の読出しポート（L11、形 F） | `Mii.readPortUsers` = {MAC、VMAC、ST、ST.W}（`read_ports` 3。ADR-0023）。欄の数は VMAC 3、VADD・VSUB・VMUL 2、ST・ST.W・レーンの ST 1、LD・LD.W 0 なので、3つを超えるのは3つの欄の Compute の演算と1つの欄の Memory の演算の組だけである。ブロードキャストと集めの欄は1と数える |
 
-**2つのスロットの種類を一緒に判定する条件を直した**（`ModuloScheduler` の `coupled`）。今までの条件は「ポートを使う演算の種類がすべて残っている」で、MAC・VMAC・ST・ST.W の4つの種類のどれかが無いか、置き終わると成り立たない。2倍にしたループは VMAC と ST.W だけなので、初めから成り立たない。直した条件は「Compute と Memory のそれぞれに、ポートを使う演算が残っている」で、mvp-1（{MAC、ST}）では同じ条件である（mvp-0・mvp-1 のどの記録も変わらない）。直さないと、W-full と `mvp2_vlat` の `fir4x8` の II 4 は、本当の理由（レジスタ）ではなく `NoTime`（ノード 11）になる（II と cycles は変わらない。mutant `modulo-read-port-coupling-all`）。`RowFit.Class` は種類ごとに読出しの印を持つので、VMAC を MAC と、ST.W を ST と同じに扱う（ADR-0023 の既定）。
+**2つのスロットの種類を一緒に判定する条件を直した**（`ModuloScheduler` の `coupled`）。今までの条件は「ポートを使う演算の種類がすべて残っている」で、MAC・VMAC・ST・ST.W の4つの種類のどれかが無いか、置き終わると成り立たない。2倍にしたループは VMAC と ST.W だけなので、初めから成り立たない。直した条件は「Compute と Memory のそれぞれに、ポートを使う演算が残っている」で、mvp-1（{MAC、ST}）では同じ条件である（mvp-0・mvp-1 のどの記録も変わらない）。直さないと、W-full と `mvp2_vlat` の `fir4x8` の II 4 は、本当の理由（レジスタ）ではなく `NoTime`（ノード 11）になる（II と cycles は変わらない）。また、mvp-2 の machine ではポートを使う演算に VMAC と ST.W が入るので、スカラーのループ（W-reg と、2倍にしないループ）でも今までの条件は成り立たず、命令列が mvp-1 と違ってしまう（mutant `modulo-read-port-coupling-all` は、この2つで見つかる）。`RowFit.Class` は種類ごとに読出しの印を持つので、VMAC を MAC と、ST.W を ST と同じに扱う（ADR-0023 の既定）。
 
 MII は V の1反復（元の2反復）で計算し、記録には元の1反復当たりの値（2で割る）も書く。RecMII は変わらない（2倍にしたループには状態が無いので 0）。
 
@@ -620,6 +620,7 @@ ADR-0015 のままである。II = MII から1反復の長さまで試し、番�
 
 - **MinAvg（MII、ASAP）**: II = MII で、`LoopGraph.edges` のすべての依存の下での Each のノードの最も早い時刻（重み `cycles − II × iterations` の最長路。資源は無視する）を使う。MinAvg = ⌈Σ 重み × 寿命 / II⌉ + Each のノードが back 0 で読む Before の値の重み（ループの間ずっと生きる不変の値）。寿命は、値（集めは先のレーン）の発行から最後の Each の読む側（`t(読む側) + back × II − t(定義)`）まで、読む側が無ければそのレイテンシーである。ループの後の読む側は数えない（定常状態の値）。#78 の見積りと同じ定義である（`ModuloScheduler.minAvgAtMii`）
 - **MinAvg（II）**: 同じ式に、見つけたスケジュールの時刻と II を使う。そのスケジュールの Rau の MinAvg である（`ModuloScheduler.minAvg`）
+- 集めの重み: 試作は集めの各レーンを、それぞれの発行から1と数えた。下の乱数の300のうち、2倍にして集めのある 77（W-full）で、MII の ASAP の値はどれも変わらず、見つけた II の値は 24 で変わる（W-reg の数では、集めのある 102 のうち 21）
 - **MaxLive**: 展開した命令列で同時に生きるレジスタの最大（`RegisterAllocator.maxLive`。プロローグとエピローグを含む）。オーナーの「同時に生きる値」である。MinAvg は定常状態の下限で、命令列の下限ではない（ループの後の読む側を数えず、反復が少ないと定常状態に達しないので、MaxLive < MinAvg もあり得る。5a の記録には無い）
 - **割り当ての結果と II を上げた理由**: `ModuloSchedule.attempts`（II ごとの `Outcome`）
 - **全 II の結果**（ADR-0015 の 2026-10-17 の補足、#131 の目的3）: `ModuloScheduler.sweep` が、MII から1反復の長さまでの各 II の結果、cycles、MaxLive、その II の MinAvg を返す
