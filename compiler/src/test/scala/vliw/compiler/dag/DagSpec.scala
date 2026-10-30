@@ -25,6 +25,7 @@ class DagSpec extends AnyFunSuite {
         case Node.Compute(op, a, b) => values(i) = op(values(a), values(b)); mem
         case Node.Mac(a, b, c) => values(i) = Op.Add(Op.Mul(values(a), values(b)), values(c)); mem
         case Node.Store(a, v)  => mem.updated(a, values(v))
+        case other             => fail(s"$other: not a node of a scalar DAG")
       }
     }
   }

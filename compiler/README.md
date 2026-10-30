@@ -19,3 +19,9 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 - `regalloc`: 生存区間による register allocation と、足りないときの上限付き再スケジュール。命令列（bundle）を作る
 - `KernelCompiler`: 全段をまとめ、独立 verifier の最終検査に通った命令列だけを返す。`.hex` とテストケースを出力する
 - CLI: `sbt "compiler/run compile <kernel>... [--machine m.json] [--out dir]"`（[docs/COMPILER.md](../docs/COMPILER.md)「CLI」）
+
+## 実装（Phase 4、#110）
+
+- `dag.Pack`: ISA mvp-2（W）で、融合した DAG の値を組に詰める（ADR-0023 の固定の SLP の規則）。LD.W・ST.W（W-full）、集め（W-reg）、ブロードキャスト、組にできない出力の語のスカラーのレーンと理由。[docs/COMPILER.md](../docs/COMPILER.md)「ISA mvp-2（W）」
+- `schedule`・`regalloc`: 生きているレジスタを重みで数える（組と集めは2）。組には整列した組を、スカラーには best fit で割り当て、`NoAlignedPair` と `TooManyLive` を分ける。LD.W の rematerialization。VADD・VSUB・VMUL・VMAC・LD.W・ST.W の命令を作る
+- `KernelCompiler`: 通常の利用（`compile`）は、詰めた DAG がどの試行でも収まらないときと、組が1つもできないとき、スカラーのカーネルに戻し、`CompiledKernel.simd` に理由を書く。比較（`candidate`）は、SIMD の候補を理由付きの不成立として返し、スカラーの値に置き換えない。Modulo Scheduling（`ModuloCompiler`）は第5段まで mvp-2 を拒否する

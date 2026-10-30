@@ -90,6 +90,9 @@ object BenchmarkRecords {
   def noFit(f: NoFit): String = f match {
     case NoFit.TooManyLive(live, registers) => s"不成立: 同時に生きる値 $live > $registers"
     case NoFit.Stuck                        => "不成立: 上限の下で行き詰まる"
+    // ISA mvp-2 only (#110); the records of mvp-0 and mvp-1 never have it.
+    case NoFit.NoAlignedPair(cycle, live, registers) =>
+      s"不成立: cycle $cycle で整列した組が空かない（生きているレジスタ $live ≤ $registers）"
   }
 
   /** The fewest-cycles series on `m`. `machinePath` goes into the test cases (None for the default

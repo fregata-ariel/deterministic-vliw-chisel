@@ -35,7 +35,8 @@ object Rematerialization {
   }
 
   /** The LDs that a copy can free at `at`: placed, of a word that no store writes, with readers
-    * both placed and not placed.
+    * both placed and not placed. On ISA mvp-2 also a LD.W of two such words, but not a LD that is a
+    * lane of a gather (`Dag.rematerializable`).
     */
   def candidates(dag: Dag, at: ListScheduler.Stopped): Vector[Int] =
     dag.nodes.indices.filter { v =>

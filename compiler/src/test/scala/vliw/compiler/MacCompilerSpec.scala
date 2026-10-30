@@ -2,7 +2,6 @@ package vliw.compiler
 
 import java.nio.file.Paths
 
-import scala.collection.mutable
 import scala.util.Random
 
 import org.scalatest.funsuite.AnyFunSuite
@@ -29,46 +28,14 @@ class MacCompilerSpec extends AnyFunSuite {
   private def compiled(k: Kernel, m: MachineDescription) =
     KernelCompiler.compile(k, m).fold(e => fail(s"${k.name} on ${m.machineId}: $e"), identity)
 
-  /** Runs a legal program as docs/ISA.md defines it, independently of the compiler: each bundle
-    * reads its sources in its cycle, and each result commits `latency` cycles later.
+  /** The outputs of the compiled program on `in` equal the DSL reference implementation's. The
+    * program runs on `IsaExecutor` (docs/ISA.md, independently of the compiler); mvp-1 code has no
+    * W operation.
     */
-  private def execute(m: MachineDescription, bundles: Vector[Bundle], image: Map[Int, Long]) = {
-    val reg = Array.fill(m.registerCount)(0L)
-    val mem = mutable.Map.from(image)
-    val pending = mutable.ArrayBuffer.empty[(Int, () => Unit)]
-    bundles.indices.foreach { s =>
-      pending.filter(_._1 <= s).foreach(_._2())
-      pending.filterInPlace(_._1 > s)
-      def later(op: String)(commit: () => Unit) = pending += ((s + m.operation(op).latency, commit))
-      bundles(s).compute match {
-        case ComputeOp.Add(d, x, y) =>
-          val v = Op.Add(reg(x), reg(y)); later("ADD")(() => reg(d) = v)
-        case ComputeOp.Sub(d, x, y) =>
-          val v = Op.Sub(reg(x), reg(y)); later("SUB")(() => reg(d) = v)
-        case ComputeOp.Mul(d, x, y) =>
-          val v = Op.Mul(reg(x), reg(y)); later("MUL")(() => reg(d) = v)
-        case ComputeOp.Mac(d, x, y, z) =>
-          val v = Op.Add(Op.Mul(reg(x), reg(y)), reg(z)); later("MAC")(() => reg(d) = v)
-        case ComputeOp.Nop | ComputeOp.Halt => ()
-        case op @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
-          fail(s"$op: the compiler generates W operations from #110 stage 4")
-      }
-      bundles(s).memory match {
-        case MemoryOp.Ld(d, a) => val v = mem(a); later("LD")(() => reg(d) = v)
-        case MemoryOp.St(a, x) => val v = reg(x); later("ST")(() => mem(a) = v)
-        case MemoryOp.Nop      => ()
-        case op @ (_: MemoryOp.LdW | _: MemoryOp.StW) =>
-          fail(s"$op: the compiler generates W operations from #110 stage 4")
-      }
-    }
-    pending.foreach(_._2())
-    mem.toMap
-  }
-
-  /** The outputs of the compiled program on `in` equal the DSL reference implementation's. */
   private def computes(c: CompiledKernel, in: Values): Boolean = {
     val image = c.layout.memoryImage(in).fold(e => fail(e), identity)
-    val mem = execute(c.machine, c.bundles, image)
+    assert(!c.bundles.exists(b => WCompilerSpec.isW(b)), c.kernel.name)
+    val mem = IsaExecutor.run(c.machine, c.bundles, image)
     c.layout.outputs(mem) == Interpreter.run(c.kernel, in).fold(e => fail(e), identity)
   }
 

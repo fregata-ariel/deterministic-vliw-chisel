@@ -55,6 +55,8 @@ object FixedPipelines {
         case (Node.Store(addr, v), i)    => FixedOp.Store(issue(i), addr, v)
         case (_: Node.Mac, _)            =>
           sys.error(s"$name: the fixed pipelines (#75) are built on mvp-0 and have no MAC")
+        case (other, _) =>
+          sys.error(s"$name: $other: the fixed pipelines (#75) are for mvp-0 and mvp-1 only")
       }
     )
 

@@ -7,6 +7,7 @@
 | メモリ配置・lowering | `Kernel` → `LoweredKernel`（アドレス単位の式） | `vliw.compiler.dsl` | #47 |
 | DAG | `LoweredKernel` → `Dag` | `vliw.compiler.dag` | #48 |
 | MAC への融合 | `Dag` → `Dag`（machine に MAC があるときだけ。MUL＋ADD を MAC に） | `vliw.compiler.dag.Fusion` | #77 |
+| 組への詰め込み | `Dag` → `Packing`（ISA mvp-2 の machine だけ。値を W の組に詰めた DAG） | `vliw.compiler.dag.Pack` | #110 |
 | list scheduling | `Dag` → `Schedule`（各ノードの発行サイクルと HALT。値は仮想レジスタ） | `vliw.compiler.schedule` | #49 |
 | register allocation | `Dag` → `Allocated`（スケジュールと物理レジスタ、bundle 列） | `vliw.compiler.regalloc` | #50 |
 | コード生成と検証 | → 命令語（verifier の最終検査に通ったもの）、`.hex`、テストケース | `vliw.compiler.KernelCompiler` | #51 |
@@ -14,6 +15,8 @@
 Phase 3 の Modulo Scheduling（#68）の入力になる、ループ構造を保つ IR は「[ループ IR](#ループ-ir)」の節に（#76）、そのスケジューリングは「[Modulo Scheduling](#modulo-scheduling)」の節にある（#68）。
 
 ISA `mvp-1` の MAC への融合（MUL＋ADD）と、読出しポートの制約（規則 L11）は、直線のカーネルについて「[MAC への融合](#mac-への融合)」と「[list scheduling](#list-scheduling)」の節に、ループについて「[ループの MAC への融合](#ループの-mac-への融合)」と「[Modulo Scheduling](#modulo-scheduling)」の節にある（#77）。規則は [ADR-0019](DECISIONS.md)（融合）と ADR-0018（L11）に書いた。mvp-0 の machine では、どの段の結果も変わらない。
+
+ISA `mvp-2`（W）の組への詰め込み、組を考えたスケジュールと割り当て、スカラーへの fallback は「[ISA mvp-2（W）](#isa-mvp-2w)」の節にある（#110 の第4段の前半。list scheduling だけ）。mvp-0 と mvp-1 の machine では、どの段の結果も変わらない。
 
 ## DAG
 
@@ -130,7 +133,7 @@ Compute の演算が減るので、`fir4x8` と `matmul3` のスロットの下�
 
 | 値 | 数えるサイクル |
 |---|---|
-| `heldByReadPorts` | 準備ができた ST が、読出しポート（L11）以外の制約（依存・スロット・書戻しポート・II・レジスタの上限）を全て満たすのに、bundle の読出しが `read_ports` を超えるので置けなかったサイクル |
+| `heldByReadPorts` | 準備ができた ST（mvp-2 では ST.W とレーンの ST も）が、読出しポート（L11）以外の制約（依存・スロット・書戻しポート・II・レジスタの上限）を全て満たすのに、bundle の読出しが `read_ports` を超えるので置けなかったサイクル |
 | `heldByWritePort` | 準備ができた Compute のノードが、書戻しポート（L5）以外の制約を全て満たすのに、その境界のポートが予約済みなので置けなかったサイクル |
 
 - 各スロットはサイクルごとに1回だけ埋めるので、どちらもサイクル当たり高々1つ増える。数えるのは、そのスロットを埋める直前の状態である
@@ -209,7 +212,7 @@ MAC は3つのオペランドを発行サイクルに読むので、3つとも�
 
 ### 割り当て
 
-区間を開始の順に並べ、そのとき空いている最小番号のレジスタに割り当てる（区間グラフの貪欲彩色）。必要なレジスタの数は、同時に生きている値の最大数に等しい。
+区間を開始の順に並べ、そのとき空いている最小番号のレジスタに割り当てる（区間グラフの貪欲彩色）。必要なレジスタの数は、同時に生きている値の最大数に等しい。ISA mvp-2 の組のある DAG の割り当ては「[ISA mvp-2（W）](#isa-mvp-2w)」の節にあり、組の無い DAG（mvp-0・mvp-1 と、mvp-2 の fallback）はこの節のとおりである。
 
 ### 足りない場合の再スケジュール
 
@@ -220,7 +223,7 @@ MAC は3つのオペランドを発行サイクルに読むので、3つとも�
 - 生きている値が上限に近いときは、レジスタを多く解放するノードを優先する
 - しばらくどのノードも置けなければ、その試行は失敗とする
 
-試行は、各優先度の上限なし、次に各優先度で `loadReserve` を 0 からレジスタ数の半分まで変えたもの（`RegisterAllocator.attempts`）。成功した試行のうち cycles が最小のものを選び、同じならば LD の少ない方（複製のない方）を、それも同じならば先の試行を選ぶ。結果は決定的である。上限付きで成功したスケジュールは、生きている値の数が上限以下なので、割り当ては必ず成功する。
+試行は、各優先度の上限なし、次に各優先度で `loadReserve` を 0 からレジスタ数の半分まで変えたもの（`RegisterAllocator.attempts`）。成功した試行のうち cycles が最小のものを選び、同じならば LD の少ない方（複製のない方）を、それも同じならば先の試行を選ぶ。結果は決定的である。上限付きで成功したスケジュールは、生きている値の数が上限以下なので、割り当ては必ず成功する（組の無い DAG で。組のある DAG では、整列した組が空かずに失敗し得る。「[ISA mvp-2（W）](#isa-mvp-2w)」）。
 
 1つの試行だけを行うのは `RegisterAllocator.run(dag, attempt)` で、収まらない理由（`NoFit`）を返す。上限なしで同時に生きる値がレジスタ数を超える（`TooManyLive`）か、上限付きのスケジューラが、複製（下記）を作っても行き詰まる（`Stuck`）かのどちらかである。ベンチマークの「戦略を固定した系列」（[benchmarks/README.md](../benchmarks/README.md)）は、全ての試行を `run` で行い、方式ごとの結果を並べる。
 
@@ -315,10 +318,12 @@ vliw の、方式ごとに cycles 最小の値である。複製なしでは、1
 
 `KernelCompiler.compile(kernel, machine)` は、上の各段を順に行い、`CompiledKernel` を返す。
 
-1. メモリ配置と lowering、DAG（machine に MAC があれば融合する）
+1. メモリ配置と lowering、DAG（machine に MAC があれば融合する。ISA mvp-2 では組に詰める）
 2. スケジュールとレジスタ割り当て（`Allocation.bundles` が bundle 列を作る。最後は HALT。MAC のノード `Mac(a, b, c)` は `mac rd, rs1, rs2, rs3` で、rs1・rs2 が a・b、rs3 が c のレジスタ）
 3. エンコード
 4. **独立の verifier（[VERIFIER.md](VERIFIER.md)）による最終検査**。入力宣言は、配置の初期化済みの語（M_in）だけで、R_in は空
+
+ISA mvp-2 では、`CompiledKernel.simd` が W の結果（詰めたか、スカラーへの fallback とその理由）を持つ（「[ISA mvp-2（W）](#isa-mvp-2w)」）。mvp-0・mvp-1 では `Simd.Scalar` である。
 
 verifier が1つでも違反を報告したら、その命令列は返さず、`compiler error:` で始まるエラーにする。コンパイラの誤りであり、生成コードを出力しない。カーネルが machine に収まらない場合（Scratchpad の容量、レジスタ数）は入力の誤りとして区別する。
 
@@ -336,7 +341,7 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
 | `--seed` | 1 | テストケースの入力値の乱数の種 |
 | `--priority` | 全部 | 優先度を1つに固定する。既定では全部を試し、cycles 最小を選ぶ |
 
-カーネルごとに次の2つを書き、cycles・下限・選ばれた試行を表示する（MAC のある machine では、融合した組の数も）。終了コードは、入力の誤りが2、コンパイラの誤りが3。
+カーネルごとに次の2つを書き、cycles・下限・選ばれた試行を表示する（MAC のある machine では、融合した組の数も。ISA mvp-2 では W の結果も。「[ISA mvp-2（W）](#isa-mvp-2w)」の「CLI」）。終了コードは、入力の誤りが2、コンパイラの誤りが3。
 
 | ファイル | 内容 |
 |---|---|
@@ -362,6 +367,157 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
   - 参照モデルでの結果が DSL の参照実装と、cycles が予測と一致すること
   - 生成したテストケースが参照モデルで成り立つこと（100個）
   - RTL でも結果と cycles が一致すること（60個）
+  - ISA mvp-1 と mvp-2 の構成でも同じことを確かめる（mvp-2 は下の「[ISA mvp-2（W）](#isa-mvp-2w)」の「テスト」）
+
+## ISA mvp-2（W）
+
+ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段の前半）。Modulo Scheduling（`ModuloCompiler`）は、第5段まで mvp-2 の machine を理由付きで拒否する。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の補足に一覧がある）。
+
+段の順は `Lowering → Dag.build → Fusion.fuse → Pack → ListScheduler → rematerialization（行き詰まる試行だけ）→ 組を考えた割り当て → Allocation.bundles → verifier` である。`KernelCompiler.prepare` は `Prepared.dag` を融合したスカラーの DAG のまま残し、mvp-2 の machine では `Prepared.packing` に `Pack.pack(dag)` を入れる（mvp-0・mvp-1 では None）。融合を先に行うので、詰めた MAC の組がそのまま VMAC になる。詰め込みは戦略の次元ではなく、どの試行も同じ詰めた DAG をスケジュールする。
+
+### ノードと欄
+
+| ノード | 命令 | スロット | 書戻しポート | 欄（L11） | 値 |
+|---|---|---|---|---|---|
+| `LoadW(addr)` | LD.W | Memory | Memory | 0 | 整列した組 |
+| `VCompute(op, a, b)` | VADD・VSUB・VMUL | Compute | Compute | 2 | 整列した組 |
+| `VMac(a, b, c)` | VMAC | Compute | Compute | 3 | 整列した組 |
+| `StoreW(addr, v)` | ST.W | Memory | なし | 1 | なし |
+| `StoreLane(addr, pair, lane)` | ST | Memory | なし | 1 | なし。W-reg で、組のノードの1つのレーン r(p + lane) を ST する |
+
+ベクトル演算と ST.W の欄（`Src`）は3種類ある。
+
+- `Pair(n)`: 組のノード（`LoadW`・`VCompute`・`VMac`）の組
+- `Gather(lo, hi)`: 2つのスカラーのノードの値を、整列した組の r(p)（`lo`、レーン0）と r(p+1)（`hi`、レーン1）に入れたもの（集め）。移す命令は無い（組の部分更新は合法。ISA.md）
+- `Broadcast(n)`: 1つのスカラーのノードを両方のレーンに使う。VMUL・VMAC の rs1 だけ
+
+`Node.operands` は読むノード（集めは2つ）、`Node.fields` は欄の数で、スカラーのノードでは `operands.size` と同じである。`ListScheduler.reads` は `fields` を数える（L11 の形 F）。`Dag.resourceLowerBound` は LD.W・ST.W・レーンの ST を Memory の操作に数え、`Dag.loads` は LD と LD.W を数える。これらのノードを作るのは `Pack` だけで、`Dag.build`・`Fusion`・`LoopGraph` は作らない。
+
+### 詰め込みの規則（`dag.Pack`）
+
+ADR-0023 の規則1〜6を次のように実装した。
+
+1. **ST の組**（規則1）: ST のある語 w と w+1 の組を、小さい番地から順に試す（`Pack.storePairs`）。番地だけで組にし、どの配列の語かは見ない（既定）。前の組がどちらかの語を組にしていれば飛ばす。断った組の w+1 は、次の組 (w+1, w+2) で組になり得る（既定）。2回以上 ST する語は組にしない（既定）
+2. **2つの木を並べてたどる**（規則2）: 両方のレーンで同じノードは、MUL・MAC の rs1 ならブロードキャストにし、ほかの位置ならその組を詰めない。両方が同じ MUL・MAC で、rs2 が両方のレーンで同じなら、rs1 と入れ替えてからブロードキャストにする（乗算は可換。入れ替えはこれだけ）。同じ演算の ADD・SUB・MUL・MAC はベクトル演算にし、欄を順にたどる
+3. **LD.W**（規則3）: 語 w と w+1 の LD で、どちらの語も DAG のどの ST も書かないものは、W-full では `LD.W [w]`（w は奇数でもよい）、W-reg では集めにする。ST のある語の LD は、LD.W にせず、その LD のノードの集めにする（既定。メモリ順序の辺を保つ）
+4. **集め**（規則4）: ほかの組（隣でない語の LD、違う演算、LD と計算した値）は集めにする。スカラーのノードの置き場は1つで、自分のレジスタ、1つの集めの1つのレーン、1つのベクトル演算の1つのレーンのどれかである。ほかの置き場をもう持つノードが集めに要るときは、書込みの無い語の LD なら複製し（新しい LD のノード）、ほかのノード（計算した値、ST のある語の LD）ならその組を詰めない。ADR-0023 は「別の組の逆のレーン」だけを挙げるが、同じレーンでも別の集めなら置き場がぶつかるので詰めない（既定）
+5. **ST**（規則5）: W-full では `ST.W [w]` にする。根が集めでもよい（関係の無い2つの値の ST.W。既定）。W-reg では、根がベクトル演算なら2つのレーンの ST にし、根が集めなら、ベクトル演算も ST.W も残らないので詰めない（既定）
+6. **共有**（規則6）: ベクトル演算は（レーン0のノード、レーン1のノード）で、LD.W は番地で、集めは2つのノードで値の番号を付け、同じものは1つにする（FIR の窓）。メモリ順序の辺は、融合した DAG の辺の両端を詰めた DAG のノードに付け替え、距離は変えない（ST.W の latency は ST と同じ。ADR-0022）。LD.W と LD の複製は、書込みの無い語だけを読むので、メモリ順序の辺を持たない
+
+組ごとに、たどった後で次の2つを確かめ、満たさなければその組を詰めない。
+
+- **置き場**: ベクトル演算のレーンにした計算した値は、読む側がすべて、同じレーンでその組を欄に読むベクトル演算か、そのレーンの ST でなければならない。まだたどっていない木の読む側はスカラーとして数えるので、後の木と共有するノードの組は詰めない（決定的で、保守的な読み）。レーンを取り出す命令は要らない
+- **閉路**: 詰めた DAG に閉路ができる組は詰めない（既定。規則ではない理由）。例えば、語 w の ST の後に w を読む LD が、語 w+1 の値に要る組である
+
+詰めた DAG は、ST・ST.W・レーンの ST から逆にたどれるノードからなる。LD.W に置き換わった LD と、ベクトル演算のレーンになったノードは消える。ノードの番号は Kahn の方法で付け、準備のできたノードのうち次の鍵の小さいものから番号を付ける（既定）: スカラーのノードは融合した DAG の番号、組のノードと ST.W はレーンのノードの番号の大きい方、レーンの ST は元の ST の番号。同じならスカラーを組より先に、次にもう一方のレーンの番号の順にする。組が1つも無ければ、融合した DAG の番号のままである。
+
+組にならなかった出力の語（スカラーのレーン）の理由は次のとおりで、最初に断った組の理由を書く。名前は既定である。
+
+| 理由 | 規則 | 内容 |
+|---|---|---|
+| `NoNeighbour` | 1 | 隣の出力の語が無いか、もう組になっている |
+| `RootDiffers` | 1 | W-reg で、2つの ST の値が根で違う |
+| `SameValue(位置)` | 2 | 乗算の rs1 以外の位置で、両方のレーンが同じ値 |
+| `NeededElsewhere(ノード)` | 4 | 計算した値が、別の組や別のレーン、スカラーでも要る |
+| `Cycle` | — | 組にすると依存の閉路ができる |
+| `StoredTwice` | — | 組の語を2回以上 ST する |
+
+`Pack` の結果（`Packing`）は、融合したスカラーの DAG、詰めた DAG、組（`PackedPair`）、スカラーのレーン（`ScalarLane`）、LD の複製の数を持つ。どの出力の語も、ちょうど1つの組か1つのスカラーのレーンにある。
+
+`saxpy8`（x は 0〜7、y は 8〜15、a は 16、out は 17〜24）は、W-full で `LD a`、`LD.W` 8つ（0、2、…、14）、`VMAC` 4つ（`a` をブロードキャスト）、奇数の語 17・19・21・23 の `ST.W` 4つになる（17ノード、Memory の操作 13 で、スロットの下限は 14、依存の下限は 6）。W-reg では、LD 17（`a` と集め8つ）、VMAC 4、レーンの ST 8 で、スロットの下限は 26 である。`fir4x8` は VMUL 4 と VMAC 12（`h` をブロードキャスト）で、窓は W-full で LD.W 10、W-reg で集め 10 と LD の複製 9 になる（窓の LD 20、スロットの下限 33）。
+
+### スケジュール（`ListScheduler`）
+
+ADR-0023 の素朴な方法のままで、各サイクルで Compute を先に埋め、ベクトルとスカラーの演算は同じ優先度で競う。
+
+| 項目 | mvp-2 の扱い |
+|---|---|
+| スロット | VADD・VSUB・VMUL・VMAC は Compute、LD.W・ST.W・レーンの ST は Memory。どちらも1サイクルに1つ |
+| 書戻しポート（L5） | 操作ごとに1つ予約する。ベクトル演算と LD.W は組を1回の予約で commit する。ST.W とレーンの ST は使わない |
+| 演算器（L9） | 演算ごと（VMAC は MAC と別の演算器）。レーンの ST は ST の演算器を使う |
+| 読出しポート（L11、形 F） | bundle の欄の数 ≤ `read_ports`。VMAC 3、VADD・VSUB・VMUL 2、ST・ST.W・レーンの ST 1、LD・LD.W 0。bank を見た配置や割り当てはしない |
+| `heldByReadPorts` | L11 だけで待った ST・ST.W・レーンの ST を数える |
+| レジスタの上限 | 生きているレジスタを重みで数える（下の「レジスタの組」）。LD と LD.W は `loadReserve` 本を空けておけるときだけ置く |
+
+### レジスタの組
+
+スケジューラと割り当ては、ノードではなくレジスタの組（`Dag.groups`）を数える。
+
+- 集めに入らないスカラーのノード: 重み1
+- 組のノード（LD.W、ベクトル演算）: 重み2
+- 集め: 重み2。2つのレーンのノードが書く
+
+組は、最初に発行した書く側の発行から、最後の読む側の発行まで生きる（`[s, u)`）。集めは、先に発行したレーンから2と数える（ADR-0023）。レーンごとには解放しない（W-reg の2つのレーンの ST の間も2のまま）。集めのレーンを読むスカラーの演算は、r(p) か r(p+1) をそのまま読む。上限付きのスケジューラは、置いた後の重みの和（`live` から、最後に読まれる組の重みを引き、始まる組の重みを足したもの）が上限以下のときだけ置く。mvp-0・mvp-1 の DAG では、どの組も1つのノードで重み1なので、今までと同じ数になる。
+
+### 割り当て（組）
+
+区間を、開始、次に組の最初の書く側の番号の順に割り当てる。
+
+- 組と集め: 両方が空いている最も小さい整列した組 `r(p):r(p+1)`（p は偶数）。集めの `lo` が r(p)、`hi` が r(p+1) を書く
+- スカラー（DAG に組があるとき）: 相方 `r xor 1` が使用中の、空いている最も小さいレジスタ（best fit）。無ければ、空いている最も小さいレジスタ
+- スカラー（DAG に組が無いとき）: 空いている最も小さいレジスタ（今までと同じ。既定）。このため、カーネルの fallback の命令列は mvp-1 の命令列と同じになる
+
+失敗の理由は2つに分ける。重みで数えた同時に生きるレジスタがレジスタ数を超えれば `TooManyLive`、超えないのに、組の始まる cycle に空いた整列した組が無ければ `NoAlignedPair`（cycle、その cycle の重みの和、レジスタ数）である。上限付きの試行でも、断片化で `NoAlignedPair` になり得る（上の「足りない場合の再スケジュール」の「割り当ては必ず成功する」は、組の無い DAG でだけ成り立つ）。試行の集合（20個）と選び方（cycles、LD の数、試行の順）は変えない。
+
+rematerialization（ADR-0016）は、`LD.W [a]` を、DAG のどの ST も `a` と `a+1` を書かないときに複製する。ブロードキャストの LD は、ほかの LD と同じく複製する。集めのレーンの LD は複製しない（既定。集め全体の複製が要るかは第4段の後半で測る）。
+
+命令の生成（`Allocation.bundles`）: ベクトル演算の rd、`Pair` と `Gather` の欄、LD.W・ST.W には組の偶数のレジスタを、`Broadcast` の欄には1つのレジスタと B=1 を書く。レーンの ST は `p + lane` を ST する。生成の誤りは、エンコーダ（L1。奇数の組）と verifier が「コンパイラの誤り」として止める。
+
+### fallback と結果の型
+
+ADR-0023 の2つの粒度の fallback を、次のように結果に書く。
+
+- レーンの fallback: 組にできない出力の語は、詰めた DAG の中でスカラーのまま残る（`Packing.scalarLanes` と理由）。カーネル全体はスカラーに戻さない
+- カーネルの fallback: 組が1つもできないとき（`NothingToPack`）と、詰めた DAG のすべての試行が失敗したとき（`NoAttemptFits`。試行ごとの `TooManyLive`・`NoAlignedPair`・`Stuck`）は、融合したスカラーの DAG をコンパイルする。この命令列は W の演算を使わない
+
+| API | 用途 | 結果 |
+|---|---|---|
+| `KernelCompiler.compile` | 通常の利用 | `CompiledKernel.simd` が `Packed(packing)`（レーンの fallback を含む）か `Fallback(reason, packing)`。スカラーの DAG も収まらないときだけ入力の誤りで、両方の理由を書く |
+| `KernelCompiler.candidate` | 比較の実験（第6段） | `SimdCandidate.Packed`、`Infeasible`（試行ごとの失敗。スカラーの値に置き換えない）、`NothingToPack`（候補が無く、スカラーの命令列を理由と一緒に返す）。mvp-0・mvp-1 の machine では入力の誤り |
+
+通常の利用は、詰めた命令列がスカラーの命令列より遅くても詰めた方を使う（ADR-0023: fallback は失敗のときだけ。テストは遅い数を情報として表示する）。`CompiledKernel.dag` は、詰めたときは詰めた DAG、fallback ではスカラーの DAG である（`Prepared.dag` はスカラーの DAG のまま）。
+
+### 結果（W、16 レジスタ）
+
+| カーネル | 構成 | cycles | 下限（依存 / スロット） | 選ばれた試行 | `heldByReadPorts` | 演算 | #78 の見積り |
+|---|---|---|---|---|---|---|---|
+| `saxpy8` | W-full | 15 | 6 / 14 | critical-path、上限なし | 3 | LD 1、LD.W 8、VMAC 4、ST.W 4 | 15 |
+| `saxpy8` | W-reg | 27 | 6 / 26 | critical-path、上限なし | 3 | LD 17、VMAC 4、ST 8 | 27 |
+| `saxpy7` | W-full | 15 | 6 / 14 | critical-path、上限なし | 3 | LD 3、LD.W 6、VMAC 3、MAC 1、ST.W 3、ST 1 | — |
+| `saxpy7` | W-reg | 24 | 6 / 23 | critical-path、上限なし | 3 | LD 15、VMAC 3、MAC 1、ST 7 | — |
+| `saxpy1` | W-full・W-reg | 8 | 6 / 5 | critical-path、上限なし | 0 | `NothingToPack`。mvp-1 と同じ命令列 | — |
+
+- 見積りは #78 の見積り（測った値ではない）で、比べるために並べた。W-full の `saxpy8` の 15 は、手書きの `tests/cases/w_saxpy8_hand.json` の cycles とも同じである
+- W-full の `saxpy8` では、LD と LD.W は 0〜8、VMAC は 4・6・8・10、ST.W は 9・11・12・13、HALT は 14 に置かれる。ST.W は VMAC の横の 6・8・10 で L11 だけで待つ（欄 3 + 1 > 3）。6 と 8 では、その bundle に LD.W を置く
+- `read_ports` 4（`mvp2_rp4.json`）の `saxpy8` は 14 cycles で、VMAC と ST.W が同じ bundle に入る（見積りも 14）
+- `fir4x8` と `matmul3` もコンパイルし、出力を参照モデルと RTL で確かめるが、cycles と演算の数は第4段の後半で見積りと比べて記録する。`matmul3` は、規則1を書かれたとおりに読むと (c0,c1)〜(c6,c7) を組にし、c8 がスカラーのレーンになる。(c2,c3) = (c(0,2), c(1,0)) は集め6つを要し、Memory の操作は 26（スロットの下限 27）で、#78 の見積りが仮定した行ごとの組（21、下限 22）と違う。どちらの読みにするかは第4段の後半の前にオーナーに諮る（#110 の Q1）
+
+### CLI
+
+mvp-2 の machine では、表示の行に W の結果を足す。終了コードは変わらない（fallback も 0。カーネルは動く）。下限はスケジュールした DAG（詰めた DAG か、fallback ではスカラーの DAG）の値で、融合した組の数はスカラーの DAG で数える。
+
+```
+saxpy8: 15 cycles (lower bounds 6 from dependences, 14 from slots), critical-path, no register limit, 8 MUL + ADD pairs fused into MAC; W: 4 output pairs packed (4 VMAC, 8 LD.W, 4 ST.W, 1 broadcast, 0 gathers), no scalar lanes; wrote …
+```
+
+fallback は `W: scalar fallback, (NothingToPack: …)` か `W: scalar fallback, every attempt of the packed DAG failed (TooManyLive 2, Stuck 6)` と表示する。テストケースの `description` にも同じ文を足す（mvp-0・mvp-1 では変わらない）。
+
+### テスト
+
+- `compiler/.../dag/PackSpec`
+  - `saxpy8`（W-full と W-reg）のノードの列、辺と距離、下限、2回詰めて同じになること。`saxpy7` と `saxpy1`。`matmul3` の規則1
+  - `saxpy(1..9)` と `fir4x(1..9)`（W-full と W-reg）の組の数と、奇数の長さの最後の語。FIR の窓（W-full の LD.W の数、W-reg の集めと複製の数）
+  - 規則と理由ごとの手作りの DAG: rs3 と ST のソースの `SameValue`、rs1 への入れ替え、ST のある語の集めと LD → ST の辺、隣でない語の集め、LD の複製、2つの集めに要る計算した値、スカラーの読む側がある計算したレーン、W-full の根の集めの ST.W と W-reg の `RootDiffers`、メモリ順序による `Cycle`、`StoredTwice`
+  - 6語を読み書きする乱数の500の書込みの列と、乱数の400の DSL カーネル（W-full と W-reg）: 詰めた DAG を、辺を守る乱数の順序で実行した結果（テストの中で、ノードの定義から書いた実行。`DagRun`）が lowering の評価と一致し、出力の語が組とスカラーのレーンに分かれ、ST が融合した DAG と同じ語を書くこと
+  - mvp-0・mvp-1 では詰めないこと
+- `compiler/.../schedule/ScheduleSpec`: 独立の検査に新しいノード（スロット、書戻しポート、欄、演算器、HALT）を足した。詰めた DAG（ベンチマーク、`saxpy7`、乱数の60のカーネル。W-full、W-reg、`mvp2_vlat`、`mvp2_vii`、`mvp2_rp4`、レジスタ8本の変種）の上限なしと上限付き（reserve 0〜r/2）の全スケジュールが検査に合格し、上限付きでは、スケジュールだけから数えた重みの和が上限を超えないこと。`read_ports` 3 では VMAC と ST.W が同じ bundle に無く、4 ではあること。`heldByReadPorts` が ST.W とレーンの ST を数え、発行サイクルだけから数え直した値と一致すること。`mvp2_vlat`（VMAC の L 3、MAC の L 2）の `saxpy7` で、MAC が VMAC と同じ境界の書戻しポートで2回待つこと
+- `compiler/.../regalloc/RegisterAllocatorSpec`: 詰めた DAG の成功した全ての試行で、組が偶数、集めのレーンが p と p+1 で、verifier に合格すること。集めの区間が先のレーンから始まり、`maxLive` が重みで数えること。手作りのスケジュールで、組のある DAG でだけ best fit になること、`NoAlignedPair` と `TooManyLive` を分けること。上限付きの試行の `NoAlignedPair`
+- `compiler/.../regalloc/RematerializationSpec`: `split` が `Pair`・`Broadcast`・ST.W の欄を付け替え、値が変わらないこと。詰めた DAG（8・12・16本）で、複製は行き詰まる試行にだけ現れ、集めのレーンは複製されず、LD.W とブロードキャストの LD が複製されること。命令列で2回以上 LD・LD.W する語を ST・ST.W が書かないこと
+- `compiler/.../WCompilerSpec`: `saxpy8` の W-full と W-reg の命令列と cycles（上の表）、`saxpy7` のレーンの fallback、`saxpy1` の `NothingToPack`（mvp-1 と同じ命令列）。レジスタ4本の W-full の `saxpy8` の `Infeasible`（上限なしの2つが `TooManyLive`、上限付きの6つが `Stuck`）と `Fallback(NoAttemptFits)`（mvp-1 のレジスタ4本と同じ命令列）。ベンチマークと奇数の長さを5つの mvp-2 の構成と両方の発行の方式でコンパイルし、出力（テストの中の ISA の実行。`MacCompilerSpec` と共通の `IsaExecutor`）と、命令列が `simd` のとおりであること
+- `compiler/.../KernelCompilerSpec`: mvp-2 の machine で list scheduling がコンパイルし、テストケースが読めて W の文を持つこと。Modulo Scheduling が第5段まで拒否すること。mvp-0・mvp-1 で `candidate` が入力の誤りになること
+- `crosscheck/HandComputedSpec`: 手で計算した入出力を、W-full、W-reg、`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii` の参照モデルで、両方の発行の方式で確かめる（W-full と W-reg ではどれも詰める。`mvp2_vlat` の `matmul3` は `NoAttemptFits` で fallback する）
+- `crosscheck/RandomKernelSpec`: 乱数の400のカーネルを、W-full、W-reg、レジスタ6本の W-full の変種でコンパイルし、参照モデルで結果と cycles を確かめる。6本で収まらないのは、mvp-1 の6本でも収まらないカーネルだけであること。2つの API が一致すること。テストケースが参照モデルで成り立つこと。詰めた・レーンの fallback・`NothingToPack`・`NoAttemptFits`・理由・形の数の下限
+- `crosscheck/RtlMvp2Spec`: 今の4つのビルド（W-full、W-reg、`mvp2_vlat`、変種）の中で、ベンチマーク、奇数の長さ、手で計算した入力、乱数のカーネルをコンパイルした命令列を RTL で実行し、参照モデルとトレース・cycles・レジスタ・メモリが一致し、出力が DSL の参照実装と一致すること（新しいビルドは無い）
 
 ## ループ IR
 
@@ -505,7 +661,7 @@ machine に MAC があるとき（ISA mvp-1）、`LoopFusion.fuse` は、ルー�
 
 ## Modulo Scheduling
 
-`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。
+`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。ISA mvp-2 の machine は、#110 の第5段まで理由付きで拒否する（`ModuloCompiler.notImplemented`。入力の誤り）。
 
 | 段 | 内容 | 実装 |
 |---|---|---|

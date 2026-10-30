@@ -48,6 +48,7 @@ class LoopFusionSpec extends AnyFunSuite {
         case Node.Mac(a, b, c)      =>
           result(i) = Op.Add(Op.Mul(operand(i, a), operand(i, b)), operand(i, c)); mem
         case Node.Store(a, v) => mem.updated(a, operand(i, v))
+        case other            => fail(s"$other: not a node of a loop's DAG")
       }
       done(i) = true
       after
@@ -79,6 +80,7 @@ class LoopFusionSpec extends AnyFunSuite {
         case Node.Compute(op, a, b) => (op, keys(a), keys(b))
         case Node.Mac(a, b, c)      => ("MAC", keys(a), keys(b), keys(c))
         case Node.Store(a, v)       => ("ST", a, keys(v))
+        case other                  => fail(s"$other: not a node of a loop's DAG")
       })
     }
     def count[A](xs: Seq[A]) = xs.groupBy(identity).view.mapValues(_.size).toMap

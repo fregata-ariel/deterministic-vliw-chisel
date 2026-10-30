@@ -3,7 +3,35 @@ package vliw.compiler.dag
 import scala.collection.mutable
 
 import vliw.compiler.dsl.{LoweredKernel, Op}
-import vliw.isa.MachineDescription
+import vliw.isa.{MachineDescription, Slot}
+
+/** An operand field of a vector operation or of ST.W (ISA mvp-2, docs/COMPILER.md "ISA mvp-2（W）"):
+  * the nodes whose values the field reads. Only `Pack` makes them.
+  */
+sealed trait Src extends Product with Serializable {
+
+  /** The nodes the field reads. */
+  def nodes: Vector[Int]
+}
+object Src {
+
+  /** The aligned register pair of a pair node (LD.W, a vector operation). */
+  final case class Pair(node: Int) extends Src {
+    def nodes: Vector[Int] = Vector(node)
+  }
+
+  /** Two scalar nodes whose results go to r(p) (`lo`, lane 0) and r(p+1) (`hi`, lane 1) of one
+    * aligned pair, with no move instruction (docs/ISA.md: partial pair updates are legal).
+    */
+  final case class Gather(lo: Int, hi: Int) extends Src {
+    def nodes: Vector[Int] = Vector(lo, hi)
+  }
+
+  /** One scalar node, read once for both lanes: only the rs1 of VMUL and VMAC (bit B). */
+  final case class Broadcast(node: Int) extends Src {
+    def nodes: Vector[Int] = Vector(node)
+  }
+}
 
 /** One operation of the kernel. Operands refer to node ids; values are still virtual registers. */
 sealed trait Node extends Product with Serializable {
@@ -11,10 +39,24 @@ sealed trait Node extends Product with Serializable {
   /** ISA mnemonic, which selects the latency and II in the machine description. */
   def mnemonic: String
 
-  /** The operands, one per operand field of the instruction: a node read by two fields appears
-    * twice (rule L11 counts the fields).
+  /** The nodes read, one per operand field of a scalar instruction: a node read by two fields
+    * appears twice. A gather field reads two nodes.
     */
   def operands: Vector[Int]
+
+  /** The operand fields of a vector operation or of ST.W; empty for the other nodes. */
+  def sources: Vector[Src] = Vector.empty
+
+  /** The number of operand fields, which rule L11 counts (form F): a pair, a gather and a broadcast
+    * are one field each. For the scalar nodes, `operands.size`.
+    */
+  def fields: Int = operands.size
+
+  /** Whether the node's value is an aligned register pair (LD.W and the vector operations). */
+  def isPair: Boolean = false
+
+  /** Whether the node stores (ST, ST.W, a lane ST), and so has no value. */
+  def isStore: Boolean = false
 }
 object Node {
   final case class Load(addr: Int) extends Node {
@@ -36,6 +78,52 @@ object Node {
   final case class Store(addr: Int, value: Int) extends Node {
     def mnemonic: String = "ST"
     def operands: Vector[Int] = Vector(value)
+    override def isStore: Boolean = true
+  }
+
+  // ISA mvp-2 (W). Only `Pack` makes these nodes (docs/COMPILER.md "ISA mvp-2（W）").
+
+  /** LD.W [addr]: the words `addr` and `addr + 1` into an aligned pair (W-full only). */
+  final case class LoadW(addr: Int) extends Node {
+    def mnemonic: String = "LD.W"
+    def operands: Vector[Int] = Vector.empty
+    override def isPair: Boolean = true
+  }
+
+  /** VADD, VSUB or VMUL: `op` in each lane. Only VMUL's `a` may be a broadcast. */
+  final case class VCompute(op: Op, a: Src, b: Src) extends Node {
+    def mnemonic: String = "V" + op.mnemonic
+    def operands: Vector[Int] = a.nodes ++ b.nodes
+    override def sources: Vector[Src] = Vector(a, b)
+    override def fields: Int = 2
+    override def isPair: Boolean = true
+  }
+
+  /** VMAC: `a * b + c` in each lane; `a` may be a broadcast. */
+  final case class VMac(a: Src, b: Src, c: Src) extends Node {
+    def mnemonic: String = "VMAC"
+    def operands: Vector[Int] = a.nodes ++ b.nodes ++ c.nodes
+    override def sources: Vector[Src] = Vector(a, b, c)
+    override def fields: Int = 3
+    override def isPair: Boolean = true
+  }
+
+  /** ST.W [addr]: the pair `value` to the words `addr` and `addr + 1` (W-full only). */
+  final case class StoreW(addr: Int, value: Src) extends Node {
+    def mnemonic: String = "ST.W"
+    def operands: Vector[Int] = value.nodes
+    override def sources: Vector[Src] = Vector(value)
+    override def fields: Int = 1
+    override def isStore: Boolean = true
+  }
+
+  /** ST [addr] of lane `lane` of the pair node `pair`, register r(p + lane) (W-reg, which has no
+    * ST.W).
+    */
+  final case class StoreLane(addr: Int, pair: Int, lane: Int) extends Node {
+    def mnemonic: String = "ST"
+    def operands: Vector[Int] = Vector(pair)
+    override def isStore: Boolean = true
   }
 }
 
@@ -57,6 +145,12 @@ object EdgeKind {
 
 /** `issue(to) >= issue(from) + distance`. */
 final case class Edge(from: Int, to: Int, distance: Int, kind: EdgeKind)
+
+/** The registers that one value, or one gather, occupies (docs/COMPILER.md "ISA mvp-2（W）"): a
+  * scalar node not in a gather (weight 1), a pair node (weight 2), or a gather (weight 2, defined
+  * by its two lane nodes, `lo` first). The scheduler and the allocator count groups, not nodes.
+  */
+final case class Group(definers: Vector[Int], weight: Int)
 
 /** Dependence DAG of a lowered kernel (docs/COMPILER.md, "DAG"). Node ids are a topological order:
   * every edge goes from a lower id to a higher one.
@@ -102,18 +196,19 @@ final case class Dag(machine: MachineDescription, nodes: Vector[Node], edges: Ve
   def cyclesLowerBound: Int = criticalPath + 1
 
   /** Lower bound from issue slots alone: one compute and one memory operation per bundle, plus
-    * HALT, which takes a compute slot of its own.
+    * HALT, which takes a compute slot of its own. LD.W, ST.W and lane STs are memory operations.
     */
   def resourceLowerBound: Int = {
-    val (memory, compute) = nodes.partition {
-      case _: Node.Load | _: Node.Store => true
-      case _                            => false
-    }
+    val (memory, compute) =
+      nodes.partition(n => machine.operation(n.mnemonic).slot == Slot.Memory)
     (compute.size + 1).max(memory.size + 1)
   }
 
-  /** Number of LD nodes. */
-  def loads: Int = nodes.count(_.isInstanceOf[Node.Load])
+  /** Number of LD and LD.W nodes. */
+  def loads: Int = nodes.count {
+    case _: Node.Load | _: Node.LoadW => true
+    case _                            => false
+  }
 
   /** Number of MAC nodes: in a kernel's DAG, the MUL + ADD pairs fused (`Fusion`). */
   def macs: Int = nodes.count(_.isInstanceOf[Node.Mac])
@@ -122,22 +217,69 @@ final case class Dag(machine: MachineDescription, nodes: Vector[Node], edges: Ve
   lazy val readers: Vector[Vector[Int]] =
     successors.map(_.filter(_.kind == EdgeKind.Data).map(_.to).distinct.sorted)
 
-  /** Addresses that some store of the DAG writes. */
-  lazy val written: Set[Int] = nodes.collect { case Node.Store(a, _) => a }.toSet
+  /** Addresses that some store of the DAG writes (ST.W writes two). */
+  lazy val written: Set[Int] = nodes.flatMap {
+    case Node.Store(a, _)        => Seq(a)
+    case Node.StoreW(a, _)       => Seq(a, a + 1)
+    case Node.StoreLane(a, _, _) => Seq(a)
+    case _                       => Nil
+  }.toSet
 
-  /** Whether node `n` is a LD that may be issued again for some of its readers (rematerialization,
-    * #70): a LD of a word that no store of the DAG writes (an input, a scalar or a constant), so
-    * that every LD of it reads the same value and needs no memory-order edge.
+  /** The gathers that the fields of the DAG read, each once, in order of first use. */
+  lazy val gathers: Vector[Src.Gather] =
+    nodes.flatMap(_.sources).collect { case g: Src.Gather => g }.distinct
+
+  /** The register group of each node (-1 for the stores, which have no value). */
+  def group: Vector[Int] = grouping._1
+
+  /** The groups in order of their first node. On a DAG without pairs every group is one node of
+    * weight 1, in the order of the nodes.
+    */
+  def groups: Vector[Group] = grouping._2
+
+  private lazy val grouping: (Vector[Int], Vector[Group]) = {
+    val lane = mutable.Map.empty[Int, Src.Gather]
+    gathers.foreach { g =>
+      require(g.lo != g.hi, s"$g has the same node in both lanes")
+      g.nodes.foreach { n =>
+        require(!nodes(n).isPair && !nodes(n).isStore, s"$g: node $n is not a scalar value")
+        require(!lane.contains(n), s"node $n is a lane of ${lane(n)} and of $g")
+        lane(n) = g
+      }
+    }
+    val of = Array.fill(nodes.size)(-1)
+    val made = mutable.ArrayBuffer.empty[Group]
+    nodes.indices.foreach { i =>
+      if (!nodes(i).isStore && of(i) < 0) {
+        val g = made.size
+        lane.get(i) match {
+          case Some(gather) => gather.nodes.foreach(of(_) = g); made += Group(gather.nodes, 2)
+          case None         => of(i) = g; made += Group(Vector(i), if (nodes(i).isPair) 2 else 1)
+        }
+      }
+    }
+    (of.toVector, made.toVector)
+  }
+
+  /** The nodes that read each group (data successors of its definers), in id order. */
+  lazy val groupReaders: Vector[Vector[Int]] =
+    groups.map(_.definers.flatMap(readers).distinct.sorted)
+
+  /** Whether node `n` may be issued again for some of its readers (rematerialization, #70; ADR-0023
+    * for LD.W): a LD of a word that no store of the DAG writes (an input, a scalar or a constant),
+    * so that every LD of it reads the same value and needs no memory-order edge, but not a lane of
+    * a gather (#110 stage 4); or a LD.W of two such words.
     */
   def rematerializable(n: Int): Boolean = nodes(n) match {
-    case Node.Load(addr) => !written(addr)
-    case _               => false
+    case Node.Load(addr)  => !written(addr) && groups(group(n)).definers.size == 1
+    case Node.LoadW(addr) => !written(addr) && !written(addr + 1)
+    case _                => false
   }
 
   /** The DAG in which `moved`, a nonempty proper subset of the readers of the rematerializable LD
-    * `load`, read a copy of it: a new LD of the same word, with the data edges of `load` to them.
-    * The copy takes the id of the first of `moved`, and every id from there on grows by one, so
-    * that ids stay a topological order (`load` < copy < every node of `moved`).
+    * (or LD.W) `load`, read a copy of it: a new LD of the same word, with the data edges of `load`
+    * to them. The copy takes the id of the first of `moved`, and every id from there on grows by
+    * one, so that ids stay a topological order (`load` < copy < every node of `moved`).
     */
   def split(load: Int, moved: Set[Int]): Dag = {
     require(rematerializable(load), s"node $load is not a LD of a word that no store writes")
@@ -148,11 +290,21 @@ final case class Dag(machine: MachineDescription, nodes: Vector[Node], edges: Ve
     val at = moved.min
     def id(i: Int) = if (i < at) i else i + 1
     def operand(reader: Int, o: Int) = if (o == load && moved(reader)) at else id(o)
+    def src(reader: Int, s: Src): Src = s match {
+      case Src.Pair(n)        => Src.Pair(operand(reader, n))
+      case Src.Gather(lo, hi) => Src.Gather(operand(reader, lo), operand(reader, hi))
+      case Src.Broadcast(n)   => Src.Broadcast(operand(reader, n))
+    }
     val renamed = nodes.zipWithIndex.map {
-      case (Node.Compute(op, a, b), i) => Node.Compute(op, operand(i, a), operand(i, b))
-      case (Node.Mac(a, b, c), i)      => Node.Mac(operand(i, a), operand(i, b), operand(i, c))
-      case (Node.Store(addr, v), i)    => Node.Store(addr, operand(i, v))
-      case (l: Node.Load, _)           => l
+      case (Node.Compute(op, a, b), i)  => Node.Compute(op, operand(i, a), operand(i, b))
+      case (Node.Mac(a, b, c), i)       => Node.Mac(operand(i, a), operand(i, b), operand(i, c))
+      case (Node.Store(addr, v), i)     => Node.Store(addr, operand(i, v))
+      case (l: Node.Load, _)            => l
+      case (l: Node.LoadW, _)           => l
+      case (Node.VCompute(op, a, b), i) => Node.VCompute(op, src(i, a), src(i, b))
+      case (Node.VMac(a, b, c), i)      => Node.VMac(src(i, a), src(i, b), src(i, c))
+      case (Node.StoreW(addr, v), i)    => Node.StoreW(addr, src(i, v))
+      case (Node.StoreLane(addr, v, lane), i) => Node.StoreLane(addr, operand(i, v), lane)
     }
     val newEdges = edges.map { e =>
       if (e.kind == EdgeKind.Data && e.from == load && moved(e.to)) e.copy(from = at, to = id(e.to))
