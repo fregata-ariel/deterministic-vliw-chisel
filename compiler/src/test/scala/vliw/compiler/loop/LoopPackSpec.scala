@@ -136,6 +136,14 @@ class LoopPackSpec extends AnyFunSuite {
         case _ => false
       }))
     }
+    // Before: LD 4, LD.W 1, MUL 3, VMUL 3 (the initial pairs); each: LD 4, LD.W 1, MAC 3, VMAC 3;
+    // after: ST 3, ST.W 3.
+    def mnemonics(p: Place) = g.ids(p).map(n => g.nodes(n).mnemonic).groupBy(identity).map {
+      case (m, ns) => m -> ns.size
+    }
+    assert(mnemonics(Before) == Map("LD" -> 4, "LD.W" -> 1, "MUL" -> 3, "VMUL" -> 3))
+    assert(mnemonics(Each) == Map("LD" -> 4, "LD.W" -> 1, "MAC" -> 3, "VMAC" -> 3))
+    assert(mnemonics(After) == Map("ST" -> 3, "ST.W" -> 3))
     // As the list W-full DAG (#78's row pairs): LD 12 and LD.W 3 in the program.
     val dag = g.expanded.dag
     assert(dag.nodes.count(_.mnemonic == "LD") == 12 && dag.nodes.count(_.mnemonic == "LD.W") == 3)

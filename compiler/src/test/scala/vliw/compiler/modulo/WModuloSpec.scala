@@ -433,6 +433,20 @@ class WModuloSpec extends AnyFunSuite {
         case LoopCandidate.Packed(p) => p.bundles == c.bundles
         case _                       => false
       })
+      // (m)'s vector states read themselves one VMAC back: RecMII 2 (vlat: VMAC latency 3).
+      val recMII = if (label == "matmul3 m") (if (m eq vlat) 3 else 2) else 0
+      assert(c.result.mii.recMII == recMII, s"$label on ${m.machineId}")
+    }
+    // mvp-1's records (COMPILER.md): MinAvg at the MII and at the II, and MaxLive.
+    for (
+      (m, label, want) <- Seq(
+        (mvp1, "matmul3 i", (13, 14, 14)),
+        (mvp1, "matmul3 m", (11, 14, 14)),
+        (mvp1rp4, "matmul3 i", (13, 16, 16))
+      )
+    ) {
+      val c = compile(loop(label), m)
+      assert((c.minAvgAtMii, c.minAvgAtIi, c.maxLive) == want, s"$label on ${m.machineId}")
     }
   }
 
@@ -586,6 +600,8 @@ class WModuloSpec extends AnyFunSuite {
         if (p.graph.nodes.exists(_.isInstanceOf[LoopNode.StoreLane])) counts("lane STs") += 1
       } else {
         counts(if (d.packed) "packed" else "NothingToPack") += 1
+        if (!d.packed && LoopPack.byAddress(p.scalar).nonEmpty)
+          counts("NothingToPack: a candidate") += 1
         d.notDoubled.map(_.name).distinct.foreach(counts(_) += 1)
         if (d.notDoubled.forall(_.name == "SameValue")) counts("SameValue only") += 1
         if (d.packed) shape(p, d, counts)
@@ -609,6 +625,7 @@ class WModuloSpec extends AnyFunSuite {
         "SameValue only" -> 27,
         "packed" -> 66,
         "NothingToPack" -> 104,
+        "NothingToPack: a candidate" -> 1,
         "pair each" -> 66,
         "packed: gathers" -> 66,
         "packed: gather before the loop" -> 1,
@@ -740,6 +757,8 @@ class WModuloSpec extends AnyFunSuite {
       if (d.doubled) counts("doubled") += 1
       else {
         counts(if (d.packed) "packed" else "NothingToPack") += 1
+        if (!d.packed && LoopPack.byAddress(p.scalar).nonEmpty)
+          counts("NothingToPack: a candidate") += 1
         d.notDoubled.map(_.name).distinct.foreach(counts(_) += 1)
         if (d.packed) shape(p, d, counts)
         lanes(d, counts)
@@ -773,6 +792,7 @@ class WModuloSpec extends AnyFunSuite {
         "SameValue" -> 263,
         "packed" -> 115,
         "NothingToPack" -> 182,
+        "NothingToPack: a candidate" -> 81,
         "no program" -> 4,
         "pair each" -> 112,
         "pair after" -> 4,
@@ -813,6 +833,8 @@ class WModuloSpec extends AnyFunSuite {
       if (d.doubled) counts("doubled") += 1
       else {
         counts(if (d.packed) "packed" else "NothingToPack") += 1
+        if (!d.packed && LoopPack.byAddress(p.scalar).nonEmpty)
+          counts("NothingToPack: a candidate") += 1
         if (d.packed) {
           shape(p, d, counts)
           if (LoopPack.byAddress(p.scalar).exists(LoopPack.gatherFree(p.scalar, _)))
@@ -830,6 +852,7 @@ class WModuloSpec extends AnyFunSuite {
         "doubled" -> 22,
         "packed" -> 231,
         "NothingToPack" -> 47,
+        "NothingToPack: a candidate" -> 47,
         "pair each" -> 297,
         "pair after" -> 45,
         "packed: vector states" -> 41,
