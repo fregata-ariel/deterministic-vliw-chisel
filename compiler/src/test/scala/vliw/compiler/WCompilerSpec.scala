@@ -64,6 +64,21 @@ class WCompilerSpec extends AnyFunSuite {
     assert(c.bundles.size == c.cycles && c.words.size == c.cycles, label)
   }
 
+  /** The operations of `c` by mnemonic (the "演算" column of COMPILER.md's results). */
+  private def operations(c: CompiledKernel): Map[String, Int] =
+    c.bundles.flatMap(mnemonics).groupMapReduce(identity)(_ => 1)(_ + _)
+
+  /** The other columns of COMPILER.md's results ("結果（W、16 レジスタ）") for `c`: cycles, the dependence
+    * and slot bounds of the DAG scheduled, the chosen attempt and `heldByReadPorts`.
+    */
+  private def recorded(c: CompiledKernel, cycles: Int, slots: Int, held: Int): Unit = {
+    val label = s"${c.kernel.name} on ${c.machine.machineId}"
+    assert(c.cycles == cycles, label)
+    assert(c.dag.cyclesLowerBound == 6 && c.dag.resourceLowerBound == slots, label)
+    assert(c.allocated.attempt.toString == "critical-path, no register limit", label)
+    assert(c.allocated.schedule.heldByReadPorts == held, label)
+  }
+
   private val saxpy8 = Benchmarks.saxpy(8)
 
   test("saxpy8 on W-full: 1 LD, 8 LD.W, 4 VMAC broadcasting a, 4 ST.W at 17..23; 15 cycles") {
@@ -81,9 +96,9 @@ class WCompilerSpec extends AnyFunSuite {
     // The COMPILER.md record. A hand schedule of the CriticalPath attempt (loads at 0-8, VMACs at 4,
     // 6, 8, 10, ST.W at 9, 11, 12, 13, HALT 14), the hand-written w_saxpy8_hand and the #78
     // estimate all give 15.
-    assert(c.cycles == 15 && c.allocated.attempt.toString == "critical-path, no register limit")
     // ST.W waits for the read ports beside a VMAC at 6, 8 and 10 (L11, form F: 3 + 1 > 3).
-    assert(c.allocated.schedule.heldByReadPorts == 3)
+    recorded(c, cycles = 15, slots = 14, held = 3)
+    assert(operations(c) == Map("LD" -> 1, "LD.W" -> 8, "VMAC" -> 4, "ST.W" -> 4))
     invariants(c)
     val rng = new Random(1101L)
     (0 until 3).foreach(_ => computes(c, RandomKernels.values(saxpy8, rng)))
@@ -110,8 +125,8 @@ class WCompilerSpec extends AnyFunSuite {
       }
     }
     // The COMPILER.md record (the slot bound is 26; the #78 estimate is 27).
-    assert(c.cycles == 27 && c.cycles >= c.dag.resourceLowerBound)
-    assert(c.allocated.schedule.heldByReadPorts == 3)
+    recorded(c, cycles = 27, slots = 26, held = 3)
+    assert(operations(c) == Map("LD" -> 17, "VMAC" -> 4, "ST" -> 8))
     invariants(c)
     val rng = new Random(1102L)
     (0 until 3).foreach(_ => computes(c, RandomKernels.values(saxpy8, rng)))
@@ -119,16 +134,20 @@ class WCompilerSpec extends AnyFunSuite {
 
   test("saxpy7: three VMAC and one MAC, the lane fallback out(6) by rule 1, no kernel fallback") {
     val rng = new Random(1107L)
-    for ((m, cycles) <- Seq(full -> 15, mw1 -> 24)) {
+    // The COMPILER.md records.
+    val rows = Seq(
+      (full, 15, 14, Map("LD" -> 3, "LD.W" -> 6, "VMAC" -> 3, "MAC" -> 1, "ST.W" -> 3, "ST" -> 1)),
+      (mw1, 24, 23, Map("LD" -> 15, "VMAC" -> 3, "MAC" -> 1, "ST" -> 7))
+    )
+    for ((m, cycles, slots, ops) <- rows) {
       val c = compiled(Benchmarks.saxpy(7), m)
       c.simd match {
         case Simd.Packed(p) =>
           assert(p.scalarLanes == Vector(ScalarLane(21, LaneReason.NoNeighbour)), m.machineId)
         case other => fail(s"${m.machineId}: $other")
       }
-      assert(c.bundles.count(_.compute.isInstanceOf[ComputeOp.VMac]) == 3)
-      assert(c.bundles.count(_.compute.isInstanceOf[ComputeOp.Mac]) == 1)
-      assert(c.cycles == cycles, m.machineId) // recorded in COMPILER.md
+      recorded(c, cycles, slots, held = 3)
+      assert(operations(c) == ops, m.machineId)
       invariants(c)
       (0 until 3).foreach(_ => computes(c, RandomKernels.values(c.kernel, rng)))
     }
@@ -143,7 +162,8 @@ class WCompilerSpec extends AnyFunSuite {
           assert(p.scalarLanes == Vector(ScalarLane(3, LaneReason.NoNeighbour)))
         case other => fail(s"${m.machineId}: $other")
       }
-      assert(c.bundles == compiled(k, mvp1).bundles && c.cycles == 8)
+      assert(c.bundles == compiled(k, mvp1).bundles)
+      recorded(c, cycles = 8, slots = 5, held = 0) // the COMPILER.md record
       KernelCompiler.candidate(k, m) match {
         case Right(SimdCandidate.NothingToPack(_, scalar)) => assert(scalar.words == c.words)
         case other                                         => fail(s"${m.machineId}: $other")

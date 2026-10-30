@@ -3,6 +3,7 @@ package vliw.compiler
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.dsl._
+import vliw.compiler.regalloc.RegisterAllocator
 import vliw.isa._
 
 class KernelCompilerSpec extends AnyFunSuite {
@@ -100,6 +101,10 @@ class KernelCompilerSpec extends AnyFunSuite {
       assert(Verifier.verify(mvp2, tc.words, Verifier.Declaration.of(tc.inputs)).isEmpty)
       assert(json("description").str.endsWith("; " + KernelCompiler.describeW(c)))
       assert(json("description").str.contains("W: 4 output pairs packed ("))
+      // The scalar DAG of an mvp-2 machine is never finished as code without W (ADR-0023).
+      val p = KernelCompiler.prepare(Benchmarks.saxpy(8), mvp2).fold(e => fail(e), identity)
+      val a = RegisterAllocator.scheduleAndAllocate(p.dag).fold(e => fail(e), identity)
+      assert(KernelCompiler.finish(p, a).left.toOption.exists(_.contains("not code without W")))
       val loop = vliw.compiler.loop.LoopBenchmarks.saxpy(8)
       assert(vliw.compiler.modulo.ModuloCompiler.prepare(loop, mvp2).map(_ => ()) == Left(reason))
       assert(vliw.compiler.modulo.ModuloCompiler.compile(loop, mvp2).map(_ => ()) == Left(reason))
@@ -114,6 +119,8 @@ class KernelCompilerSpec extends AnyFunSuite {
       assert(no.exists(_.contains("without W")), m.machineId)
       val c = KernelCompiler.compile(Benchmarks.saxpy(8), m).fold(e => fail(e), identity)
       assert(c.simd == Simd.Scalar && KernelCompiler.describeW(c).isEmpty)
+      val p = KernelCompiler.prepare(Benchmarks.saxpy(8), m).fold(e => fail(e), identity)
+      assert(KernelCompiler.finish(p, c.allocated).map(_.words) == Right(c.words), m.machineId)
     }
   }
 }

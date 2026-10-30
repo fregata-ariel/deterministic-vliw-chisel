@@ -119,9 +119,18 @@ object KernelCompiler {
     )
   }
 
-  /** [[finish]] of the fused scalar DAG of `p`. */
+  /** [[finish]] of the fused scalar DAG of `p`, marked `Simd.Scalar` (no W): ISA mvp-0 and mvp-1
+    * only. On ISA mvp-2 the scalar code is a fallback or the code of a kernel with nothing to pack,
+    * and it is never recorded as code without W (ADR-0023): Left, so that a caller uses `compile`
+    * or `candidate` instead.
+    */
   def finish(p: Prepared, allocated: Allocated): Either[String, CompiledKernel] =
-    finish(p, allocated, p.dag, Simd.Scalar)
+    if (p.packing.nonEmpty)
+      Left(
+        s"${p.kernel.name}: ${p.machine.machineId} is ISA ${p.machine.isaVersion}: its scalar code " +
+          "is a fallback, not code without W (ADR-0023); use KernelCompiler.compile or candidate"
+      )
+    else finish(p, allocated, p.dag, Simd.Scalar)
 
   /** Compiles with every attempt of `priorities` and keeps the one with the fewest cycles. On ISA
     * mvp-2 (normal use, ADR-0023), the packed DAG; when nothing packs or every attempt of it fails,

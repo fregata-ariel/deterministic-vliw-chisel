@@ -166,14 +166,18 @@ class RandomKernelSpec extends AnyFunSuite with VliwChiselSim {
   private lazy val kernels = RandomKernels.kernels(51L, 400)
   private lazy val onFull = compileAll(full)
   private lazy val onMw1 = compileAll(mw1)
+  // The same kernels on mvp-1 with 6 registers (None where they do not fit).
+  private lazy val onMvp1six: Vector[Option[CompiledKernel]] =
+    kernels.map(KernelCompiler.compile(_, mvp1six).toOption)
   // Six registers: a kernel may not fit, but only when it does not fit mvp-1 with 6 registers either.
-  private lazy val onSix: Vector[(Kernel, Option[CompiledKernel])] = kernels.map { k =>
-    val c = KernelCompiler.compile(k, six)
-    c.left.foreach { e =>
-      assert(!e.startsWith("compiler error") && e.contains("packed DAG"), s"${k.name}: $e")
-      assert(KernelCompiler.compile(k, mvp1six).isLeft, s"${k.name} fits mvp-1 with 6 registers")
-    }
-    k -> c.toOption
+  private lazy val onSix: Vector[(Kernel, Option[CompiledKernel])] = kernels.zipWithIndex.map {
+    case (k, i) =>
+      val c = KernelCompiler.compile(k, six)
+      c.left.foreach { e =>
+        assert(!e.startsWith("compiler error") && e.contains("packed DAG"), s"${k.name}: $e")
+        assert(onMvp1six(i).isEmpty, s"${k.name} fits mvp-1 with 6 registers")
+      }
+      k -> c.toOption
   }
 
   private def packing(c: CompiledKernel) = c.simd match {
@@ -189,7 +193,7 @@ class RandomKernelSpec extends AnyFunSuite with VliwChiselSim {
     val scalarCycles = Map(
       full.hash -> onMvp1.map(_.cycles),
       mw1.hash -> onMvp1.map(_.cycles),
-      six.hash -> kernels.map(k => KernelCompiler.compile(k, mvp1six).fold(_ => -1, _.cycles))
+      six.hash -> onMvp1six.map(_.fold(-1)(_.cycles))
     )
     val counts = collection.mutable.Map.empty[String, Int].withDefaultValue(0)
     for ((m, code) <- Seq(full -> onFull, mw1 -> onMw1, six -> onSix.flatMap(_._2))) {
@@ -283,19 +287,38 @@ class RandomKernelSpec extends AnyFunSuite with VliwChiselSim {
     minimum.foreach { case (k, n) => assert(counts(k) >= n, s"$k: ${counts(k)}") }
   }
 
-  test("ISA mvp-2: the comparison candidate and normal use agree (the first 100 kernels)") {
-    for ((m, code) <- Seq(full -> onFull, mw1 -> onMw1); c <- code.take(100)) {
-      val label = s"${c.kernel.name} on ${m.machineId}"
+  test(
+    "ISA mvp-2: the comparison candidate and normal use agree; a fallback is the mvp-1 code (the first 100 kernels)"
+  ) {
+    // The scalar reference of each machine: mvp-1 with as many registers (a DAG without pairs takes
+    // the lowest free register, so a kernel fallback is the mvp-1 code).
+    val runs = Seq(
+      (full, onFull, onMvp1.map(Option(_))),
+      (mw1, onMw1, onMvp1.map(Option(_))),
+      (six, onSix.flatMap(_._2), onMvp1six)
+    )
+    val counts = collection.mutable.Map.empty[String, Int].withDefaultValue(0)
+    for ((m, code, scalar) <- runs; c <- code.take(100)) {
+      val label = s"${c.kernel.name} on ${m.machineId} with ${m.registerCount} registers"
+      def mvp1Code = scalar(c.kernel.name.stripPrefix("random").toInt)
+        .getOrElse(fail(s"$label: falls back, but does not fit mvp-1"))
+        .bundles
       (KernelCompiler.candidate(c.kernel, m).fold(e => fail(e), identity), c.simd) match {
         case (SimdCandidate.Packed(p), Simd.Packed(_)) => assert(p.words == c.words, label)
         case (SimdCandidate.Infeasible(_, f), Simd.Fallback(FallbackReason.NoAttemptFits(g), _)) =>
-          assert(f == g, label)
+          assert(f == g && c.bundles == mvp1Code, label)
+          counts(s"${m.registerCount} NoAttemptFits") += 1
         case (SimdCandidate.NothingToPack(_, s), Simd.Fallback(FallbackReason.NothingToPack, _)) =>
-          val index = c.kernel.name.stripPrefix("random").toInt
-          assert(s.words == c.words && c.bundles == onMvp1(index).bundles, label)
+          assert(s.words == c.words && c.bundles == mvp1Code, label)
+          counts(s"${m.registerCount} NothingToPack") += 1
         case (candidate, simd) => fail(s"$label: $candidate but $simd")
       }
     }
+    info(counts.toSeq.sorted.map { case (k, v) => s"$k $v" }.mkString(", "))
+    // About half of the counts measured (78 NothingToPack on 16 registers; 46 NoAttemptFits and 7
+    // NothingToPack on 6, where no 16-register kernel falls back after every attempt failed).
+    assert(counts("16 NothingToPack") >= 39, counts.toString)
+    assert(counts("6 NoAttemptFits") >= 23 && counts("6 NothingToPack") >= 3, counts.toString)
   }
 
   test("ISA mvp-2: the generated test cases hold on the reference model") {

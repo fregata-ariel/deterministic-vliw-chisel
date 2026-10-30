@@ -25,6 +25,7 @@ class PackSpec extends AnyFunSuite {
   private def r(a: Int): Value = Read(a)
   private def add(a: Value, b: Value): Value = Bin(Op.Add, a, b)
   private def mul(a: Value, b: Value): Value = Bin(Op.Mul, a, b)
+  private def sub(a: Value, b: Value): Value = Bin(Op.Sub, a, b)
   private def pack(m: MachineDescription, ws: Write*) =
     Pack.pack(Fusion.fuse(Dag.build(m, ws.toVector)))
   private def prepared(k: Kernel, m: MachineDescription) =
@@ -48,8 +49,30 @@ class PackSpec extends AnyFunSuite {
     val inPairs = p.pairs.flatMap(x => Seq(x.addr, x.addr + 1))
     assert((inPairs ++ p.scalarLanes.map(_.addr)).sorted == words, label)
     assert(p.pairs.map(_.addr) == p.pairs.map(_.addr).sorted, label)
-    // Every gather and pair field is aligned to its kind; W-reg has no LD.W and no ST.W.
-    d.nodes.foreach(n => n.sources.foreach(_.nodes.foreach(o => assert(o < d.nodes.size, label))))
+    // Every field reads what its kind needs: a pair field a pair node; a gather two different
+    // scalar values; a broadcast one scalar value, as rs1 of VMUL or VMAC only (rule 2). A scalar
+    // operation reads scalar values, and a lane ST lane 0 or 1 of a pair node. W-reg has no LD.W
+    // and no ST.W.
+    def scalarValue(o: Int) = !d.nodes(o).isPair && !d.nodes(o).isStore
+    d.nodes.zipWithIndex.foreach { case (n, i) =>
+      val at = s"$label: node $i $n"
+      val multiply = n match {
+        case Node.VCompute(Op.Mul, _, _) | _: Node.VMac => true
+        case _                                          => false
+      }
+      n.sources.zipWithIndex.foreach {
+        case (Src.Pair(o), _)        => assert(d.nodes(o).isPair, at)
+        case (Src.Gather(lo, hi), _) => assert(lo != hi && scalarValue(lo) && scalarValue(hi), at)
+        case (Src.Broadcast(o), k)   => assert(scalarValue(o) && multiply && k == 0, at)
+      }
+      n match {
+        case Node.StoreLane(_, pair, lane) =>
+          assert(d.nodes(pair).isPair && lane >= 0 && lane < 2, at)
+        case _: Node.Compute | _: Node.Mac | _: Node.Store =>
+          assert(n.operands.forall(scalarValue), at)
+        case _ => ()
+      }
+    }
     if (!d.machine.hasWideMemory)
       assert(!d.nodes.exists(n => n.mnemonic == "LD.W" || n.mnemonic == "ST.W"), label)
     // One group per value: every node but the stores is in exactly one (Dag requires the gathers
@@ -265,6 +288,42 @@ class PackSpec extends AnyFunSuite {
     assert(pack(full, root: _*).dag.nodes.exists(_.isInstanceOf[Node.StoreW]))
     assert(pack(mw1, root: _*).scalarLanes.map(_.reason).distinct == Vector(LaneReason.RootDiffers))
     Seq(f, w, pack(full, root: _*)).foreach(checkPacking(_, "rule 4"))
+  }
+
+  test("rule 6 across store pairs: two pairs that would share a computed vector both stay scalar") {
+    // [10] = ([0] + [2]) - [4]; [11] = ([1] + [3]) - [5]; [12] = ([0] + [2]) * [6];
+    // [13] = ([1] + [3]) * [7] (no MUL + ADD to fuse). Rule 6 alone would share one VADD between
+    // the pairs (10, 11) and (12, 13). (10, 11) is not packed: [12]'s MUL reads [0] + [2] and is not
+    // walked yet (a scalar). (12, 13) is not packed either: [10]'s SUB is now a scalar reader.
+    val ws = Seq(
+      Write(10, sub(add(r(0), r(2)), r(4))),
+      Write(11, sub(add(r(1), r(3)), r(5))),
+      Write(12, mul(add(r(0), r(2)), r(6))),
+      Write(13, mul(add(r(1), r(3)), r(7)))
+    )
+    val w = pack(mw1, ws: _*)
+    assert(w.scalar.nodes.count(_.mnemonic == "ADD") == 2) // value numbering
+    def ld(a: Int) = w.scalar.nodes.indexOf(Node.Load(a))
+    val sum = w.scalar.nodes.indexOf(Node.Compute(Op.Add, ld(0), ld(2)))
+    assert(sum >= 0)
+    val elsewhere = LaneReason.NeededElsewhere(sum)
+    assert(
+      w.scalarLanes == Vector(
+        ScalarLane(10, elsewhere),
+        ScalarLane(11, elsewhere),
+        ScalarLane(12, LaneReason.RootDiffers),
+        ScalarLane(13, elsewhere)
+      )
+    )
+    assert(w.nothingToPack)
+    // W-full packs only (11, 12), as the ST.W of a root gather: no vector operation.
+    val f = pack(full, ws: _*)
+    assert(f.pairs.map(_.addr) == Vector(11) && f.pairs.head.root.isInstanceOf[Src.Gather])
+    assert(
+      f.scalarLanes == Vector(ScalarLane(10, elsewhere), ScalarLane(13, LaneReason.NoNeighbour))
+    )
+    assert(f.vectorOperations == 0)
+    Seq(w, f).foreach(checkPacking(_, "rule 6 across store pairs"))
   }
 
   test("a pair that would make a cycle, and a word stored twice, are not packed") {

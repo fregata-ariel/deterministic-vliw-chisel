@@ -460,17 +460,22 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
   }
 
   // Compiled W programs (#110 stage 4, docs/COMPILER.md "ISA mvp-2（W）"): the benchmarks, odd
-  // sizes, the hand-computed inputs of HandComputedSpec and random kernels, compiled before the
-  // build (a compile failure fails the test without a Verilator build), each run against the model
-  // (matchesModel), the DSL reference implementation and the scheduler's cycles.
+  // sizes, the hand-computed inputs of HandComputedSpec (both issue modes) and random kernels,
+  // compiled before the build (a compile failure fails the test without a Verilator build), each
+  // run against the model (matchesModel), the DSL reference implementation and the scheduler's
+  // cycles.
 
   /** The programs of `m`: saxpy8 (three inputs), saxpy7, fir4x8 and matmul3, with `small` also
-    * saxpy1 and the hand-computed inputs, then the first `random` random kernels of
-    * RandomKernelSpec.
+    * saxpy1 and the hand-computed inputs (compiled in both issue modes, as in HandComputedSpec),
+    * then the first `random` random kernels of RandomKernelSpec.
     */
   private def compiledFor(m: MachineDescription, random: Int, small: Boolean): Vector[Compiled] = {
-    def compile(k: Kernel) =
-      KernelCompiler.compile(k, m).fold(e => fail(s"${k.name} on ${m.machineId}: $e"), identity)
+    def compile(k: Kernel, single: Boolean = false) = KernelCompiler
+      .compile(k, m, singleIssue = single)
+      .fold(
+        e => fail(s"${k.name} on ${m.machineId}${if (single) " (single issue)" else ""}: $e"),
+        identity
+      )
     val rng = new Random(1100L + m.registerCount + m.readPorts)
     val fir = Benchmarks.fir(Seq(1L, 2L, 3L, 4L), 8)
     val kernels = Seq(Benchmarks.saxpy(8), Benchmarks.saxpy(7), fir, Benchmarks.matmul(3)) ++
@@ -482,9 +487,10 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
     val hand =
       if (!small) Nil
       else
-        HandComputedSpec.cases.map { case (k, in, out, values) =>
-          Compiled(compile(k), in, Some(out -> values))
-        }
+        for {
+          (k, in, out, values) <- HandComputedSpec.cases
+          single <- Seq(false, true)
+        } yield Compiled(compile(k, single), in, Some(out -> values))
     val randoms = RandomKernels
       .kernels(51L, random)
       .map(k => Compiled(compile(k), RandomKernels.values(k, rng), None))

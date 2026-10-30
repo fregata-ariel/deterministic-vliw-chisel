@@ -4,7 +4,7 @@ import scala.util.Random
 
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.compiler.KernelCompiler
+import vliw.compiler.{IsaExecutor, KernelCompiler}
 import vliw.compiler.dag.{Dag, DagRun, EdgeKind, Fusion, Node, Pack, Src}
 import vliw.compiler.dsl._
 import vliw.compiler.dsl.LoweredKernel.{Bin, Read, Write}
@@ -379,7 +379,6 @@ class RematerializationSpec extends AnyFunSuite {
     .load(java.nio.file.Paths.get("config", "machine-mvp2.json"))
     .fold(es => fail(es.mkString("\n")), identity)
   private val mw1 = machineFile("mvp2_mw1.json")
-  private def packed(k: Kernel, m: MachineDescription) = prepared(k, m).packing.get
 
   test("ISA mvp-2: a split renames pair, broadcast and store fields; the values stay") {
     // [10] = [0]; [11] = [1]; [12] = [0] + [2]; [13] = [1] + [3]: LD.W [0] is read by ST.W [10] and
@@ -435,14 +434,17 @@ class RematerializationSpec extends AnyFunSuite {
     }
   }
 
-  test("ISA mvp-2: copies only in stuck attempts, of LD.W and LDs outside gathers") {
-    var (wide, broadcast) = (0, 0)
+  test(
+    "ISA mvp-2: copies only in stuck attempts, of LD.W and LDs outside gathers; the code with copies computes the DSL results"
+  ) {
+    var (wide, broadcast, run) = (0, 0, 0)
     for {
       base <- Seq(mvp2, mw1); r <- Seq(8, 12, 16)
       k <- Benchmarks.all ++ Seq(Benchmarks.saxpy(7)) ++ RandomKernels.kernels(51L, 60)
     } {
       val m = withRegisters(base, r)
-      val p = packed(k, m)
+      val prep = prepared(k, m)
+      val p = prep.packing.get
       val d = p.dag
       val name = s"${k.name} on ${m.machineId} with $r registers"
       d.gathers.foreach(g => assert(!d.rematerializable(g.lo) && !d.rematerializable(g.hi), name))
@@ -478,9 +480,23 @@ class RematerializationSpec extends AnyFunSuite {
           assert(
             read.groupBy(identity).collect { case (w, n) if n.size > 1 => w }.forall(!stored(_))
           )
+          // The code of an attempt with copies passes the verifier and, run by IsaExecutor (written
+          // from docs/ISA.md), computes the DSL results.
+          if (c.loads > d.loads) {
+            KernelCompiler.checked(m, prep.layout, code).fold(e => fail(s"$name $a: $e"), identity)
+            val in = KernelCompiler.sampleInputs(k, run.toLong)
+            val image = prep.layout.memoryImage(in).fold(e => fail(e), identity)
+            assert(
+              prep.layout.outputs(IsaExecutor.run(m, code, image)) ==
+                Interpreter.run(k, in).fold(e => fail(e), identity),
+              s"$name $a"
+            )
+            run += 1
+          }
         }
       }
     }
     assert(wide > 0 && broadcast > 0, s"LD.W copies $wide, broadcast copies $broadcast")
+    info(s"$run attempts with copies run: $wide with a LD.W copy, $broadcast with a broadcast copy")
   }
 }

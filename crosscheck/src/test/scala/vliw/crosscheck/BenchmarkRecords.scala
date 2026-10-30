@@ -116,8 +116,14 @@ object BenchmarkRecords {
       Record(k, mode, c, tc, Metrics.of(m, c.words, run, name), suffix)
     }
 
-  /** The fixed-strategy series: every strategy for every kernel, in both modes. */
-  def fixed(m: MachineDescription = machine): Seq[Fixed] =
+  /** The fixed-strategy series: every strategy for every kernel, in both modes. ISA mvp-0 and mvp-1
+    * only: on mvp-2 the scalar DAG would stand for the SIMD candidate (ADR-0023), so it is refused.
+    */
+  def fixed(m: MachineDescription = machine): Seq[Fixed] = {
+    require(
+      !m.hasVector,
+      s"${m.machineId}: the fixed-strategy series is for ISA mvp-0 and mvp-1 (ADR-0023)"
+    )
     for {
       k <- Benchmarks.all
       p = KernelCompiler.prepare(k, m).fold(sys.error, identity)
@@ -130,6 +136,7 @@ object BenchmarkRecords {
         .map(a => KernelCompiler.finish(p, a).fold(sys.error, identity))
       Fixed(k, s, mode, result)
     }
+  }
 
   /** The fixed pipelines of one kernel (#75): its VLIW program burnt in, and the planner's plan
     * without a register limit, next to the kernel's two records.
