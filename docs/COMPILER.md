@@ -371,7 +371,7 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
 
 ## ISA mvp-2（W）
 
-ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段）。Modulo Scheduling（`ModuloCompiler`）は、第5段まで mvp-2 の machine を理由付きで拒否する。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の2つの補足（第4段の前半と後半）に一覧がある）。
+ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段）。Modulo Scheduling（`ModuloCompiler`）は、LD.W のある machine でループを2倍にベクトル化し、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段の前半。下の「ループのベクトル化と Modulo Scheduling（W-full）」）。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の3つの補足（第4段の前半と後半、第5段の前半）に一覧がある）。
 
 段の順は `Lowering → Dag.build → Fusion.fuse → Pack → ListScheduler → rematerialization（行き詰まる試行だけ）→ 組を考えた割り当て → Allocation.bundles → verifier` である。`KernelCompiler.prepare` は `Prepared.dag` を融合したスカラーの DAG のまま残し、mvp-2 の machine では `Prepared.packing` に `Pack.pack(dag)` を入れる（mvp-0・mvp-1 では None）。融合を先に行うので、詰めた MAC の組がそのまま VMAC になる。詰め込みは戦略の次元ではなく、どの試行も同じ詰めた DAG をスケジュールする。
 
@@ -391,7 +391,7 @@ ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompile
 - `Gather(lo, hi)`: 2つのスカラーのノードの値を、整列した組の r(p)（`lo`、レーン0）と r(p+1)（`hi`、レーン1）に入れたもの（集め）。移す命令は無い（組の部分更新は合法。ISA.md）
 - `Broadcast(n)`: 1つのスカラーのノードを両方のレーンに使う。VMUL・VMAC の rs1 だけ
 
-`Node.operands` は読むノード（集めは2つ）、`Node.fields` は欄の数で、スカラーのノードでは `operands.size` と同じである。`ListScheduler.reads` は `fields` を数える（L11 の形 F）。`Dag.resourceLowerBound` は LD.W・ST.W・レーンの ST を Memory の操作に数え、`Dag.loads` は LD と LD.W を数える。これらのノードを作るのは `Pack` だけで、`Dag.build`・`Fusion`・`LoopGraph` は作らない。
+`Node.operands` は読むノード（集めは2つ）、`Node.fields` は欄の数で、スカラーのノードでは `operands.size` と同じである。`ListScheduler.reads` は `fields` を数える（L11 の形 F）。`Dag.resourceLowerBound` は LD.W・ST.W・レーンの ST を Memory の操作に数え、`Dag.loads` は LD と LD.W を数える。これらのノードを作るのは `Pack` と、ループのベクトル化（`LoopVector`）が作った W のループのノードを展開する `LoopGraph.expanded` だけで、`Dag.build`・`Fusion` は作らない。
 
 ### 詰め込みの規則（`dag.Pack`）
 
@@ -531,10 +531,231 @@ fallback は `W: scalar fallback, (NothingToPack: …)` か `W: scalar fallback,
 - `compiler/.../regalloc/RegisterAllocatorSpec`: 詰めた DAG の成功した全ての試行で、組が偶数、集めのレーンが p と p+1 で、verifier に合格すること。集めの区間が先のレーンから始まり、`maxLive` が重みで数えること。手作りのスケジュールで、組のある DAG でだけ best fit になること、`NoAlignedPair` と `TooManyLive` を分けること。上限付きの試行の `NoAlignedPair`
 - `compiler/.../regalloc/RematerializationSpec`: `split` が `Pair`・`Broadcast`・ST.W の欄を付け替え、値が変わらないこと。詰めた DAG（8・12・16本）で、複製は行き詰まる試行にだけ現れ、集めのレーンは複製されず、LD.W とブロードキャストの LD が複製されること。命令列で2回以上 LD・LD.W する語を ST・ST.W が書かないこと。複製のある試行の命令列が verifier に合格し、出力（`IsaExecutor`）が DSL の参照実装と一致すること
 - `compiler/.../WCompilerSpec`: `saxpy8` の W-full と W-reg の命令列と、上の表のすべての行の各欄（cycles、下限、選ばれた試行、`heldByReadPorts`、演算の数）。`matmul3` の W-full の LD.W・ST.W・ST の番地とスカラーのレーン、W-reg の ST の番地と集めの数。`read_ports` 4 の `fir4x8`・`matmul3` の cycles、VMAC と ST.W の同じ bundle と、`fir4x8` の LD.W の数（複製を含めて 14）。`mvp2_vlat` で `matmul3` を詰め、34 cycles になること。`saxpy7` のレーンの fallback、`saxpy1` の `NothingToPack`（mvp-1 と同じ命令列）。レジスタ4本の W-full の `saxpy8` の `Infeasible`（上限なしの2つが `TooManyLive`、上限付きの6つが `Stuck`）と `Fallback(NoAttemptFits)`（mvp-1 のレジスタ4本と同じ命令列）。ベンチマークと奇数の長さを5つの mvp-2 の構成と両方の発行の方式でコンパイルし、出力（テストの中の ISA の実行。`MacCompilerSpec` と共通の `IsaExecutor`）と、命令列が `simd` のとおりであること
-- `compiler/.../KernelCompilerSpec`: mvp-2 の machine で list scheduling がコンパイルし、テストケースが読めて W の文を持つこと。Modulo Scheduling が第5段まで拒否すること。mvp-0・mvp-1 で `candidate` が入力の誤りになること
+- `compiler/.../KernelCompilerSpec`: mvp-2 の machine で list scheduling がコンパイルし、テストケースが読めて W の文を持つこと。Modulo Scheduling が W-full でループをベクトル化し、W-reg ではスカラーのループに理由（#78 の質問8 の (c)）付きで戻ること。mvp-0・mvp-1 で `candidate`（list scheduling と Modulo Scheduling の両方）が入力の誤りになること
 - `crosscheck/HandComputedSpec`: 手で計算した入出力を、W-full、W-reg、`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii` の参照モデルで、両方の発行の方式で確かめる（5つの構成のどれでも、どのケースも詰める。規則1を書かれたとおりに読むと、`mvp2_vlat` の `matmul3` は `NoAttemptFits` で fallback する）
 - `crosscheck/RandomKernelSpec`: 乱数の400のカーネルを、W-full、W-reg、レジスタ6本の W-full の変種でコンパイルし、参照モデルで結果と cycles を確かめる。6本で収まらないのは、mvp-1 の6本でも収まらないカーネルだけであること。2つの API が一致し（16本と6本）、カーネルの fallback（`NothingToPack`・`NoAttemptFits`）の命令列が、同じレジスタ数の mvp-1 の命令列と同じであること。テストケースが参照モデルで成り立つこと。詰めた・レーンの fallback・`NothingToPack`・`NoAttemptFits`・理由・形の数の下限
 - `crosscheck/RtlMvp2Spec`: 今の4つのビルド（W-full、W-reg、`mvp2_vlat`、変種）の中で、ベンチマーク、奇数の長さ、手で計算した入力（W-full と W-reg で、両方の発行の方式）、乱数のカーネルをコンパイルした命令列を RTL で実行し、参照モデルとトレース・cycles・レジスタ・メモリが一致し、出力が DSL の参照実装と一致すること（新しいビルドは無い）
+
+### ループのベクトル化と Modulo Scheduling（W-full）
+
+#110 の第5段の前半（5a）で、Modulo Scheduling（`ModuloCompiler`）は、LD.W のある mvp-2 の machine（W-full、`mvp2_rp4`、`mvp2_vlat`、`mvp2_vii` とその変種）でループを2倍にベクトル化する（[ADR-0023](DECISIONS.md)）。2倍にしないループの1反復の本体を SLP の規則で詰めること（本体の詰め込み）は第5段の後半（5b）で、5a には無い。実装は `loop.LoopVector` と `vliw.compiler.modulo`。#110 第5段の Q1〜Q3 は、オーナーが異を唱えなければ既定とする推奨で、決定ではない（ADR-0023 の 2026-10-30 の補足（第5段の前半））。
+
+#### 判定の順
+
+`ModuloCompiler.prepare` は、LD.W のある machine で次の順に決める。固定の規則で、戦略の次元ではない。
+
+1. 配置、lowering、`LoopGraph.of`、`FusionChoice.of`（ADR-0019）。融合の判定はスカラーのグラフで `Mii.withoutReadPort` によって行うので、mvp-1 と同じ判定になる。この結果を G（融合したスカラーのループのグラフ）と呼ぶ
+2. G で2倍にしない理由を調べる（`LoopVector.reasons`。下の「2倍にしない理由」）。無ければ2倍にしたグラフ V を作り（`LoopVector.double`）、3本目の読出しポートを除いた MII が `MII(V) ≤ 2 × MII(G)` なら2倍にする。そうでなければ理由は `MiiIncrease` である
+3. 2倍にしないループは G をスケジュールする。G に規則1の候補（同じ歩幅の `Address(b, s)` と `Address(b+1, s)` にある本体の2つの ST か、w と w+1 にあるループの後の2つの ST。本体の ST とループの後の ST は組にしない）が無ければ、組は1つもできないので `NothingToPack`（ADR-0023 の「SLP の規則で組が1つもできない」）とする。候補があれば、5a には本体の詰め込みが無いので `NotImplemented`（`body packing: #110 stage 5b`）とし、比較の API は `NotMeasured` を返す。5b では、候補がすべて組にならないループが `NothingToPack` になる
+4. V の II を探す（「Modulo Scheduling」）。どの II にも収まらなければ G に戻す（`NoIiFits`）
+5. G の命令列は mvp-1 の命令列と同じである（同じ G で、スカラーの演算のレイテンシーが mvp-1 と同じ。`mvp2_vii` は ST の L が 2 なので、cycles が1多い）
+
+W-reg（LD.W が無い）は下の「W-reg」による。
+
+#### 2倍のベクトル化（`LoopVector.double`）
+
+入力は、反復の回数 n が偶数で、状態が無く、ST の歩幅が0でなく、ループの前の値を乗算の rs1 でだけ読む G である（`LoopKernel` は自分が書く語を読まない）。V は n/2 反復で、V の反復 k' は G の反復 2k'（レーン0）と 2k'+1（レーン1）を実行する。
+
+- **LD の共有をいったん外して作り直す**: G で、Each の LD `Address(b, s)` を `Ref(ld, back)` で読むのは、`Address(b − s × back, s)` の読出しである（ADR-0014 の鎖）。V では、レーン0が b' + 2s k'、レーン1が b' + s + 2s k' を読む。奇数の back はレーンをまたぐ（レーン0が前の組のレーン1を読む）ので、読出しを導き直し、レーンの入れ替えを無くす
+- **読出し（規則3）**: W-full で s = 1、どちらの語もどの反復でも書かれないなら、`LD.W Address(b', 2)` にする（b' は奇数でもよい。`fir4x8` のタップ1と3）。LD.W の読出しは ADR-0014 の規則を歩幅2にそのまま当てはめて共有する。鍵は (2, b' mod 2)、鎖の先頭は base の最も大きいもの、back = (先頭の base − b') / 2 で、k' < back の値は Before の `LD.W Address(b' + 2k', 0)` である。そうでなければ、`Address(b', 2s)` と `Address(b'+s, 2s)` の2つの LD の集めにする（歩幅 −1、2 など）
+- **集めのレーンの LD は反復をまたいで共有しない**（既定。ADR-0014 の例外。#110 第5段の Q3）。集めごとに自分の2つの LD を持つ（集めごとに値の番号を付ける）。ADR-0014 の語ごとの鎖では、1つの LD が、ある集めのレーン0と、1語ずれた別の集めのレーン1になり、規則4の置き場が1つにならない（`Dag.groups` が禁じる）。集め全体を両方のレーンで同じ反復距離で渡す方法（`Gather(Ref(lo, d), Ref(hi, d))`）は第5段では作らない。W-full のベンチマークのループには集めが無く、影響は下の「乱数のループ」で数えた
+- **ループ不変の値（規則2）**: MUL・MAC の rs1 にある Before の値はブロードキャストにする。rs2 にあり rs1 が Each の値なら、先に rs1 と入れ替える（乗算は可換。`Pack` と同じ）。ほかの位置の Before の値があるループは2倍にしない（`SameValue`。#110 第5段の Q2）
+- **演算**: G の Each の Compute・Mac は VADD・VSUB・VMUL・VMAC になる。欄は `Pair`・`Gather`・`Broadcast` で、同じものは1つのノードにする（値の番号。規則6）
+- **ST（規則5）**: W-full で s = 1 なら `ST.W Address(b, 2)` にする（b は奇数でもよい。`saxpy8` の out は語 17 から）。そうでなければ2つのレーンの ST（`StoreLane(Address(b, 2s), p, 0)` と `StoreLane(Address(b+s, 2s), p, 1)`）にする。ST.W にしない ST の値が集め（語の複写）なら、2つのレーンの LD をそれぞれ ST する（W-full で s = 1 なら、集めの ST.W にする）
+- **ノードの順**: G の ST から G の順に後順でたどり、欄は順にたどる（`LoopGraph.build` が本体に番号を付ける順）。共有するノードは最初の位置に置き、LD.W の鎖の先頭は最初に読む位置に置く（既定）
+- SLP と2倍は別に行い、2倍にした本体はもう一度詰めない。例えば `w(2i)` と `w(2i+1)` を書くループは、1反復の2つの ST の ST.W ではなく、歩幅4のレーンの ST 4つになる
+
+| ループ | Before | Each（V の1反復） | 反復 |
+|---|---|---|---|
+| `saxpy8`（i） | LD 1（`a`） | LD.W 2、VMAC 1（`a` をブロードキャスト）、ST.W 1（[17]） | 4 |
+| `fir4x8`（i） | LD 4（`h`）、LD.W 2（x(0)、x(1)） | LD.W 2（タップ2と3。タップ0と1はその1反復前を読む）、VMUL 1、VMAC 3、ST.W 1 | 4 |
+
+LD と LD.W の合計は、list scheduling の W-full の詰めた DAG と同じである（`saxpy8` は LD 1 + LD.W 8、`fir4x8` は LD 4 + LD.W 10。rematerialization の複製を除く）。ADR-0014 の「list scheduling の DAG と同じ LD の数」の W の版である。
+
+#### 2倍にしない理由（`LoopVector.reasons`）
+
+当てはまるものをすべて、この順に書く。`MiiIncrease` は V が要るので、ほかの理由が無いときだけ調べる。名前は ADR-0023 の既定で、`SameValue` は #110 の既定（Q2）である。判定は情報で、fallback ではない（結果と記録に書く）。
+
+| 理由 | 条件（G で） |
+|---|---|
+| `OddTripCount` | 反復の回数が奇数（余りのループは作らない。ADR-0023） |
+| `ZeroStoreStride` | 本体の ST の歩幅が0。`LoopKernel` からは生じない（出力の各要素に1回書くので反復の回数が1になり、`OddTripCount` が先に当たる）。手作りの `Loop` でテストする |
+| `AssociationOrder` | すべての状態が簡約（下）。ベクトル化には部分和、つまり新しい結合の順が要り、DAG は DSL の順を保つ |
+| `LoopState` | 簡約でない状態がある（漸化式、累積和、状態どうしが読み合うもの） |
+| `SameValue(位置)` | Each のノードが、乗算の rs1（入れ替えた後）以外の位置で Before の値を読む（規則2）。位置は `Pack` と同じ名前（`rs2 of ADD`、`rs3 of MAC`、`the store source` など） |
+| `MiiIncrease` | MII(V) > 2 × MII(G)（どちらも3本目の読出しポートを除く） |
+
+**簡約**: 状態 s の次の値 x が次のすべてを満たすとき、s は簡約である。
+
+- x は、状態の値 `Ref(x, 1)` を2つのオペランドのちょうど1つに持つ `Compute(Add | Mul)` か、加数としてだけ持つ `Mac(a, b, Ref(x, 1))` である
+- `Ref(x, 1)` を本体のほかのどこも読まない（x のもう一方のオペランド、ST、ほかの状態のどれも）
+- x 自身を Each のノードが読まない（`Ref(x, 0)`。ループの後のノードだけが最後の値を読む）
+- x のもう一方のオペランドは、直接にもほかのノードを通しても、どの状態も読まない
+
+ベンチマークのループでは、`matmul3`（m）が `AssociationOrder`、`product8`・`dot8` が `OddTripCount` と `AssociationOrder`、`matmul3`（i）が `OddTripCount` で、2倍にするのは `saxpy8` と `fir4x8` である（`dot9` は8反復で、`AssociationOrder` だけ）。
+
+#### 資源
+
+ADR-0023 のとおり、資源は1サイクルに1回の使用のままで、新しい種類は無い。
+
+| 資源 | W の演算 |
+|---|---|
+| Compute スロット | VADD、VSUB、VMUL、VMAC |
+| Memory スロット | LD.W、ST.W、レーンの ST（mnemonic は ST） |
+| 書戻しポート（L5） | 演算ごとに1回。ベクトル演算と LD.W は組を `t + L` に1回で commit する。ST.W とレーンの ST は使わない |
+| 演算器（L9） | mnemonic ごと。VMAC は MAC の演算器を使わない。レーンの ST は ST の演算器を使う |
+| 3本目の読出しポート（L11、形 F） | `Mii.readPortUsers` = {MAC、VMAC、ST、ST.W}（`read_ports` 3。ADR-0023）。欄の数は VMAC 3、VADD・VSUB・VMUL 2、ST・ST.W・レーンの ST 1、LD・LD.W 0 なので、3つを超えるのは3つの欄の Compute の演算と1つの欄の Memory の演算の組だけである。ブロードキャストと集めの欄は1と数える |
+
+**2つのスロットの種類を一緒に判定する条件を直した**（`ModuloScheduler` の `coupled`）。今までの条件は「ポートを使う演算の種類がすべて残っている」で、MAC・VMAC・ST・ST.W の4つの種類のどれかが無いか、置き終わると成り立たない。2倍にしたループは VMAC と ST.W だけなので、初めから成り立たない。直した条件は「Compute と Memory のそれぞれに、ポートを使う演算が残っている」で、mvp-1（{MAC、ST}）では同じ条件である（mvp-0・mvp-1 のどの記録も変わらない）。直さないと、W-full と `mvp2_vlat` の `fir4x8` の II 4 は、本当の理由（レジスタ）ではなく `NoTime`（ノード 11）になる（II と cycles は変わらない。mutant `modulo-read-port-coupling-all`）。`RowFit.Class` は種類ごとに読出しの印を持つので、VMAC を MAC と、ST.W を ST と同じに扱う（ADR-0023 の既定）。
+
+MII は V の1反復（元の2反復）で計算し、記録には元の1反復当たりの値（2で割る）も書く。RecMII は変わらない（2倍にしたループには状態が無いので 0）。
+
+#### II の探索と割り当て
+
+ADR-0015 のままである。II = MII から1反復の長さまで試し、番号の順に先読み付きで置き、Before はできるだけ遅く、After はできるだけ早く置き、反復ごとに別の仮想レジスタにして直線に展開する。rematerialization はしない（ADR-0016）。割り当ては `RegisterAllocator.assign`（重みで数え、組には整列した組、スカラーには best fit）で、II ごとの結果に `NoAlignedPair`（(b′)）を足した（「Modulo Scheduling」の「II の探索と結果」）。V がどの II にも収まらなければ、本体の詰め込みは試さず G に戻す。
+
+#### 記録の定義（#131。既定）
+
+重みは割り当てと同じで、スカラーは1、組は2、集めは先に発行したレーンから最後の読む側まで2と数える（`RegisterAllocator.groups` と同じ。ADR-0023 の「集めた組は、先に発行した生産者の発行から2と数える」）。
+
+- **MinAvg（MII、ASAP）**: II = MII で、`LoopGraph.edges` のすべての依存の下での Each のノードの最も早い時刻（重み `cycles − II × iterations` の最長路。資源は無視する）を使う。MinAvg = ⌈Σ 重み × 寿命 / II⌉ + Each のノードが back 0 で読む Before の値の重み（ループの間ずっと生きる不変の値）。寿命は、値（集めは先のレーン）の発行から最後の Each の読む側（`t(読む側) + back × II − t(定義)`）まで、読む側が無ければそのレイテンシーである。ループの後の読む側は数えない（定常状態の値）。#78 の見積りと同じ定義である（`ModuloScheduler.minAvgAtMii`）
+- **MinAvg（II）**: 同じ式に、見つけたスケジュールの時刻と II を使う。そのスケジュールの Rau の MinAvg である（`ModuloScheduler.minAvg`）
+- **MaxLive**: 展開した命令列で同時に生きるレジスタの最大（`RegisterAllocator.maxLive`。プロローグとエピローグを含む）。オーナーの「同時に生きる値」である。MinAvg は定常状態の下限で、命令列の下限ではない（ループの後の読む側を数えず、反復が少ないと定常状態に達しないので、MaxLive < MinAvg もあり得る。5a の記録には無い）
+- **割り当ての結果と II を上げた理由**: `ModuloSchedule.attempts`（II ごとの `Outcome`）
+- **全 II の結果**（ADR-0015 の 2026-10-17 の補足、#131 の目的3）: `ModuloScheduler.sweep` が、MII から1反復の長さまでの各 II の結果、cycles、MaxLive、その II の MinAvg を返す
+
+`ModuloCompiled` は `minAvgAtMii`、`minAvgAtIi`、`maxLive` を持つ。
+
+#### 結果（16 レジスタ）
+
+II / cycles。括弧の中は、II を MII より上げた理由である。
+
+| ループ | 形（5a） | W-full | `mvp2_rp4` | `mvp2_vlat` | `mvp2_vii` | mvp-1（`read_ports` 4） | list scheduling（W-full） |
+|---|---|---|---|---|---|---|---|
+| `saxpy8`（i） | 2倍 | 3 / 17 | 3 / 17 | 3 / 20 | 4 / 22 | 3 / 29（3 / 29） | 15 |
+| `fir4x8`（i） | 2倍 | 5 / 29（II 4: (b) 18） | 4 / 28 | 5 / 34（II 4: (b) 20） | 6 / 35 | 4 / 46（4 / 43） | 25 |
+| `matmul3`（i） | スカラー（`NotImplemented`） | 9 / 38 | 9 / 45 | 9 / 38 | 9 / 39 | 9 / 38（9 / 45） | 28 |
+| `matmul3`（m） | スカラー（`NotImplemented`） | 9 / 40 | 9 / 34 | 9 / 40 | 9 / 41 | 9 / 40（9 / 34） | 28 |
+| `product8`（i） | スカラー（`NothingToPack`） | 2 / 19 | 2 / 19 | 2 / 19 | 2 / 20 | 2 / 19（2 / 19） | - |
+| `dot8`（i） | スカラー（`NothingToPack`） | 2 / 21 | 2 / 21 | 2 / 21 | 2 / 22 | 2 / 21（2 / 21） | - |
+
+- MII（V の1反復。括弧の中は元の1反復当たり）は、W-full の `saxpy8` が 3（Memory スロット。1.5）、`fir4x8` が 4（Compute スロット、Compute の書戻しポート、3本目の読出しポート。2）で、#78 の見積り（1.5、2）と同じである。`mvp2_vii`（ベクトル演算と LD.W・ST.W の演算器の II 2）では演算器が律速で、`saxpy8` は LD.W の演算器の 4、`fir4x8` は VMAC の演算器の 6 である
+- `matmul3` の2つのループは、5a ではスカラーのループで、mvp-1 と同じ命令列である（`mvp2_rp4` は `mvp1_rp4` と同じ。`mvp2_vii` は ST の L が 2 なので、`product8`・`dot8` と同じく1サイクル遅い）。本体を詰めた行は 5b で替わる
+- `saxpy(n)`（W-full）は n = 8、16、32、64 で 17、29、53、101 cycles（II 3。1.5n + 5。mvp-1 は 3n + 5）
+- この反復の回数では、2倍にしたループは list scheduling より速くない（17 対 15、29 対 25）。ADR-0015 のプロローグとエピローグの効果で、反復の数は半分になる
+- 奇数の長さはスカラーのループで、`saxpy(7)` は 26、`fir4x7` は 42 cycles（`OddTripCount` と `NothingToPack`）。`fir4x(16)` は 49、`fir4x(32)` は 89 cycles（II 5。LD.W の鎖が定常状態を通る）
+
+W-full の記録:
+
+| ループ | 形（5a） | MII（元の1反復） | II | II を上げた理由 | cycles | MinAvg（MII、ASAP） | MinAvg（II） | MaxLive | 割り当て |
+|---|---|---|---|---|---|---|---|---|---|
+| `saxpy8`（i） | 2倍 | 3（1.5） | 3 | - | 17 | 5 | 6 | 7 | 成功 |
+| `fir4x8`（i） | 2倍 | 4（2） | 5 | II 4: (b) 18 > 16 | 29 | 13 | 12 | 14 | II 4 は `TooManyLive` 18、II 5 で成功 |
+| `matmul3`（i） | スカラー（`NotImplemented`） | 9 | 9 | - | 38 | 13 | 14 | 14 | 成功 |
+| `matmul3`（m） | スカラー（`NotImplemented`） | 9 | 9 | - | 40 | 11 | 14 | 14 | 成功 |
+| `product8`（i） | スカラー（`NothingToPack`） | 2 | 2 | - | 19 | 2 | 2 | 2 | 成功 |
+| `dot8`（i） | スカラー（`NothingToPack`） | 2 | 2 | - | 21 | 3 | 4 | 4 | 成功 |
+
+- 2倍にした2つのループの MinAvg（MII、ASAP）は、#78 の見積り（`saxpy` 5、`fir` 13）と同じである。`matmul3` の2つの行はスカラーのループの値で、見積り（14 と 11）は本体を詰めたループの値なので、5b で比べる
+- ほかの machine（MaxLive / MinAvg（II））: `mvp2_rp4` の `fir4x8` は 16 / 15（II 4。ちょうど収まる）、`mvp2_vlat` の `fir4x8` は 16 / 15（II 5。II 4 では 20 が同時に生きる）。`mvp2_vii` には、レジスタで II を上げるループは無い
+
+**`fir4x8` の全 II の結果（W-full）**: レジスタが W の II を決める最初のループである（#131。配置の効果）。
+
+| II | 結果 | cycles | MaxLive | MinAvg（II） |
+|---|---|---|---|---|
+| 4 | `TooManyLive`（18 > 16） | （31） | 18 | 18 |
+| 5 | 収まる | 29 | 14 | 12 |
+| 6 | 収まる | 33 | 14 | 12 |
+| 7 | 収まる | 37 | 14 | 12 |
+| 8 | 収まる | 41 | 14 | 11 |
+| 9（1反復の長さ） | 収まる | 41 | 12 | 10 |
+
+II 4 の配置の MinAvg がもう 18 > 16 なので、そのスケジュールのどの割り当ても（modulo variable expansion でも）収まらない。ASAP の下限（13）は、II 4 のどれかのスケジュールが収まるかもしれないと言うだけである。II 4 なら 31 cycles、II 5 は 29 cycles で、ここでは II を上げても遅くならない。
+
+**レジスタを減らしたとき（W-full）**:
+
+| レジスタ | `saxpy8`（i） | `fir4x8`（i） | `matmul3`（i）・（m） |
+|---|---|---|---|
+| 12 | 3 / 17 | 9 / 41（II 4: 18、II 5〜8: 14 が同時に生きる） | どの II にも収まらない（スカラーのループで 14 が同時に生きる。入力の誤り） |
+| 10 | 3 / 17 | W はどの II（4〜9）にも収まらず、スカラーのループ 5 / 49 に戻る（`NoIiFits`） | 同上 |
+| 8 | 3 / 17 | W はどの II にも収まらず、スカラーのループ 9 / 77 に戻る | 同上 |
+
+`RtlMvp2Spec` の変種（レジスタ8本）では、`saxpy8` は2倍で 5 / 26（II 3〜4: 9 が同時に生きる）、`fir4x8` は W の II が無くスカラーのループ 8 / 69、`product8` は 4 / 34、`dot8` は 2 / 23 で、`matmul3` の2つのループにはスカラーのループでも II が無い。
+
+**`NoAlignedPair` は、測ったどのループでも起きなかった**: ベンチマークの6つのループ（5つの構成、16・12・10・8 本）、乱数の300の2倍にしやすいループ（W-full、`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii`、`RtlMvp2Spec` の変種、W-full の8本と6本）、2倍にした130のループの全 II の結果（16・8・6・4 本で、各 568 の結果は収まる・`NoMrt`・`TooManyLive` だけ）。2倍にしたループの値はほとんどが組で、スカラーはブロードキャストの不変の値と、語の複写のレーンの ST が読む LD だけである。集めは整列した組を1つ取る（`assign` は2つのレーンを p と p+1 に置く）ので、best fit で断片化しない。(b′) の経路は手作りのテスト（`ModuloSchedulerSpec`）で確かめる。
+
+#### 乱数のループ
+
+`RandomLoops.vectorizable` は2倍にしやすい乱数のループを作る（状態なし、1〜8反復、歩幅はおもに1（−1、2 もある）、不変の値はおもに乗算に、`out(i)` か逆順、1/3 の確率で `w(2i)`・`w(2i+1)` も）。seed 110 の300、W-full、16 レジスタ:
+
+- 2倍 130（集めのあるもの 77、レーンの ST のあるもの 50）。`OddTripCount` 143、`SameValue` 44（それだけのもの 27）、`MiiIncrease` 0
+- 2倍にしない 170 のうち、規則1の候補のある 67 が `NotImplemented`（5b）、103 が `NothingToPack`
+- verifier の拒否 0、誤った出力 0（`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii`、変種、W-full の8本と6本でも、誤った出力は 0）
+- 2倍にした 130 のうち 8 は W のどの II にも収まらず、7 はスカラーのループに戻る（1つはスカラーのループにも II が無い）。収まる 122 のうちスカラーのループにも II のある 121 で、元の1反復当たりの II は 114 で良く、6 で同じ、1 で悪い。cycles は 111 で少なく、6 で同じ、4 で多い（通常の利用は、遅くてもベクトルの命令列を使う。#110 の Q4 と同じ）。`mvp2_vlat` では cycles の多いものが 20、元の1反復当たりの II の悪いものが 3 である
+
+今までの `RandomLoops.kernels(76, 300)`（状態のあるものが多い）は、W-full で2倍 3、`MiiIncrease` 3 で、2倍にしない 297 のうち `NotImplemented` が 196、`NothingToPack` が 101 である。状態のある 220 は、上の簡約の定義で `AssociationOrder` 28、`LoopState` 192 になる（x のオペランドだけを見る試作の定義では 116 と 104 だった）。`OddTripCount` は 140、`SameValue` は 263 である。
+
+**集めの例外の影響**（#110 第5段の Q3）: 集め全体が、d ≥ 1 反復後の別の集めと同じ語を読むもの（ADR-0014 の規則を集め全体に当てはめれば共有できるもの）を数えた。
+
+- W-full: 2倍にした 130 のうち 3 にあり（集め 6）、その LD が無ければ3つとも MII が下がる（2 下がるものが 2、8 下がるものが 1）。`MiiIncrease` のループは無い
+- W-reg の数（LD.W が無いので、読出しはすべて集め）: 2倍にしても MII が上がらないもの 85、`MiiIncrease` 45 で、45 のうち 17 は、共有できる集めの LD が無ければ2倍にできる。`fir4x8` は W-reg で `MiiIncrease`（10 > 8）で、4つの集めのうち2つを共有すれば、Memory の操作は V の1反復当たり 6（元の1出力当たり 3。#78 の W-reg の見積り）、MII 6 になる
+- `RandomLoops.kernels(76, 300)` の `MiiIncrease` の3つには、共有できる集めが無い
+
+#### W-reg（#110 第5段の Q1）
+
+W-reg（`max_words_per_access` 1）の Modulo Scheduling は #110 では必須にせず、記録には「測っていない（質問8 の (c)）」と書く（ADR-0023 の既定）。5a では次のようにした（#110 第5段の Q1 の (a)。オーナーが異を唱えなければ既定とする推奨で、決定ではない）。
+
+- 通常の利用（`ModuloCompiler.compile`）は G（mvp-1 と同じ命令列）を生成し、`Fallback(NotImplemented("W-reg Modulo Scheduling (#78 Q8 (c))"))` と書く。カーネルは必ず動き、理由は明示される
+- 比較（`ModuloCompiler.candidate`）は `NotMeasured` を返す。W の結果でも、黙ったスカラーの値でもない
+- 参考に測った値: W-reg で2倍にした `saxpy8` は MII 6（元の1反復当たり 3。#78 の W-reg の値で、mvp-1 と同じ）で、II 6 / 31 cycles である（mvp-1 は 29。差はプロローグとエピローグだけ）。`fir4x8` は集めを反復をまたいで共有しないので `MiiIncrease`（10 > 8）である（上の「集めの例外の影響」）
+
+#### fallback と結果の型
+
+粒度は ADR-0023 をループに広げたものである。
+
+- ループのベクトル化の判定（2倍にしない理由）は情報で、fallback ではない
+- ループの fallback: ループ全体を G（mvp-1 と同じ命令列）で生成する。理由は、`NothingToPack`（2倍にせず、5a では規則1の候補が無い）、`NoIiFits`（W のグラフが MII から1反復の長さまでのどの II にも収まらない。II ごとの `NoMrt`・`NoTime`・`TooManyLive`・`NoAlignedPair`・`Overflow`。list scheduling の `NoAttemptFits` にあたる）、`NotImplemented`（W-reg と、5a だけの本体の詰め込み）である
+- G もどの II にも収まらなければ、両方の理由を書いた入力の誤りにする（list scheduling と同じ。CLI からは呼ばない）
+- 2倍にしたループが収まらないときに、本体の詰め込みは試さない（ADR-0023 の「元のスカラーの DAG」。ループの W の候補は1つ）
+
+| API | 用途 | 結果 |
+|---|---|---|
+| `ModuloCompiler.compile` | 通常の利用 | `ModuloCompiled.simd` が `LoopSimd.Scalar`（mvp-0・mvp-1）、`Vectorized(decision)`（2倍）、`Fallback(reason, decision)`（W-reg では decision が None） |
+| `ModuloCompiler.candidate` | 比較の実験（第6段） | `LoopCandidate.Packed`、`Infeasible(decision, attempts)`、`NothingToPack(decision, scalar)`、`NotMeasured(reason)`（W-reg と、5a では規則1の候補のあるループ）。mvp-0・mvp-1 の machine では入力の誤り |
+
+`NotMeasured` は、5a が詰められないループを「SIMD の候補が無い」としてスカラーの値で記録しないためのものである（ADR-0023: 黙ってスカラーの値に置き換えない）。`LoopDecision` は、2倍にしない理由（2倍なら空）、比べた MII（G と、作ったときは V。3本目の読出しポートを除く）、規則1の候補があるかを持つ。通常の利用は、ベクトルの命令列がスカラーより遅くても使う（#110 の Q4 と同じ）。`ModuloCompiler.describeW` は、テストと第6段の説明に使う行を返す。
+
+```
+saxpy8 (i): W: doubled (MII 3 vs 2 × 3), 4 iterations of II 3 (1.5 per original iteration), per iteration 2 LD.W, 1 VMAC, 1 ST.W, 1 broadcast, 0 gathers; MinAvg 5 at MII, 6 at II; MaxLive 7
+matmul3 (m): W: scalar fallback (NotImplemented: body packing: #110 stage 5b; not doubled: AssociationOrder)
+dot8 (i): W: scalar fallback (NothingToPack; not doubled: OddTripCount, AssociationOrder)
+```
+
+ループの CLI は無く（`compiler/run compile` は list scheduling だけ）、第5段でも足さない。
+
+#### テスト
+
+- `compiler/.../loop/LoopVectorSpec`
+  - `saxpy8` と `fir4x8` の2倍にしたグラフ（ノード、場所、参照、`fir4x8` の back 1 の鎖と Before の LD.W [x(0)]・[x(1)]）。LD と LD.W の数が list scheduling の W-full の詰めた DAG と同じこと
+  - 展開した DAG を、辺を守る乱数の順序で実行した結果（`DagRun`）が `LoopLowering.evaluate` と一致すること（`fir4x(16)`・`fir4x(32)`、奇数と負の歩幅、乱数の300（W-full と W-reg））
+  - 奇数と負の歩幅の集め（集めごとに LD の組を持ち、反復をまたいで共有しない）、レーンの ST、語の複写
+  - 理由ごとの最小のループ（`SameValue` の位置、rs1 への入れ替え、手作りの `Loop` の `ZeroStoreStride`、W-reg の数の `MiiIncrease`）。簡約の定義（和・積・MAC・2つの独立な簡約は `AssociationOrder`。SUB、状態を2回読むもの、漸化式、累積和、次の値の ST、読み合う2つの状態は `LoopState`）。規則1の候補
+  - 集めを先のレーンから2と数える MinAvg。mvp-0・mvp-1・W-reg のグラフに W のノードが無いこと
+- `compiler/.../modulo/WModuloSpec`
+  - 上の表の各欄（2倍にしない理由、fallback、MII と律速の資源、II、II ごとの `Outcome`、cycles、MinAvg 2つ、MaxLive）、W-full の `fir4x8` の全 II の結果、`describeW`
+  - スカラーのループの命令列が mvp-1 と同じこと（`mvp2_vii` は1サイクル遅い）。`saxpy(1..9)` と `fir4x(1..9)`（奇数は `OddTripCount` と `NothingToPack` で mvp-1 と同じ命令列、`candidate` は `NothingToPack`）、`fir4x(16)`・`fir4x(32)`、`saxpy(n)`
+  - `matmul3` の `NotImplemented` と `NotMeasured`。W-reg の `Fallback(NotImplemented)`、mvp-1 と同じ命令列、`NotMeasured`
+  - レジスタを減らしたとき（12・10・8 本の値、`NoIiFits` と `candidate` の `Infeasible`、`RtlMvp2Spec` の変種）
+  - 乱数のループの数（上）と、集めの例外の数の下限
+  - どの命令列も verifier の最終検査（`KernelCompiler.checked`）を通り、出力（`IsaExecutor`）が DSL の参照実装と一致すること
+- `compiler/.../modulo/ModuloSchedulerSpec`: 独立の検査の L11 の表に W の欄（VMAC 3、VADD・VSUB・VMUL 2、ST.W 1、LD.W 0）を足し、W のスケジュール（4つの構成）が合格すること。`read_ports` 3 で MAC・VMAC と ST・ST.W が同じ bundle に無いこと。手作りの `NoAlignedPair`（レジスタ4本の W-full で、組の始まる cycle に r0 と r2 が使用中、r1 と r3 が空いている配置）
+- `compiler/.../modulo/RowFitSpec`: `fitsTogether` を、MAC・VMAC・ST・ST.W とポートを使わない演算の種類からなる乱数の 500 の表で、全て試す方法と比べる
+- `compiler/.../KernelCompilerSpec`: W-full の `saxpy8` が `Vectorized`、W-reg が `Fallback(NotImplemented(…#78 Q8 (c)…))` で `NotMeasured`、mvp-0・mvp-1 の `candidate` が入力の誤り
+- `crosscheck/ModuloTrace` は LD.W・ST.W・ベクトル演算を読み、ソースを欄で対応させる（「Modulo Scheduling」の「トレースによる II の確認」）。`crosscheck/ModuloKernelSpec` で、集めのレーンの入れ替え、組の2つ目のレジスタの commit が1行遅いもの、LD.W の番地の誤りを見つけること
+- `crosscheck/ModuloRecordsSpec`: `ModuloRecords.reasons` が `NoAlignedPair` を (b′) としてまとめること（[benchmarks/MODULO.md](../benchmarks/MODULO.md) は mvp-0 の記録なので変わらない）
+- `crosscheck/ModuloKernelSpec`: 6つのループを W-full・`mvp2_rp4`・`mvp2_vlat`・`mvp2_vii`・W-reg の参照モデルで実行し、出力が DSL と、cycles が予測と一致し、トレースの照合が記録の II（1反復のグラフでは II なし）を返すこと。`saxpy(7)`・`fir4x7`・`fir4x(16)`・`fir4x(32)`・`saxpy(2)`、乱数の2倍にしやすい 60 のループ（4つの構成）、長い 40 のループ（別の seed で、反復は 10〜24 の偶数。LD.W の鎖と集めが定常状態に達する。W-full と `mvp2_vlat`）
+- `crosscheck/RtlMvp2Spec`: 今の4つのビルドの中で、Modulo Scheduling の命令列も RTL で実行する（W-full は6つのループ、`saxpy(7)`、乱数の 20 のループ。W-reg は6つのスカラーのループ。`mvp2_vlat` は6つ。変種は `saxpy8`・`fir4x8`・`product8`・`dot8`）。参照モデルとトレース・cycles・レジスタ・メモリが一致し、出力が DSL と一致し、RTL のトレースで II を確かめる。新しいビルドは無い
+- mutant 4つ: `modulo-read-port-scalar-only`（`Mii.readPortUsers` から VMAC と ST.W を外す）、`modulo-read-port-coupling-all`（今までの結び付けの条件）、`loopvector-chain-not-halved`（LD.W の鎖の距離を2で割らない）、`loopvector-gather-lane1-same-word`（集めのレーン1がレーン0の語を読む）
 
 ## ループ IR
 
@@ -595,6 +816,8 @@ Modulo Scheduling（#68）の入力として、反復の単位と反復をまた
 | After | ループの後に1回 | 状態を格納する ST |
 
 オペランドは `Ref(node, back, initial)` で、`node` の `back` 反復前の値を表す。反復 k < back ではその反復が無いので、Before のノード `initial(k)` の値を使う。Each のノードの番号は本体の順で、back = 0 のオペランドは小さい番号である。
+
+ISA mvp-2 の W のループのノード（`LoadW`・`VCompute`・`VMac`・`StoreW`・`StoreLane`。欄は `VRef` の `Pair`・`Gather`・`Broadcast`）もある。これらを作るのはループのベクトル化（`LoopVector`）だけで、`LoopGraph.build` と `LoopFusion` は作らない（「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」）。`LoopGraph.expanded` は、これらを DAG の W のノードに展開し、LD.W と ST.W には2つの語のメモリ順序の辺を付ける。
 
 LD の共有（ADR-0014）。本体が書かない語について、次のようにする。
 
@@ -678,7 +901,7 @@ machine に MAC があるとき（ISA mvp-1）、`LoopFusion.fuse` は、ルー�
 
 ## Modulo Scheduling
 
-`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。ISA mvp-2 の machine は、#110 の第5段まで理由付きで拒否する（`ModuloCompiler.notImplemented`。入力の誤り）。
+`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。ISA mvp-2 の machine では、LD.W のある machine でループを2倍にベクトル化してスケジュールし、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段の前半。「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」）。
 
 | 段 | 内容 | 実装 |
 |---|---|---|
@@ -687,12 +910,12 @@ machine に MAC があるとき（ISA mvp-1）、`LoopFusion.fuse` は、ルー�
 | II の探索 | II = MII から、1反復だけのスケジュールの長さまで順に試す | `ModuloScheduler.schedule` |
 | 予約表への配置 | Each のノードを、II 行の予約表（MRT）に置く | `ModuloScheduler.place`、`RowFit` |
 | 展開 | 全反復と、ループの前後のノードを、絶対サイクルに置く | `ModuloScheduler.expand` |
-| レジスタとコード | 展開した命令列のレジスタ割り当て、エンコード、verifier の最終検査 | `RegisterAllocator.allocate`、`ModuloCompiler.compile` |
+| レジスタとコード | 展開した命令列のレジスタ割り当て、エンコード、verifier の最終検査 | `RegisterAllocator.assign`、`ModuloCompiler.compile` |
 
 ### MII
 
 - **ResMII**: 1サイクルに1回だけ使える資源ごとの、1反復の使用数の最大。資源は、Compute スロット（ADD・SUB・MUL、mvp-1 では MAC も）、Memory スロット（LD・ST）、各演算の演算器（1回の発行が演算器の II だけ占める。L9。使用数は「演算の数 × II」）、Compute と Memory の書戻しポート（L5。ST は使わない）、3本目の読出しポート（下記）。演算のスロットと書戻しポートは machine description から取る。`Mii.bounding` が最大の資源を挙げる
-- **3本目の読出しポート**（`third read port`、#77）: MAC があり `read_ports` が3の machine では、MAC と ST を同じ bundle に置けない（L11。MAC は3つ、ST は1つを読む）。これを、各 MAC と各 ST が発行サイクルに1回使う資源とする（ADR-0018 の「3本目の読出しポート（RTL のポート2）」）。`read_ports` が4の machine と mvp-0 には、この資源は無い。`Mii.withoutReadPort` は、この資源を除いた値である
+- **3本目の読出しポート**（`third read port`、#77）: MAC があり `read_ports` が3の machine では、MAC と ST を同じ bundle に置けない（L11。MAC は3つ、ST は1つを読む）。これを、各 MAC と各 ST が発行サイクルに1回使う資源とする（ADR-0018 の「3本目の読出しポート（RTL のポート2）」）。`read_ports` が4の machine と mvp-0 には、この資源は無い。`Mii.withoutReadPort` は、この資源を除いた値である。ISA mvp-2 では VMAC（3つを読む）と ST.W（1つを読む）もこの資源を使う（`Mii.readPortUsers` = {MAC、VMAC、ST、ST.W}。ADR-0023）
 - **RecMII**: `LoopGraph.edges` のどの閉路も `Σcycles − II × Σiterations ≤ 0` となる最小の II（Bellman-Ford で正の閉路を調べる）。閉路が無ければ 0。MAC の L は、MAC からの辺の cycles として入る
 - **MII** = max(ResMII, RecMII, 1)
 
@@ -713,7 +936,7 @@ machine に MAC があるとき、`ModuloCompiler` はループのグラフを�
 - 最早から II サイクルの範囲（最遅まで）で、予約表の行が空いている最初の時刻に置く。後戻りはしない
 - これで置けないときは、もう一度、各時刻に「同じスロットの種類の残りのノードが、まだ予約表に収まる」条件を足して置き直す（先読み。`RowFit`）。先読みなしで置けたときは、先読みしても同じ結果になる
 - 予約表に収まるかは、`RowFit` が正確に判定する。行を順に、どの演算をそこに置くかを決める深さ優先探索で、失敗した状態を覚える（状態は、残りの演算の数と、まだ影響する行の使用だけ）。II が62を超えるとき、または探索が `RowFit.Budget`（10万手）を超えたときは打ち切り、「決まらない」とする。決まらないとき、その II を予約表なし（(a)）とは記録せず、先読みはその時刻を受け入れる（以降はその II の先読みをしない）
-- 判定はスロットの種類ごとに行う。3本目の読出しポートのある machine で、MAC と ST の両方が残っているときは、そのポートが2つの種類を結び付ける。このときは、まず種類ごとに判定し（どちらかが収まらなければ収まらない）、両方が収まれば、2つの種類を一緒に探索して判定する（`RowFit.fitsTogether`。行ごとに、各種類がそこに置く演算を決め、MAC と ST は同じ行に置かない）。この探索も正確で、打ち切りの条件は同じである。先読みも、このときは両方の種類の残りのノードを調べる。どちらかだけが残っているときは、置いた MAC と ST の行を、残りの ST と MAC が使えない行として種類ごとに判定する。MAC か ST を置くときの先読みは、もう一方の種類の残りのノードも調べる（最後の MAC の行が、残りの ST の行を奪わないように。#77）
+- 判定はスロットの種類ごとに行う。3本目の読出しポートのある machine で、MAC と ST の両方が残っているとき（ISA mvp-2 では、このポートを使う演算 {MAC、VMAC、ST、ST.W} が Compute と Memory のそれぞれに残っているとき。`coupled`。「ループのベクトル化と Modulo Scheduling（W-full）」）は、そのポートが2つの種類を結び付ける。このときは、まず種類ごとに判定し（どちらかが収まらなければ収まらない）、両方が収まれば、2つの種類を一緒に探索して判定する（`RowFit.fitsTogether`。行ごとに、各種類がそこに置く演算を決め、MAC と ST は同じ行に置かない）。この探索も正確で、打ち切りの条件は同じである。先読みも、このときは両方の種類の残りのノードを調べる。どちらかだけが残っているときは、置いた MAC と ST の行を、残りの ST と MAC が使えない行として種類ごとに判定する。MAC か ST を置くときの先読みは、もう一方の種類の残りのノードも調べる（最後の MAC の行が、残りの ST の行を奪わないように。#77）
 - ADR-0018 のとおり、3本目の読出しポートのある machine で MAC と ST の両方があり、どの種類にも予約表があるときは、2つの種類を一緒に探索して判定する（`RowFit.fitsTogether`）。仮にこの場合を「決まらない」とすると先読みが止まり、`read_ports` 3 で `fir4x8`（i）は II 5、`matmul3`（i）は II 10 になる（一緒に探索すると、どちらも `read_ports` 4 と同じ II 4 と 9。下の「結果（mvp-1、#77）」）
 
 ### II の探索と結果
@@ -724,7 +947,8 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 |---|---|---|
 | 予約表なし（`NoMrt`） | 1反復の演算が II 行の予約表に収まらない（`RowFit` が依存を無視して判定する）。ポートと演算器を外して判定し直し、衝突する資源の組（スロット、スロット + 書戻しポート、スロット + 演算器、…）を挙げる。3本目の読出しポートを外すと収まるときだけ、組に「+ third read port (L11)」を足す | (a) |
 | 配置できない（`NoTime`） | 番号の順・後戻りなしの配置で、あるノードの範囲に置ける時刻が無い。ふつうは予約表があるときだが、配置の前の、1反復全体の予約表の判定を `RowFit` が打ち切ったときは、予約表があるかが決まっていない（理由に「whether a reservation table exists is not decided」と書く）。先読みでの打ち切りは先読みを止めるだけで、この注は付けない。最遅が無いときは範囲の上端を空けて書く | (a) と区別する |
-| レジスタ（`TooManyLive`） | 展開した命令列の、同時に生きる値がレジスタ数を超える | (b) |
+| レジスタ（`TooManyLive`） | 展開した命令列の、同時に生きる値がレジスタ数を超える（ISA mvp-2 では、組と集めを2と数える） | (b) |
+| 整列した組（`NoAlignedPair`） | ISA mvp-2 で、同時に生きるレジスタ（重みで数える）はレジスタ数以下だが、組か集めの始まる cycle に空いた整列した組が無い（断片化。`RegisterAllocator.assign`） | (b′) |
 | 命令領域（`Overflow`） | 展開した命令列が `instruction_memory.bundles` を超える | - |
 | 収まる（`Fits`） | | |
 
@@ -735,7 +959,7 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 - Each の各反復を `t(n) + k × II` に置く
 - Before のノードは、番号の逆順に、使う側（置いたノード）の許す最も遅い時刻から前に、スロット・演算器・書戻しポート（と3本目の読出しポート）が空いている時刻に置く。After のノードは、番号の順に、作る側の許す最も早い時刻から後に置く。演算器は両側を調べる（前後どちらの発行とも II_op 以上離す。L9）
 - 全体を、最初の発行が 0 になるようにずらす。そのずれが反復 0 の開始 `start` である。HALT は、全演算の完了 `max(issue + L)` に置く（L6）
-- 依存は `LoopGraph.expanded` の辺（データ依存とメモリ順序）をすべて守る。展開した命令列は直線なので、各反復の値は別の仮想レジスタになる。レジスタは list scheduling と同じ `RegisterAllocator.allocate` で割り当てる
+- 依存は `LoopGraph.expanded` の辺（データ依存とメモリ順序）をすべて守る。展開した命令列は直線なので、各反復の値は別の仮想レジスタになる。レジスタは list scheduling と同じ `RegisterAllocator.assign` で割り当てる（組の無い DAG では、今までの `allocate` と同じ結果になる。ISA mvp-2 では組を考えて割り当て、`TooManyLive` と `NoAlignedPair` を分ける）
 - ループのカーネルの命令列は、`ModuloCompiler.compile` が `KernelCompiler.checked` で verifier の最終検査に通す。一般の `Loop` を `ModuloScheduler.schedule` で直接スケジュールしたときは検査しないので、呼び出し側が入力宣言を与えて `KernelCompiler.verified` を呼ぶ（テストはそうしている）
 
 `ModuloSchedule.map` は、発行する各演算の (bundle, スロット) → (ループのノード, 反復) の表である。mvp-0 では pc = サイクルなので、bundle の番号が発行サイクルになる。
@@ -746,10 +970,10 @@ II ごとの結果は次のどれかで、`ModuloSchedule.attempts` に記録す
 
 1. 表が、全ノードの全反復をちょうど1回ずつ、その演算のスロットに挙げること
 2. 各行の各スロットの `issue` が、表の演算の種類であること（表に無いスロットは NOP、最後の行の Compute は HALT）
-3. LD・ST のアドレスが、そのノードのアドレス `addr.at(k)` であること
-4. 各ソースレジスタについて、発行の行までで最後に commit した書込み（`rf_commit`。その行から見える）の発行元が、期待する演算であること。発行元は、そのポートに、その行で commit する、そのレジスタへの表の演算である。期待する演算は、オペランドの `Ref(node, back, initial)` から、同じ反復（back = 0）、back 反復前、k < back では初期値 `initial(k)`、ループの前のノード、ループの後なら最後の反復、と決める。ソースは位置で対応させる（rs1 が1つ目のオペランド）
+3. LD・ST・LD.W・ST.W のアドレスが、そのノードのアドレス `addr.at(k)` であること（2倍にしたループでは、その反復 k' のアドレス）
+4. 各ソースレジスタについて、発行の行までで最後に commit した書込み（`rf_commit`。その行から見える）の発行元が、期待する演算であること。発行元は、そのポートに、その行で commit する、そのレジスタへの表の演算である。期待する演算は、オペランドの `Ref(node, back, initial)` から、同じ反復（back = 0）、back 反復前、k < back では初期値 `initial(k)`、ループの前のノード、ループの後なら最後の反復、と決める。ソースは欄で対応させる（rs1 が1つ目の欄）。ISA mvp-2 では、組の欄（`rP:rP+1`）は2つのレジスタがどちらも期待する組のノードで最後に commit されていること、ブロードキャストの欄は1つのレジスタ、集めの欄は p が `lo` のレーン、p+1 が `hi` のレーンで commit されていること、レーンの ST は p + lane を読むことを確かめる。組を書く演算は、p と p+1 を1つのポートで同じ行に commit すること
 
-照合に合格したら、Each の各ノードの、連続する反復の発行サイクルの差を求める。差がすべて同じで、それが記録した II と一致すれば、その値を返す。そうでなければ失敗である。ベンチマークの記録（[benchmarks/MODULO.md](../benchmarks/MODULO.md)）の `metrics` の `ii` 欄は、この値である。
+照合に合格したら、Each の各ノードの、連続する反復の発行サイクルの差を求める。差がすべて同じで、それが記録した II と一致すれば、その値を返す。そうでなければ失敗である。1反復だけのループ（2倍にした2反復のループを含む）では II を返さない。ベンチマークの記録（[benchmarks/MODULO.md](../benchmarks/MODULO.md)）の `metrics` の `ii` 欄は、この値である。
 
 ### 結果（既定の構成）
 
@@ -819,4 +1043,5 @@ II と cycles（II / cycles）。括弧の中は、II を MII より上げた理
   - 上の手作りの `Loop` を参照モデルで実行し、メモリが `LoopLowering.evaluate` と一致し、トレースの照合に合格すること
   - トレースの照合が、表の反復の入れ替え、初期値の誤り、LD と ST のアドレスの誤り、ソースの入れ替え、別の演算が書いたレジスタを読むソース（ADD と ST）、1行ずれた commit、別のポートの commit、表と違う種類の演算、表に無いスロットの演算、状態の反復距離の誤り、記録と違う II を見つけること
   - 正しいが、反復が II ごとに始まらない命令列を拒否すること: `dot(4)` を展開して list scheduling した命令列（表はトレースと一致する）と、`saxpy8` の最後の ST を1サイクル遅らせた命令列
+- ISA mvp-2（#110 の第5段の前半）: `compiler/.../loop/LoopVectorSpec`、`compiler/.../modulo/WModuloSpec`、`ModuloSchedulerSpec`・`RowFitSpec`・`ModuloKernelSpec`・`ModuloRecordsSpec` の W の部分、`RtlMvp2Spec` のループの命令列（「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」の「テスト」）
 - `crosscheck/BenchmarkSpec`: [benchmarks/MODULO.md](../benchmarks/MODULO.md) と、Modulo Scheduling のテストケース・メトリクスが生成し直した内容と一致すること。テストケースが参照モデルと RTL で成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること
