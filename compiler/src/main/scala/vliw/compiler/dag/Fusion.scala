@@ -55,6 +55,7 @@ object Fusion {
             case (Node.Mac(a, b, c), _)      => Node.Mac(to(a), to(b), to(c))
             case (Node.Store(addr, v), _)    => Node.Store(addr, to(v))
             case (l: Node.Load, _)           => l
+            case (other, _) => sys.error(s"$other: Fusion runs before Pack (ISA mvp-2)")
           }
         }
         .toVector

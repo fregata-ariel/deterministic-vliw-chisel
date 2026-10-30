@@ -4,8 +4,8 @@ import scala.util.Random
 
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.compiler.KernelCompiler
-import vliw.compiler.dag.{Dag, EdgeKind, Fusion, Node}
+import vliw.compiler.{IsaExecutor, KernelCompiler}
+import vliw.compiler.dag.{Dag, DagRun, EdgeKind, Fusion, Node, Pack, Src}
 import vliw.compiler.dsl._
 import vliw.compiler.dsl.LoweredKernel.{Bin, Read, Write}
 import vliw.compiler.schedule.{ListScheduler, Priority}
@@ -51,6 +51,7 @@ class RematerializationSpec extends AnyFunSuite {
         case Node.Compute(op, a, b) => values(i) = op(values(a), values(b)); mem
         case Node.Mac(a, b, c) => values(i) = Op.Add(Op.Mul(values(a), values(b)), values(c)); mem
         case Node.Store(a, v)  => mem.updated(a, values(v))
+        case other             => fail(s"$other: not a node of a scalar DAG")
       }
     }
   }
@@ -80,6 +81,7 @@ class RematerializationSpec extends AnyFunSuite {
         case (Node.Mac(a, b, c), i)     => assert(operandsOf(split, i) == Set(a, b, c))
         case (Node.Store(_, v), i)      => assert(operandsOf(split, i) == Set(v))
         case (_: Node.Load, i)          => assert(operandsOf(split, i).isEmpty)
+        case (other, _)                 => fail(s"$other: not a node of a scalar DAG")
       }
       assert(split.loads > p.dag.loads)
       (0 until 5).foreach { _ =>
@@ -103,6 +105,7 @@ class RematerializationSpec extends AnyFunSuite {
       case (Node.Mac(a, b, c), i)     => assert(operandsOf(s, i) == Set(a, b, c))
       case (Node.Store(_, v), i)      => assert(operandsOf(s, i) == Set(v))
       case (_: Node.Load, i)          => assert(operandsOf(s, i).isEmpty)
+      case (other, _)                 => fail(s"$other: not a node of a scalar DAG")
     }
   }
 
@@ -226,6 +229,7 @@ class RematerializationSpec extends AnyFunSuite {
           case Right(x) => assert(remat == Right(x), s"${k.name} ${m.machineId} $a")
           case Left(NoFit.TooManyLive(_, _)) => assert(remat == plain)
           case Left(NoFit.Stuck)             => assert(remat.forall(_.dag.loads > dag.loads))
+          case Left(other) => fail(s"$other: a DAG without pairs (${k.name} ${m.machineId} $a)")
         }
       }
     }
@@ -367,5 +371,132 @@ class RematerializationSpec extends AnyFunSuite {
     val d = a.allocated.dag
     assert(d.edges.forall(e => e.kind == EdgeKind.Data))
     assert(d.loads == 55)
+  }
+
+  // ISA mvp-2 (W, #110 stage 4; ADR-0023): LD.W [a] may be copied when no ST writes a or a + 1, a
+  // broadcast LD as any LD; a LD that is a lane of a gather is not copied (既定).
+  private val mvp2 = MachineDescription
+    .load(java.nio.file.Paths.get("config", "machine-mvp2.json"))
+    .fold(es => fail(es.mkString("\n")), identity)
+  private val mw1 = machineFile("mvp2_mw1.json")
+
+  test("ISA mvp-2: a split renames pair, broadcast and store fields; the values stay") {
+    // [10] = [0]; [11] = [1]; [12] = [0] + [2]; [13] = [1] + [3]: LD.W [0] is read by ST.W [10] and
+    // by the VADD of the pair (12, 13).
+    val ws = Vector(
+      Write(10, Read(0)),
+      Write(11, Read(1)),
+      Write(12, Bin(Op.Add, Read(0), Read(2))),
+      Write(13, Bin(Op.Add, Read(1), Read(3)))
+    )
+    val d = Pack.pack(Fusion.fuse(Dag.build(mvp2, ws))).dag
+    val ldw = d.nodes.indexOf(Node.LoadW(0))
+    val stw = d.readers(ldw).find(d.nodes(_).isInstanceOf[Node.StoreW]).get
+    assert(d.readers(ldw).size == 2 && d.rematerializable(ldw))
+    val s = d.split(ldw, Set(stw))
+    assert(s.nodes(stw) == Node.LoadW(0) && s.nodes(stw + 1) == Node.StoreW(10, Src.Pair(stw)))
+    // [0..3] = 7, 14, 21, 28: [10] = 7, [11] = 14, [12] = 7 + 21, [13] = 14 + 28.
+    val memory = (0 until 4).map(a => a -> (a + 1L) * 7).toMap
+    val expected = memory ++ Map(10 -> 7L, 11 -> 14L, 12 -> 28L, 13 -> 42L)
+    assert(DagRun.execute(s, s.nodes.indices, memory) == expected)
+    // The packed benchmarks: every LD.W and broadcast LD with several readers, split for the later
+    // half of its readers, one at a time.
+    val rng = new Random(110L)
+    for (m <- Seq(mvp2, mw1); k <- Benchmarks.all :+ Benchmarks.saxpy(7)) {
+      val p = prepared(k, m)
+      val d0 = p.packing.get.dag
+      var kinds = Set.empty[String]
+      val split = d0.nodes.indices.reverse.foldLeft(d0) { (d, v) =>
+        val rs = d.readers(v)
+        if (d.rematerializable(v) && rs.size > 1) {
+          val moved = rs.drop(rs.size / 2).toSet
+          val s = d.split(v, moved)
+          val at = moved.min
+          assert(s.nodes(at) == d.nodes(v) && s.readers(at) == moved.toVector.sorted.map(_ + 1))
+          moved.foreach { r =>
+            val fields = s.nodes(r + 1).sources
+            fields.foreach(f => assert(!f.nodes.contains(v)))
+            fields
+              .collect { case Src.Pair(`at`) => "pair"; case Src.Broadcast(`at`) => "broadcast" }
+              .foreach(kinds += _)
+          }
+          s
+        } else d
+      }
+      assert(split.edges.forall(e => e.from < e.to), k.name)
+      if (m == mvp2 && k.name == "fir4x8") assert(kinds == Set("pair", "broadcast"))
+      val image = p.layout.memoryImage(KernelCompiler.sampleInputs(k, rng.nextLong())).toOption.get
+      assert(
+        DagRun.execute(split, DagRun.randomOrder(split, rng), image) ==
+          Lowering.evaluate(Lowering.lower(p.layout), image),
+        s"${k.name} on ${m.machineId}"
+      )
+    }
+  }
+
+  test(
+    "ISA mvp-2: copies only in stuck attempts, of LD.W and LDs outside gathers; the code with copies computes the DSL results"
+  ) {
+    var (wide, broadcast, run) = (0, 0, 0)
+    for {
+      base <- Seq(mvp2, mw1); r <- Seq(8, 12, 16)
+      k <- Benchmarks.all ++ Seq(Benchmarks.saxpy(7)) ++ RandomKernels.kernels(51L, 60)
+    } {
+      val m = withRegisters(base, r)
+      val prep = prepared(k, m)
+      val p = prep.packing.get
+      val d = p.dag
+      val name = s"${k.name} on ${m.machineId} with $r registers"
+      d.gathers.foreach(g => assert(!d.rematerializable(g.lo) && !d.rematerializable(g.hi), name))
+      val sources = d.nodes.flatMap(_.sources).collect { case Src.Broadcast(n) => d.nodes(n) }.toSet
+      if (!p.nothingToPack) RegisterAllocator.attempts(d, Priority.all).foreach { a =>
+        val plain = RegisterAllocator.run(d, a, Remat.Never)
+        val remat = RegisterAllocator.run(d, a)
+        plain match {
+          case Right(x)          => assert(remat == Right(x), s"$name $a")
+          case Left(NoFit.Stuck) => assert(remat.forall(_.dag.loads > d.loads), s"$name $a")
+          case Left(_)           => assert(remat == plain, s"$name $a") // scheduled, not allocated
+        }
+        remat.foreach { al =>
+          val c = al.dag
+          // The gathers and their lanes are those of the packed DAG.
+          assert(c.gathers.size == d.gathers.size, s"$name $a")
+          if (c.loads > d.loads) {
+            if (c.nodes.count(_.isInstanceOf[Node.LoadW]) > p.count("LD.W")) wide += 1
+            if (c.nodes.count(sources) > d.nodes.count(sources)) broadcast += 1
+          }
+          // In the program, a word read by more than one LD or LD.W is never stored.
+          val code = al.allocation.bundles
+          val read = code.flatMap {
+            case Bundle(_, MemoryOp.Ld(_, x))  => Seq(x)
+            case Bundle(_, MemoryOp.LdW(_, x)) => Seq(x, x + 1)
+            case _                             => Nil
+          }
+          val stored = code.flatMap {
+            case Bundle(_, MemoryOp.St(x, _))  => Seq(x)
+            case Bundle(_, MemoryOp.StW(x, _)) => Seq(x, x + 1)
+            case _                             => Nil
+          }.toSet
+          assert(
+            read.groupBy(identity).collect { case (w, n) if n.size > 1 => w }.forall(!stored(_))
+          )
+          // The code of an attempt with copies passes the verifier and, run by IsaExecutor (written
+          // from docs/ISA.md), computes the DSL results.
+          if (c.loads > d.loads) {
+            KernelCompiler.checked(m, prep.layout, code).fold(e => fail(s"$name $a: $e"), identity)
+            val in = KernelCompiler.sampleInputs(k, run.toLong)
+            val image = prep.layout.memoryImage(in).fold(e => fail(e), identity)
+            assert(
+              prep.layout.outputs(IsaExecutor.run(m, code, image)) ==
+                Interpreter.run(k, in).fold(e => fail(e), identity),
+              s"$name $a"
+            )
+            run += 1
+          }
+        }
+      }
+    }
+    assert(wide > 0 && broadcast > 0, s"LD.W copies $wide, broadcast copies $broadcast")
+    info(s"$run attempts with copies run: $wide with a LD.W copy, $broadcast with a broadcast copy")
   }
 }

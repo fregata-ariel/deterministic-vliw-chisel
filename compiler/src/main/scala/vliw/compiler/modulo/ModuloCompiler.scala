@@ -3,7 +3,7 @@ package vliw.compiler.modulo
 import vliw.compiler.KernelCompiler
 import vliw.compiler.dsl.MemoryLayout
 import vliw.compiler.loop.{LoopFusion, LoopGraph, LoopKernel, LoopLowering}
-import vliw.isa.{Bundle, MachineDescription}
+import vliw.isa.{Bundle, IsaVersion, MachineDescription}
 
 /** Whether a loop is fused into MAC on a machine with MAC (ADR-0019, docs/COMPILER.md "Modulo
   * Scheduling"): the MUL + ADD pairs of `LoopFusion`, and the MII of the loop without and with
@@ -60,10 +60,17 @@ object ModuloCompiler {
       fusion: Option[FusionChoice]
   )
 
+  /** ISA mvp-2 (W) comes to Modulo Scheduling in #110 stage 5. Until then it refuses mvp-2
+    * machines, rather than generate mvp-1 code under an mvp-2 machine's name (list scheduling
+    * compiles them from stage 4, `KernelCompiler`).
+    */
+  def notImplemented(machine: MachineDescription): Either[String, Unit] =
+    IsaVersion.notImplemented(machine, "Modulo Scheduling", "stage 5").toLeft(())
+
   /** Layout and lowering as `loop.LoopLowering`, then the loop graph, fused by `FusionChoice`. */
   def prepare(k: LoopKernel, machine: MachineDescription): Either[String, Prepared] =
     for {
-      _ <- KernelCompiler.notImplemented(machine)
+      _ <- notImplemented(machine)
       layout <- LoopLowering.layout(k, machine)
     } yield {
       val (g, fusion) = FusionChoice.of(LoopGraph.of(LoopLowering.lower(k, layout), machine))

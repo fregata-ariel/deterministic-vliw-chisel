@@ -14,7 +14,8 @@ import vliw.isa.{MachineDescription, ProgramFile, TestCase}
   *
   * `sbt "compiler/run compile <kernel>... [--machine m.json] [--out dir] [--seed n] [--priority p] [--single-issue]"`:
   * compiles benchmark kernels and writes `<kernel>.hex` and the test case `<kernel>.json`; exit 2
-  * on input errors, 3 on compiler errors (docs/COMPILER.md).
+  * on input errors, 3 on compiler errors (docs/COMPILER.md). On ISA mvp-2 the line also gives the W
+  * outcome; a scalar fallback exits 0 (the kernel works).
   */
 object Main {
   private val usage =
@@ -101,10 +102,18 @@ object Main {
       val json = o.out.resolve(s"${k.name}.json")
       ProgramFile.write(hex, c.words).fold(e => exit(2, e), identity)
       Files.write(json, (ujson.write(tc, indent = 2) + "\n").getBytes(StandardCharsets.UTF_8))
-      val fused = if (machine.hasMac) s", ${c.dag.macs} MUL + ADD pairs fused into MAC" else ""
+      // On ISA mvp-2 the bounds are those of the DAG scheduled (packed, or scalar on a fallback),
+      // and the pairs fused are counted in the scalar DAG, as on mvp-1.
+      val scalarDag = c.simd match {
+        case Simd.Packed(p)      => p.scalar
+        case Simd.Fallback(_, p) => p.scalar
+        case Simd.Scalar         => c.dag
+      }
+      val fused = if (machine.hasMac) s", ${scalarDag.macs} MUL + ADD pairs fused into MAC" else ""
+      val w = Option(KernelCompiler.describeW(c)).filter(_.nonEmpty).fold("")(w => s"; $w")
       println(
         s"${k.name}: ${c.cycles} cycles (lower bounds ${c.dag.cyclesLowerBound} from dependences, " +
-          s"${c.dag.resourceLowerBound} from slots), ${c.allocated.attempt}$fused; " +
+          s"${c.dag.resourceLowerBound} from slots), ${c.allocated.attempt}$fused$w; " +
           s"wrote $hex and $json"
       )
     }

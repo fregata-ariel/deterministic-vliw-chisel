@@ -8,7 +8,8 @@ import scala.util.{Failure, Random, Success, Try}
 import chisel3.simulator.Exceptions.AssertionFailed
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.compiler.Verifier
+import vliw.compiler.{CompiledKernel, FallbackReason, KernelCompiler, Simd, Verifier}
+import vliw.compiler.dsl.{Benchmarks, Interpreter, Kernel, RandomKernels, Values}
 import vliw.hw.{AssertionSpec, CaseBuildSpec, CaseSpec}
 import vliw.hw.{Core, CoreDriver, CoreParams, CoreRun, VliwChiselSim}
 import vliw.isa._
@@ -31,6 +32,9 @@ import RtlPrograms.canonical
   *     the first violation: the core signals only rules the verifier finds, in the cycle in which
   *     the model stops (one cycle later for L5 on the memory port, docs/VERIFIER.md), and nothing
   *     for programs that break only L8;
+  *   - programs compiled for the machine (#110 stage 4: the benchmarks, odd sizes and random
+  *     kernels, packed or fallen back) against the model, the DSL reference implementation and the
+  *     scheduler's cycles;
   *   - last, in the three builds with cases, one case whose assertion must really fire, so that the
   *     bound assertions of the build are checked too. The generated variant runs only the random
   *     programs, in stop mode: no assertion fires there. With the builds of `hw/CaseSpec` and
@@ -44,7 +48,7 @@ import RtlPrograms.canonical
   * the RTL's range and shown as ignored, with the reasons of [[CoreParams.check]].
   */
 class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
-  import RtlMvp2Spec.{Drawn, Plan}
+  import RtlMvp2Spec.{Compiled, Drawn, Plan}
 
   private val FiredRule = """Assertion failed: (L\d+) """.r.unanchored
 
@@ -455,12 +459,104 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       .filter(c => Set(mvp0.hash, mvp1.hash)(c.machine.hash) && c.expect.verdict == Verdict.Legal)
   }
 
+  // Compiled W programs (#110 stage 4, docs/COMPILER.md "ISA mvp-2（W）"): the benchmarks, odd
+  // sizes, the hand-computed inputs of HandComputedSpec (both issue modes) and random kernels,
+  // compiled before the build (a compile failure fails the test without a Verilator build), each
+  // run against the model (matchesModel), the DSL reference implementation and the scheduler's
+  // cycles.
+
+  /** The programs of `m`: saxpy8 (three inputs), saxpy7, fir4x8 and matmul3, with `small` also
+    * saxpy1 and the hand-computed inputs (compiled in both issue modes, as in HandComputedSpec),
+    * then the first `random` random kernels of RandomKernelSpec.
+    */
+  private def compiledFor(m: MachineDescription, random: Int, small: Boolean): Vector[Compiled] = {
+    def compile(k: Kernel, single: Boolean = false) = KernelCompiler
+      .compile(k, m, singleIssue = single)
+      .fold(
+        e => fail(s"${k.name} on ${m.machineId}${if (single) " (single issue)" else ""}: $e"),
+        identity
+      )
+    val rng = new Random(1100L + m.registerCount + m.readPorts)
+    val fir = Benchmarks.fir(Seq(1L, 2L, 3L, 4L), 8)
+    val kernels = Seq(Benchmarks.saxpy(8), Benchmarks.saxpy(7), fir, Benchmarks.matmul(3)) ++
+      Option.when(small)(Benchmarks.saxpy(1))
+    val benchmarks = kernels.flatMap { k =>
+      val c = compile(k)
+      Seq.fill(if (k.name == "saxpy8") 3 else 1)(Compiled(c, RandomKernels.values(k, rng), None))
+    }
+    val hand =
+      if (!small) Nil
+      else
+        for {
+          (k, in, out, values) <- HandComputedSpec.cases
+          single <- Seq(false, true)
+        } yield Compiled(compile(k, single), in, Some(out -> values))
+    val randoms = RandomKernels
+      .kernels(51L, random)
+      .map(k => Compiled(compile(k), RandomKernels.values(k, rng), None))
+    (benchmarks ++ hand ++ randoms).toVector
+  }
+
+  /** Runs the compiled programs on the core; returns how many of the random kernels were packed,
+    * packed with a lane fallback, or fell back (by reason).
+    */
+  private def runCompiled(
+      dut: Core,
+      m: MachineDescription,
+      programs: Vector[Compiled]
+  ): Map[String, Int] = {
+    programs.foreach { p =>
+      val c = p.c
+      val inputs = c.layout.inputs(p.in).fold(e => fail(e), identity)
+      val r = matchesModel(
+        dut,
+        m,
+        c.words,
+        inputs,
+        s"${c.kernel.name} (compiled)\n${Disassembler.program(c.bundles)}"
+      )
+      assert(r.cycles == c.cycles, c.kernel.name)
+      val out = c.layout.outputs(a => r.memory(a).toLong)
+      assert(out == Interpreter.run(c.kernel, p.in).fold(e => fail(e), identity), c.kernel.name)
+      p.hand.foreach { case (name, values) =>
+        assert(
+          values.indices.map(i => r.memory(c.layout.elem(name, i)).toLong) == values,
+          c.kernel.name
+        )
+      }
+    }
+    val kinds = programs
+      .map(_.c)
+      .filter(_.kernel.name.startsWith("random"))
+      .flatMap(_.simd match {
+        case Simd.Packed(pk) =>
+          Seq("packed") ++ Option.when(pk.scalarLanes.nonEmpty)("lane fallback")
+        case Simd.Fallback(FallbackReason.NothingToPack, _)    => Seq("NothingToPack")
+        case Simd.Fallback(FallbackReason.NoAttemptFits(_), _) => Seq("NoAttemptFits")
+        case Simd.Scalar                                       => Seq("scalar")
+      })
+    val counts = kinds.groupMapReduce(identity)(_ => 1)(_ + _).withDefaultValue(0)
+    val bench =
+      programs.map(_.c).filterNot(_.kernel.name.startsWith("random")).distinctBy(_.kernel.name)
+    info(
+      s"${programs.size} compiled programs; random kernels: ${show(counts)}; " +
+        bench.map(c => s"${c.kernel.name} ${c.cycles} cycles").mkString(", ")
+    )
+    counts
+  }
+
+  private lazy val fullCompiled = compiledFor(full, 30, small = true)
+  private lazy val mw1Compiled = compiledFor(mw1, 30, small = true)
+  private lazy val vlatCompiled = compiledFor(vlat, 20, small = false)
+  private lazy val variantCompiled = compiledFor(variant, 20, small = false)
+
   // The minimum counts are about half of those measured when they were set (#110 stage 3); the
   // seeds are fixed, so the counts change only with the generators or the machines.
 
   test(
-    "W-full (machine-mvp2) on the RTL: cases, ISA.md's words, random W programs, mvp-1 programs; the L11 assertion fires"
+    "W-full (machine-mvp2) on the RTL: cases, ISA.md's words, random W programs, mvp-1 programs; the L11 assertion fires; compiled kernels"
   ) {
+    val compiled = fullCompiled
     build(full) { dut =>
       assert(runCases(dut, full) == ((8, 13, 2)))
       decodes(dut)
@@ -511,10 +607,16 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       RtlPrograms.compareOn(dut, full, RtlPrograms.legalPrograms(full, 7710L, 100, mac = true))
       compatible.foreach(c => matchesModel(dut, full, c.words, c.inputs, c.name))
       info(s"${compatible.size} mvp-0 and mvp-1 cases and benchmark programs")
+      val kinds = runCompiled(dut, full, compiled)
+      // Measured: 27 packed (14 with a lane fallback) and 3 NothingToPack of 30 random kernels.
+      assert(kinds("packed") >= 13 && kinds("lane fallback") >= 7 && kinds("NothingToPack") >= 1)
     }
   }
 
-  test("W-reg (mvp2_mw1) on the RTL: cases and random W programs; LD.W's opcode fires L1") {
+  test(
+    "W-reg (mvp2_mw1) on the RTL: cases and random W programs; LD.W's opcode fires L1; compiled kernels"
+  ) {
+    val compiled = mw1Compiled
     build(mw1) { dut =>
       assert(runCases(dut, mw1) == ((1, 0, 0)))
       randomPrograms(
@@ -546,12 +648,16 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
           late = 0
         )
       )
+      val kinds = runCompiled(dut, mw1, compiled)
+      // Measured: 10 packed (all with a lane fallback) and 20 NothingToPack (RootDiffers, mostly).
+      assert(kinds("packed") >= 5 && kinds("lane fallback") >= 5 && kinds("NothingToPack") >= 10)
     }
   }
 
   test(
-    "latency variant (mvp2_vlat) on the RTL: cases and random W programs; the VMUL and MUL port clash fires L5"
+    "latency variant (mvp2_vlat) on the RTL: cases and random W programs; the VMUL and MUL port clash fires L5; compiled kernels"
   ) {
+    val compiled = vlatCompiled
     build(vlat) { dut =>
       assert(runCases(dut, vlat) == ((1, 1, 0)))
       randomPrograms(
@@ -589,13 +695,16 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
           late = 3
         )
       )
+      val kinds = runCompiled(dut, vlat, compiled)
+      assert(kinds("packed") >= 9) // measured: 18 of 20
     }
   }
 
   test(
-    "W-full variant (8 registers, 4 banks x 64 words, mixed latencies) on the RTL: random W programs"
+    "W-full variant (8 registers, 4 banks x 64 words, mixed latencies) on the RTL: random W programs; compiled kernels"
   ) {
     assert(CoreParams.check(variant).isRight)
+    val compiled = variantCompiled
     simulate(new Core(CoreParams(variant))) { dut =>
       randomPrograms(
         dut,
@@ -632,11 +741,17 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
           late = 3
         )
       )
+      val kinds = runCompiled(dut, variant, compiled)
+      // 8 registers. Measured: 15 packed and 3 kernel fallbacks (NoAttemptFits) of 20.
+      assert(kinds("packed") >= 7 && kinds("NoAttemptFits") >= 1)
     }
   }
 }
 
 object RtlMvp2Spec {
+
+  /** A compiled program, its inputs, and its hand-computed outputs (array and values) if any. */
+  final case class Compiled(c: CompiledKernel, in: Values, hand: Option[(String, Vector[Long])])
 
   /** How many programs of each generator a build runs (dense legal, dense illegal, spaced, LD/LD.W
     * clashes), and the minimum counts of their shapes, of the rules the core signals first, of L3

@@ -38,6 +38,7 @@ class FusionSpec extends AnyFunSuite {
         case Node.Compute(op, a, b) => values(i) = op(v(i, a), v(i, b)); mem
         case Node.Mac(a, b, c)      => values(i) = Op.Add(Op.Mul(v(i, a), v(i, b)), v(i, c)); mem
         case Node.Store(a, x)       => mem.updated(a, v(i, x))
+        case other                  => fail(s"$other: not a node of a scalar DAG")
       }
       done(i) = true
       after

@@ -522,3 +522,19 @@
   - 新しい失敗の理由と数を `benchmarks/SIMD.md` に記録し、[COMPILER.md](COMPILER.md) に W の節を足す（第4〜5段）
   - Modulo Scheduling の今の実装（ADR-0015）は、命令列を直線に展開し、反復ごとに別の仮想レジスタにするので、modulo variable expansion は要らない。その代わり、レジスタに収まらないループは II を上げるので（理由 (b)）、W の効果がそこで失われ得る。MinAvg は下限で、実際に同時に生きる値（MaxLive）はそれより多くなり得る（オーナーの補足）。レジスタの圧力を考えた Modulo Scheduling の研究は #131 で行う
   - #110 の第1段では、コンパイラの入口（`KernelCompiler.prepare`、`ModuloCompiler.prepare`）は mvp-2 の machine を理由付きで拒否する（入力の誤り。`compiler/run compile` は終了コード2）
+  - 2026-10-30 の補足（#110 の第4段の前半。list scheduling のコンパイラ）: 上の決定のうち、詰め込み、組を考えたスケジュールと割り当て、rematerialization、スカラーへの fallback を list scheduling について実装した（[COMPILER.md](COMPILER.md)「ISA mvp-2（W）」）。上の「影響」の最後の項の拒否は、list scheduling（`KernelCompiler`）には当てはまらなくなった。Modulo Scheduling（`ModuloCompiler`）は、自分の理由 `ISA mvp-2 is not implemented in Modulo Scheduling yet (#110 stage 5)` で第5段まで拒否する。`saxpy8` の cycles は W-full で 15、W-reg で 27 で、#78 の見積り（15、27）と同じである。`fir4x8`・`matmul3` もコンパイルして出力を確かめるが、cycles と演算の数を見積りと比べて記録するのは第4段の後半である（#110 第4段の Q9）。この決定が定めていなかった点は、次のように実装した（どれも #110 の既定で、オーナーの判断ではない。「#110 第4段の Qn」は第4段がオーナーに諮る問いの番号で、ADR-0022 の補足などの「#110 の Q3」（第3段の後の問い）とは別である）
+    - パスの場所: `Pack` は `KernelCompiler.prepare` の中で `Fusion.fuse` の後に行う。`Prepared.dag` は融合したスカラーの DAG のままで、`Prepared.packing` に詰めた結果を足した。`CompiledKernel.dag` は、詰めたときは詰めた DAG、fallback ではスカラーの DAG である
+    - 規則1: ST の組は、どの配列の語かを見ず、番地だけで小さい方から作る。断った組の上の語は、次の語と組になり得る（次の候補は w+1 から）。2回以上 ST する語は組にしない（理由 `StoredTwice`）。組を作る関数は `Pack.storePairs` の1つで、#110 第4段の Q1 で行ごとの組（2段の規則）を選ぶなら、ここだけを替える
+    - 規則3: LD.W は、DAG のどの ST も書かない語だけに使う。ST のある語の LD は、LD のノードのまま集めにする（メモリ順序の辺を保つため。DSL は書いた語を読まない）
+    - 規則4: スカラーのノードの置き場は1つ（自分のレジスタ、1つの集めの1つのレーン、1つのベクトル演算の1つのレーンのどれか）とした。「別の組の逆のレーン」だけでなく、同じレーンの別の集めもぶつかるとする。ベクトル演算のレーンにした計算した値は、読む側がすべて、同じレーンでその組を読むベクトル演算か、そのレーンの ST でなければならず、まだたどっていない木の読む側はスカラーと数える（決定的で保守的。#110 第4段の Q3）。このため規則6の共有は、ST の組をまたいでは LD.W と集めにだけ働き、計算したベクトルは1つの ST の組の木の中でだけ共有する。2つの ST の組が計算したベクトルを共有するときは、どちらの組も詰めない（先の組は、後の木の読む側がスカラーと数えられるため。後の組は、先の組がスカラーのまま残り、その読む側がスカラーになるため）
+    - 規則5: W-full では、根が集めの組も ST.W にする（関係の無い2つの値の ST.W。#110 第4段の Q2）。W-reg では、根が集めの組は詰めない（理由 `RootDiffers`。ベクトル演算も ST.W も残らないため）
+    - 規則ではない理由として、組にすると依存の閉路ができる組を詰めない（`Cycle`）。スカラーのレーンの理由の名前は `NoNeighbour`・`RootDiffers`・`SameValue`・`NeededElsewhere`・`Cycle`・`StoredTwice` とした（#110 第4段の Q8）
+    - 詰めた DAG のノードの番号は、Kahn の方法で、鍵（スカラーのノードはその番号、組のノードと ST.W はレーンの番号の大きい方、レーンの ST は元の ST の番号。同じならスカラーが先）の小さい順に付ける。組が無ければ融合した DAG の番号のままである
+    - スカラーの best fit は、DAG に組があるときだけ使う。組の無い DAG（mvp-0・mvp-1 と、mvp-2 のカーネルの fallback）は空いている最も小さいレジスタのままにし、fallback の命令列を mvp-1 の命令列と同じにした（#110 第4段の Q7）
+    - `NoAlignedPair` は、重みの和がレジスタ数以下なのに、組の始まる cycle に整列した組が空いていない失敗で、上限付きの試行でも起こり得る（断片化）。重みの和がレジスタ数を超える上限なしの試行は `TooManyLive` とする
+    - 組と集めは、最初の書く側の発行から最後の読む側の発行まで重み2と数え、レーンごとには解放しない（W-reg の2つのレーンの ST の間も2のまま。#110 第4段の Q10）。レーンごとの解放は、上限の下で置けるノードを増やす最適化で、第4段では行わない
+    - 集めのレーンの LD は複製しない（集め全体の複製は第4段の後半で要るかを測る。#110 第4段の Q5）。`Dag.loads` は LD と LD.W を数え、試行の選び方の「LD の少ない方」は LD.W の複製にも当てはまる
+    - 結果の型: 通常の利用は `CompiledKernel.simd`（`Scalar`・`Packed`・`Fallback(NothingToPack | NoAttemptFits(試行ごとの失敗))`）、比較の実験は `KernelCompiler.candidate` の `SimdCandidate`（`Packed`・`Infeasible`・`NothingToPack`）とした。通常の利用は、詰めた命令列がスカラーより遅くても詰めた方を使う（fallback は失敗のときだけ。#110 第4段の Q4）。スカラーの DAG の命令列を W の無い結果（`Simd.Scalar`）にする `KernelCompiler.finish(p, allocated)` は、mvp-2 の machine では理由付きで拒否し、戦略を固定した系列（`BenchmarkRecords.fixed`）も mvp-2 の machine を拒否する（黙ってスカラーの値に置き換えないため）
+    - CLI: `compiler/run compile` は、mvp-2 の machine で W の結果を表示し、テストケースの説明にも書く。fallback も終了コード0で、スカラーでも収まらないときだけ入力の誤り（終了コード2）とし、両方の理由を書く。新しいオプションは足していない（#110 第4段の Q6）
+    - mutant を3つ足した（`pack-nonadjacent-stores`、`codegen-gather-lane-swap`、`sched-pair-weight-one`。`scripts/mutants.tsv` の最後に足し、今までの mutant の shard を変えない。69 になった）
+    - 新しい Verilator のビルドは足していない。コンパイルした W の命令列は、`crosscheck/RtlMvp2Spec` の今の4つのビルドの中で RTL で実行する

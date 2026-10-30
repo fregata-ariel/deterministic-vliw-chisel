@@ -3,7 +3,7 @@ package vliw.compiler.schedule
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.KernelCompiler
-import vliw.compiler.dag.{Dag, Fusion, Node}
+import vliw.compiler.dag.{Dag, Fusion, Node, Src}
 import vliw.compiler.dsl._
 import vliw.compiler.dsl.LoweredKernel.{Bin, Read, Write}
 import vliw.isa._
@@ -31,12 +31,17 @@ class ScheduleSpec extends AnyFunSuite {
   private def preparedDag(k: Kernel, m: MachineDescription) =
     KernelCompiler.prepare(k, m).fold(e => fail(e), identity).dag
 
-  /** Registers read by the operand fields of a node (L11). */
+  /** Registers read by the operand fields of a node (L11, form F: docs/ISA.md "mvp-2: W"). */
   private def reads(n: Node) = n match {
-    case _: Node.Compute => 2
-    case _: Node.Mac     => 3
-    case _: Node.Store   => 1
-    case _: Node.Load    => 0
+    case _: Node.Compute   => 2
+    case _: Node.Mac       => 3
+    case _: Node.Store     => 1
+    case _: Node.Load      => 0
+    case _: Node.VCompute  => 2
+    case _: Node.VMac      => 3
+    case _: Node.StoreW    => 1
+    case _: Node.StoreLane => 1
+    case _: Node.LoadW     => 0
   }
 
   /** Every constraint a schedule must meet, checked independently of the scheduler. */
@@ -52,8 +57,9 @@ class ScheduleSpec extends AnyFunSuite {
       case ((c, comp), ns) if ns.size > 1 =>
         s"cycle $c: ${ns.size} ${if (comp) "compute" else "memory"} operations"
     }
+    // One reservation per operation that writes back (a pair too); stores of every kind write none.
     val portUsers = all.collect {
-      case i if !d.nodes(i).isInstanceOf[Node.Store] =>
+      case i if d.machine.operation(d.nodes(i).mnemonic).writeback.nonEmpty =>
         (isCompute(i), s.issue(i) + d.latency(i)) -> i
     }
     val ports = portUsers.groupBy(_._1).collect {
@@ -98,7 +104,7 @@ class ScheduleSpec extends AnyFunSuite {
       }
     val cycles = 0 to s.issue.maxOption.getOrElse(0)
     val computeAt = d.nodes.indices.filter(op(_).slot == Slot.Compute).groupBy(s.issue)
-    val stores = d.nodes.indices.filter(d.nodes(_).isInstanceOf[Node.Store])
+    val stores = d.nodes.indices.filter(i => Set("ST", "ST.W")(d.nodes(i).mnemonic))
     val compute = d.nodes.indices.filter(op(_).slot == Slot.Compute)
     val readHeld = cycles.count { c =>
       val bundle = computeAt.getOrElse(c, Nil).map(i => reads(d.nodes(i))).sum
@@ -277,5 +283,107 @@ class ScheduleSpec extends AnyFunSuite {
     assert(violations(s).isEmpty, violations(s))
     val macs = d.nodes.indices.filter(d.nodes(_).isInstanceOf[Node.Mac]).map(s.issue).sorted
     assert(macs.sliding(2).forall { case Seq(a, b) => b - a >= 2; case _ => true })
+  }
+
+  // ISA mvp-2 (W, #110 stage 4): packed DAGs (docs/COMPILER.md "ISA mvp-2（W）").
+  private val mvp2 = MachineDescription
+    .load(java.nio.file.Paths.get("config", "machine-mvp2.json"))
+    .fold(es => fail(es.mkString("\n")), identity)
+  private val wMachines = mvp2 +: Seq("mvp2_mw1", "mvp2_vlat", "mvp2_vii", "mvp2_rp4")
+    .map(n => machineFile(s"$n.json"))
+  private def withRegisters(m: MachineDescription, n: Int) = {
+    val v = ujson.read(m.canonicalJson)
+    v("register_file")("count") = n
+    MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
+  }
+  private def packedDag(k: Kernel, m: MachineDescription) =
+    KernelCompiler.prepare(k, m).fold(e => fail(e), identity).packing.get.dag
+
+  /** The most registers live in one cycle, from the schedule alone (docs/COMPILER.md "ISA mvp-2
+    * （W）"): a value from its issue to its last reader's issue, 1 register for a scalar and 2 for a
+    * LD.W or a vector operation; a gather is 2 registers from its earlier lane to the last reader
+    * of either lane.
+    */
+  private def maxRegisters(s: Schedule): Int = {
+    val d = s.dag
+    def isPair(n: Node) = n match {
+      case _: Node.LoadW | _: Node.VCompute | _: Node.VMac => true
+      case _                                               => false
+    }
+    def isStore(n: Node) = n match {
+      case _: Node.Store | _: Node.StoreW | _: Node.StoreLane => true
+      case _                                                  => false
+    }
+    val gathers = d.nodes.flatMap(_.sources).collect { case g: Src.Gather => (g.lo, g.hi) }.distinct
+    val lanes = gathers.flatMap { case (lo, hi) => Seq(lo, hi) }.toSet
+    def held(nodes: Seq[Int], weight: Int) = {
+      val start = nodes.map(s.issue).min
+      val readers = d.nodes.indices.filter(j => d.nodes(j).operands.exists(nodes.contains))
+      (start, readers.map(s.issue).maxOption.getOrElse(start + 1), weight)
+    }
+    val held2 = gathers.map { case (lo, hi) => held(Seq(lo, hi), 2) } ++
+      d.nodes.indices.collect {
+        case i if !isStore(d.nodes(i)) && !lanes(i) =>
+          held(Seq(i), if (isPair(d.nodes(i))) 2 else 1)
+      }
+    (0 to s.halt).map(c => held2.collect { case (a, b, w) if a <= c && c < b => w }.sum).max
+  }
+
+  test("ISA mvp-2: packed schedules meet every constraint, and a limit holds by registers") {
+    val kernels = Benchmarks.all :+ Benchmarks.saxpy(7)
+    val machines =
+      wMachines :+ withRegisters(mvp2, 8) :+ withRegisters(machineFile("mvp2_mw1.json"), 8)
+    val random = RandomKernels.kernels(110L, 60)
+    var limited = 0
+    val together = for {
+      m <- machines; k <- kernels ++ (if (m.registerCount == 16) random else Nil)
+      p <- Priority.all
+      l <- None +: (0 to m.registerCount / 2).map(r =>
+        Some(ListScheduler.Limit(m.registerCount, r))
+      )
+      s <- ListScheduler.run(packedDag(k, m), p, l)
+    } yield {
+      val d = s.dag
+      val label = s"${k.name} on ${m.machineId} (${m.registerCount}) with ${p.name}, $l"
+      assert(violations(s).isEmpty, s"$label: ${violations(s)}")
+      assert(s.cycles >= d.cyclesLowerBound && s.cycles >= d.resourceLowerBound, label)
+      // Under a limit, pairs and gathers count 2 (ADR-0023): never more registers than the limit.
+      l.foreach { x =>
+        limited += 1
+        assert(maxRegisters(s) <= x.registers, s"$label: ${maxRegisters(s)} registers live")
+      }
+      // VMAC (3 fields) with ST.W (1) in one bundle needs 4 read ports.
+      m.readPorts -> s.bundles.count { b =>
+        b.compute.exists(d.nodes(_).isInstanceOf[Node.VMac]) &&
+        b.memory.exists(d.nodes(_).isInstanceOf[Node.StoreW])
+      }
+    }
+    val byPorts = together.groupMapReduce(_._1)(_._2)(_ + _)
+    assert(byPorts(3) == 0 && byPorts(4) > 0, byPorts)
+    assert(limited > 1000, limited)
+  }
+
+  test("ISA mvp-2: heldByReadPorts counts ST.W and lane STs; the counts agree with a recount") {
+    // saxpy8, critical-path: the ST.W (or lane ST) ready beside a VMAC waits at three VMACs.
+    val full = ListScheduler.schedule(packedDag(Benchmarks.saxpy(8), mvp2))
+    assert(full.cycles == 15 && full.heldByReadPorts == 3 && full.heldByWritePort == 0)
+    val reg = ListScheduler.schedule(packedDag(Benchmarks.saxpy(8), machineFile("mvp2_mw1.json")))
+    assert(reg.cycles == 27 && reg.heldByReadPorts == 3)
+    for (m <- wMachines; k <- Benchmarks.all :+ Benchmarks.saxpy(7); p <- Priority.all) {
+      val s = ListScheduler.schedule(packedDag(k, m), p)
+      assert((s.heldByReadPorts, s.heldByWritePort) == recount(s), s"${k.name} ${m.machineId} $p")
+    }
+  }
+
+  test("ISA mvp-2: a MAC that would commit with a VMAC waits for the write-back port (mvp2_vlat)") {
+    // saxpy7 on mvp2_vlat (VMAC latency 3, MAC 2), critical-path: the VMACs issue at 9, 10 and 11;
+    // the MAC is ready at 11, where E_13 belongs to the VMAC at 10, and at 12, where E_14 belongs to
+    // the VMAC at 11. It issues at 13.
+    val d = packedDag(Benchmarks.saxpy(7), machineFile("mvp2_vlat.json"))
+    val s = ListScheduler.schedule(d)
+    val at = d.nodes.indices.groupMap(d.nodes(_).mnemonic)(s.issue)
+    assert(at("VMAC") == Seq(9, 10, 11) && at("MAC") == Seq(13))
+    assert(s.heldByWritePort == 2 && violations(s).isEmpty)
+    assert((s.heldByReadPorts, s.heldByWritePort) == recount(s))
   }
 }

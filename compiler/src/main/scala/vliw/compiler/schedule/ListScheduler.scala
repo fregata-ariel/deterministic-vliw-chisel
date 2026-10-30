@@ -14,11 +14,11 @@ final case class Slots(compute: Option[Int], memory: Option[Int])
   * HALT at `halt`, the boundary at which the last operation completes. `cycles = halt + 1`.
   *
   * List scheduling also counts the cycles in which one constraint alone held back a ready node, for
-  * the records (other schedules leave the counts 0). `heldByReadPorts`: a ready ST met every other
-  * constraint, but the reads of the bundle would exceed the read ports (L11). `heldByWritePort`: a
-  * ready compute node met every other constraint, but its write-back port was taken at its boundary
-  * (L5). The register limit is one of the constraints; another node may still issue in the slot.
-  * The counts do not change the schedule.
+  * the records (other schedules leave the counts 0). `heldByReadPorts`: a ready store (ST, ST.W or
+  * a lane ST) met every other constraint, but the reads of the bundle would exceed the read ports
+  * (L11). `heldByWritePort`: a ready compute node met every other constraint, but its write-back
+  * port was taken at its boundary (L5). The register limit is one of the constraints; another node
+  * may still issue in the slot. The counts do not change the schedule.
   */
 final case class Schedule(
     dag: Dag,
@@ -64,27 +64,34 @@ object Priority {
 /** Cycle-by-cycle list scheduling under the resource limits of the machine description. */
 object ListScheduler {
   def slot(n: Node): Slot = n match {
-    case _: Node.Compute | _: Node.Mac => Slot.Compute
-    case _: Node.Load | _: Node.Store  => Slot.Memory
+    case _: Node.Compute | _: Node.Mac | _: Node.VCompute | _: Node.VMac => Slot.Compute
+    case _: Node.Load | _: Node.Store | _: Node.LoadW | _: Node.StoreW | _: Node.StoreLane =>
+      Slot.Memory
   }
 
-  /** Write-back port used at E_(s+L), if any (ST commits to the scratchpad, not to the RF). */
+  /** Write-back port used at E_(s+L), if any (ST commits to the scratchpad, not to the RF). A
+    * vector operation and LD.W commit a pair with one reservation of the port (L5 counts
+    * operations).
+    */
   def port(n: Node): Option[Slot] = n match {
-    case _: Node.Compute | _: Node.Mac => Some(Slot.Compute)
-    case _: Node.Load                  => Some(Slot.Memory)
-    case _: Node.Store                 => None
+    case _: Node.Compute | _: Node.Mac | _: Node.VCompute | _: Node.VMac => Some(Slot.Compute)
+    case _: Node.Load | _: Node.LoadW                                    => Some(Slot.Memory)
+    case _: Node.Store | _: Node.StoreW | _: Node.StoreLane              => None
   }
 
-  /** Registers read at issue, counted per operand field as rule L11 counts them. */
-  def reads(n: Node): Int = n.operands.size
+  /** Registers read at issue, counted per operand field as rule L11 counts them (form F: a pair, a
+    * gather and a broadcast are one field each).
+    */
+  def reads(n: Node): Int = n.fields
 
   /** Schedules without a register limit (values are virtual registers). */
   def schedule(dag: Dag, priority: Priority = Priority.CriticalPath): Schedule =
     run(dag, priority, None).getOrElse(sys.error("list scheduling without a register limit failed"))
 
-  /** Register limit for [[run]]: at most `registers` values live at any cycle (docs/COMPILER.md,
-    * "register allocation"). A load may issue only while `loadReserve` more registers stay free, so
-    * that loaded operands leave room for the results computed from them.
+  /** Register limit for [[run]]: at most `registers` registers live at any cycle (docs/COMPILER.md,
+    * "register allocation"), a pair and a gather counting 2. A load (LD or LD.W) may issue only
+    * while `loadReserve` more registers stay free, so that loaded operands leave room for the
+    * results computed from them.
     */
   final case class Limit(registers: Int, loadReserve: Int)
 
@@ -125,9 +132,15 @@ object ListScheduler {
     var bundleReads = 0 // registers read by the nodes placed in this cycle (L11)
     val unitFree = mutable.Map.empty[String, Int].withDefaultValue(0) // L9
     val ready = mutable.Set.from((0 until n).filter(missing(_) == 0))
-    // A value is live from its issue until its last reader issues (interval [s, u)).
-    val operands = dag.predecessors.map(_.filter(_.kind == EdgeKind.Data).map(_.from).distinct)
-    val readers = Array.tabulate(n)(i => dag.successors(i).count(_.kind == EdgeKind.Data))
+    // A register group (a value, a pair, or a gather) is live from the issue of its first definer
+    // until its last reader issues (interval [s, u)), and counts its weight: 1 for a scalar, 2 for
+    // a pair or a gather (ADR-0023). On a DAG without pairs, each group is one node of weight 1.
+    val group = dag.group
+    val weight = dag.groups.map(_.weight)
+    val operands =
+      dag.predecessors.map(_.filter(_.kind == EdgeKind.Data).map(e => group(e.from)).distinct)
+    val readers = dag.groupReaders.map(_.size).toArray
+    val started = Array.fill(dag.groups.size)(false)
     var live = 0
     var cycle = 0
     var left = n
@@ -136,14 +149,19 @@ object ListScheduler {
       dag.machine.operations.values.map(_.ii).max + 2
     def latency(i: Int) = dag.latency(i)
     def mnemonic(i: Int) = dag.nodes(i).mnemonic
-    def produces(i: Int) = !dag.nodes(i).isInstanceOf[Node.Store]
-    def liveAfter(i: Int) = live - operands(i).count(readers(_) == 1) + (if (produces(i)) 1 else 0)
+    // A node that starts its group adds the group's weight: a gather counts 2 from its first lane.
+    def starts(i: Int) = group(i) >= 0 && !started(group(i))
+    def liveAfter(i: Int) = live - operands(i).filter(readers(_) == 1).map(weight).sum +
+      (if (starts(i)) weight(group(i)) else 0)
 
     def timely(i: Int) = readyAt(i) <= cycle && unitFree(mnemonic(i)) <= cycle // edges, L9
     def portFree(i: Int) = port(dag.nodes(i)).forall(p => !ports.contains((p, cycle + latency(i))))
     def readsFit(i: Int) = bundleReads + reads(dag.nodes(i)) <= dag.machine.readPorts // L11
     def underLimit(i: Int) = limit.forall { l =>
-      val reserve = if (dag.nodes(i).isInstanceOf[Node.Load]) l.loadReserve else 0
+      val reserve = dag.nodes(i) match {
+        case _: Node.Load | _: Node.LoadW => l.loadReserve
+        case _                            => 0
+      }
       liveAfter(i) <= l.registers - reserve
     }
     // Every constraint but the register limit.
@@ -156,6 +174,7 @@ object ListScheduler {
     def place(i: Int): Unit = {
       live = liveAfter(i)
       operands(i).foreach(o => readers(o) -= 1)
+      if (group(i) >= 0) started(group(i)) = true
       issue(i) = cycle
       ready -= i
       left -= 1
@@ -182,7 +201,7 @@ object ListScheduler {
     // count grows at most once per cycle; the counts do not change what is placed.
     def fill(of: Int => Boolean): Unit = {
       val candidates = ready.toSeq.filter(of)
-      if (candidates.exists(i => dag.nodes(i).isInstanceOf[Node.Store] && onlyReadPorts(i)))
+      if (candidates.exists(i => dag.nodes(i).isStore && onlyReadPorts(i)))
         heldByReadPorts += 1
       if (candidates.exists(i => slot(dag.nodes(i)) == Slot.Compute && onlyWritePort(i)))
         heldByWritePort += 1
