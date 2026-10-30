@@ -79,4 +79,60 @@ object RandomLoops {
     val rng = new Random(seed)
     Vector.tabulate(n)(kernel(rng, _))
   }
+
+  /** A random loop that tends to double (ISA mvp-2, #110 stage 5): no state, `trips` iterations,
+    * reads of two inputs with strides mostly 1 (and −1, 2), values before the loop mostly at a
+    * multiplication, `out(i)` or reversed, and with probability 1/3 also `w(2i)` and `w(2i+1)`.
+    */
+  def vectorizableKernel(rng: Random, id: Int, trips: Int): LoopKernel = {
+    val n = 2 * trips + 4
+    val ops = Seq(Op.Add, Op.Sub, Op.Mul)
+    LoopKernel(s"vec$id", "i", trips) { b =>
+      val arrays = Seq(b.input("x", n), b.input("y", n))
+      val a = b.scalar("a")
+      def elem(): LoopExpr = {
+        val s = Seq(1, 1, 1, 1, -1, 2)(rng.nextInt(6))
+        val lo = if (s < 0) -s * (trips - 1) else 0
+        val hi = if (s > 0) n - 1 - s * (trips - 1) else n - 1
+        arrays(rng.nextInt(2))(Index(s, lo + rng.nextInt(hi - lo + 1)))
+      }
+      def invariant(): LoopExpr = if (rng.nextBoolean()) a else b.const(rng.nextInt(5).toLong)
+      def expr(d: Int): LoopExpr =
+        if (d == 0 || rng.nextInt(4) == 0) elem()
+        else
+          rng.nextInt(8) match {
+            case 0 | 1 => invariant() * expr(d - 1)
+            case 2     => expr(d - 1) * invariant()
+            case 3     =>
+              if (rng.nextInt(3) == 0) expr(d - 1) + invariant() else expr(d - 1) - expr(d - 1)
+            case _ => LoopExpr.Bin(ops(rng.nextInt(3)), expr(d - 1), expr(d - 1))
+          }
+      val out = b.output("out", trips)
+      val w = Option.when(rng.nextInt(3) == 0)(b.output("w", 2 * trips))
+      b.body { i =>
+        if (rng.nextInt(4) > 0) out(i) = expr(3) else out(i * -1 + (trips - 1)) = expr(3)
+        w.foreach { o => o(i * 2) = expr(2); o(i * 2 + 1) = expr(2) }
+      }
+    }
+  }
+
+  /** `n` loops of [[vectorizableKernel]] from the seed, with 1 to 8 iterations. */
+  def vectorizable(seed: Long, n: Int): Vector[LoopKernel] = {
+    val rng = new Random(seed)
+    Vector.tabulate(n) { i =>
+      val trips = 1 + rng.nextInt(8)
+      vectorizableKernel(rng, i, trips)
+    }
+  }
+
+  /** `n` long loops of [[vectorizableKernel]] from the seed, with an even trip count of 10 to 24,
+    * so that doubled loops with LD.W chains and gathers reach a steady state.
+    */
+  def longVectorizable(seed: Long, n: Int): Vector[LoopKernel] = {
+    val rng = new Random(seed)
+    Vector.tabulate(n) { i =>
+      val trips = 10 + 2 * rng.nextInt(8)
+      vectorizableKernel(rng, i, trips)
+    }
+  }
 }

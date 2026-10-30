@@ -181,6 +181,31 @@ class RowFitSpec extends AnyFunSuite {
     }
   }
 
+  test("RowFit decides MAC, VMAC, ST and ST.W on the third read port as trying every row does") {
+    // ISA mvp-2 (ADR-0023): the users of the port are MAC and VMAC (compute) and ST and ST.W
+    // (memory); each class draws its kinds from its two users and from operations that do not read
+    // through the port (MUL, VMUL; LD, LD.W), with the latencies of W-full and mvp2_vlat.
+    val rng = new Random(110)
+    val compute = Seq((Kind(2, 1, port = true, 1), true), (Kind(3, 1, port = true, 1), true)) ++
+      Seq((Kind(2, 1, port = true, 1), false), (Kind(3, 1, port = true, 1), false))
+    val memory = Seq((Kind(1, 1, port = false, 1), true), (Kind(1, 2, port = false, 1), true)) ++
+      Seq((Kind(2, 1, port = true, 1), false), (Kind(3, 1, port = true, 1), false))
+    (0 until 500).foreach { n =>
+      val ii = 2 + rng.nextInt(5)
+      def mask = (0 until ii).foldLeft(0L)((m, r) => if (rng.nextInt(5) == 0) m | (1L << r) else m)
+      val classes = Vector(compute, memory).map { from =>
+        val picked = rng.shuffle(from).take(1 + rng.nextInt(3))
+        val kinds = picked.map { case (k, _) => k.copy(count = 1 + rng.nextInt(2)) }.toVector
+        Class(kinds, mask, mask, kinds.map(_ => mask), picked.map(_._2).toVector)
+      }
+      val readPort = mask
+      assert(
+        RowFit.fitsTogether(ii, classes, readPort) == Some(bruteTogether(ii, classes, readPort)),
+        s"case $n: $ii $classes $readPort"
+      )
+    }
+  }
+
   test("RowFit: the third read port couples two classes that fit one at a time") {
     // A MAC (compute row 1 taken) and a ST (memory row 1 taken) in 2 rows: each fits alone at row
     // 0, but they cannot share its third read port.

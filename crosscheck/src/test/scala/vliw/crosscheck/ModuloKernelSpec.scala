@@ -8,7 +8,7 @@ import vliw.compiler.{KernelCompiler, Verifier}
 import vliw.compiler.dsl._
 import vliw.compiler.loop._
 import vliw.compiler.loop.Loop.{Bin, Final, Read, StateRef, Update, Write}
-import vliw.compiler.modulo.{MapEntry, ModuloCompiled, ModuloCompiler, ModuloScheduler}
+import vliw.compiler.modulo.{LoopSimd, MapEntry, ModuloCompiled, ModuloCompiler, ModuloScheduler}
 import vliw.compiler.regalloc.RegisterAllocator
 import vliw.compiler.schedule.ListScheduler
 import vliw.hw.{Core, CoreDriver, CoreParams, VliwChiselSim}
@@ -489,6 +489,126 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
       edit(pt, 9)(r => r("issue")("memory") = r("issue")("memory").str.replace("[4]", "[5]")),
       2
     )
+  }
+
+  // ISA mvp-2 (#110 stage 5a): loops doubled on W-full and its variants (rp4 and vii on the model
+  // only), and the scalar loops of W-reg and of the loops that are not doubled.
+  private val mvp2 =
+    MachineDescription.load(MachineDescription.Mvp2Path).fold(es => fail(es.mkString), identity)
+  private val mvp2Machines =
+    Seq(
+      mvp2,
+      machineFile("mvp2_rp4.json"),
+      machineFile("mvp2_vlat.json"),
+      machineFile("mvp2_vii.json")
+    )
+  private val mw1 = machineFile("mvp2_mw1.json")
+  private def fir(n: Int) = LoopBenchmarks.fir(Seq(1L, 2L, 3L, 4L), n)
+
+  /** `c` on the reference model with `inputs` random inputs: DSL results, the scheduled cycles, and
+    * the II in the trace (none for a graph of one iteration, such as a doubled loop of two).
+    */
+  private def onModel(c: ModuloCompiled, rng: Random, inputs: Int): Unit = {
+    val where = s"${c.kernel.name} (${c.kernel.index}) on ${c.machine.machineId}"
+    (0 until inputs).foreach { _ =>
+      val in = values(c.kernel.unroll, rng)
+      val run = ReferenceModel
+        .run(c.machine, c.words, c.layout.inputs(in).fold(e => fail(e), identity))
+        .fold(v => fail(s"$where: $v"), identity)
+      assert(run.cycles == c.cycles, where)
+      val out = c.layout.outputs(a => run.memory(a).getOrElse(fail(s"$where: [$a] undefined")))
+      assert(out == Interpreter.run(c.kernel.unroll, in).fold(e => fail(e), identity), where)
+      val trace = run.trace.cycles.map(_.toJson: ujson.Value)
+      val ii = Option.when(c.graph.trips > 1)(c.ii)
+      assert(ModuloTrace.check(c.graph, c.result.map, trace, c.ii) == Right(ii), where)
+    }
+  }
+
+  test(
+    "ISA mvp-2 on the reference model: doubled and scalar loops, odd and long sizes, random loops; DSL results, cycles, and the II in the trace"
+  ) {
+    val rng = new Random(110)
+    def compile(k: LoopKernel, m: MachineDescription) =
+      ModuloCompiler.compile(k, m).fold(e => fail(e), identity)
+    for (m <- mvp2Machines :+ mw1; k <- LoopBenchmarks.all) onModel(compile(k, m), rng, 3)
+    for (k <- Seq(LoopBenchmarks.saxpy(7), fir(7), fir(16), fir(32), LoopBenchmarks.saxpy(2)))
+      onModel(compile(k, mvp2), rng, 2)
+    // 60 random vectorizable loops per machine (trips 1 to 8), and 40 long ones on W-full and vlat
+    // (even trips 10 to 24, so that LD.W chains and gathers reach a steady state).
+    def run(ks: Seq[LoopKernel], m: MachineDescription): (Int, Int) =
+      ks.foldLeft((0, 0)) { case ((compiled, doubled), k) =>
+        ModuloCompiler.compile(k, m) match {
+          case Left(e) =>
+            assert(e.contains("no II from"), e)
+            (compiled, doubled)
+          case Right(c) =>
+            onModel(c, rng, 1)
+            (compiled + 1, doubled + (if (c.simd.isInstanceOf[LoopSimd.Vectorized]) 1 else 0))
+        }
+      }
+    val random = RandomLoops.vectorizable(110, 60)
+    for (m <- mvp2Machines) {
+      val (compiled, doubled) = run(random, m)
+      assert(compiled >= 58 && doubled >= 20, s"${m.machineId}: $compiled, $doubled")
+    }
+    val long = RandomLoops.longVectorizable(5110, 40)
+    for (m <- Seq(mvp2, mvp2Machines(2))) {
+      val (compiled, doubled) = run(long, m)
+      // Measured: 35 programs, 34 doubled loops of which 21 with a gather (W-full).
+      assert(compiled >= 30 && doubled >= 28, s"${m.machineId}: $compiled, $doubled")
+    }
+  }
+
+  test(
+    "the trace check of a doubled loop finds a swapped gather lane, a pair read early, a wrong LD.W"
+  ) {
+    // A doubled loop with gathers (x(2i) with stride 2) and LD.W (y(i)).
+    val k = LoopKernel("gathered", "i", 6) { b =>
+      val x = b.input("x", 12)
+      val y = b.input("y", 6)
+      val a = b.scalar("a")
+      val out = b.output("out", 6)
+      b.body(i => out(i) = a * x(i * 2) + y(i))
+    }
+    val c = ModuloCompiler.compile(k, mvp2).fold(e => fail(e), identity)
+    assert(c.simd.isInstanceOf[LoopSimd.Vectorized])
+    val in = KernelCompiler.sampleInputs(c.kernel.unroll, 1)
+    val trace = ReferenceModel
+      .run(mvp2, c.words, c.layout.inputs(in).fold(e => fail(e), identity))
+      .fold(v => fail(v.toString), identity)
+      .trace
+      .cycles
+      .map(_.toJson: ujson.Value)
+    assert(ModuloTrace.check(c.graph, c.result.map, trace, c.ii) == Right(Some(c.ii)))
+    def fails(g: LoopGraph, t: Vector[ujson.Value]) =
+      assert(ModuloTrace.check(g, c.result.map, t, c.ii).isLeft)
+    // The gather's lanes swapped in the graph: r(p) does not come from lane 0's LD.
+    val swapped = c.graph.copy(nodes = c.graph.nodes.map {
+      case LoopNode.VMac(a, VRef.Gather(lo, hi), x) => LoopNode.VMac(a, VRef.Gather(hi, lo), x)
+      case n                                        => n
+    })
+    assert(swapped != c.graph)
+    fails(swapped, trace)
+    // A pair read one row before its second register commits: the commit of r(p + 1) of an LD.W
+    // moved one row later.
+    val ldw = c.result.map.find(e => c.graph.nodes(e.instance.node).mnemonic == "LD.W").get
+    val row = ldw.bundle + mvp2.operation("LD.W").latency
+    val second = trace(ldw.bundle)("issue")("memory").str match {
+      case s"ld.w r$p:r$_, [$_]" => p.toInt + 1
+      case o                     => fail(o)
+    }
+    val late = trace.map(r => ujson.read(ujson.write(r)))
+    val moved = late(row)("rf_commit").arr.find(_("reg").num.toInt == second).get
+    late(row)("rf_commit") = ujson.Arr.from(late(row)("rf_commit").arr.filterNot(_ == moved))
+    late(row + 1)("rf_commit").arr += moved
+    fails(c.graph, late)
+    // An LD.W one word off: the doubled loop's base.
+    val wrong = trace.map(r => ujson.read(ujson.write(r)))
+    wrong(ldw.bundle)("issue")("memory") = wrong(ldw.bundle)("issue")("memory").str match {
+      case s"ld.w $p, [$a]" => s"ld.w $p, [${a.toInt + 2}]"
+      case o                => fail(o)
+    }
+    fails(c.graph, wrong)
   }
 
   /** Runs `bundles` of `c`'s loop on the reference model and returns the trace. */

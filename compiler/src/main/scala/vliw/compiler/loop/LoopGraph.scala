@@ -2,7 +2,7 @@ package vliw.compiler.loop
 
 import scala.collection.mutable
 
-import vliw.compiler.dag.{Dag, Edge, EdgeKind, Node}
+import vliw.compiler.dag.{Dag, Edge, EdgeKind, Node, Src}
 import vliw.compiler.dsl.Op
 import vliw.isa.MachineDescription
 
@@ -46,6 +46,78 @@ object LoopNode {
   final case class Store(addr: Address, value: Ref) extends LoopNode {
     def mnemonic: String = "ST"
     def operands: Vector[Ref] = Vector(value)
+  }
+
+  // ISA mvp-2 (W). Only the loop vectorization (`LoopVector`) makes these nodes, as only `dag.Pack`
+  // makes the W nodes of a DAG (docs/COMPILER.md "ループのベクトル化と Modulo Scheduling（W-full）").
+
+  /** LD.W [addr.at(k)]: the words `addr.at(k)` and `addr.at(k) + 1` into an aligned pair. */
+  final case class LoadW(addr: Address) extends LoopNode {
+    def mnemonic: String = "LD.W"
+    def operands: Vector[Ref] = Vector.empty
+  }
+
+  /** VADD, VSUB or VMUL: `op` in each lane. Only VMUL's `a` may be a broadcast. */
+  final case class VCompute(op: Op, a: VRef, b: VRef) extends LoopNode {
+    def mnemonic: String = "V" + op.mnemonic
+    def operands: Vector[Ref] = a.refs ++ b.refs
+  }
+
+  /** VMAC: `a * b + c` in each lane; `a` may be a broadcast. */
+  final case class VMac(a: VRef, b: VRef, c: VRef) extends LoopNode {
+    def mnemonic: String = "VMAC"
+    def operands: Vector[Ref] = a.refs ++ b.refs ++ c.refs
+  }
+
+  /** ST.W [addr.at(k)]: the pair `value` to the words `addr.at(k)` and `addr.at(k) + 1`. */
+  final case class StoreW(addr: Address, value: VRef) extends LoopNode {
+    def mnemonic: String = "ST.W"
+    def operands: Vector[Ref] = value.refs
+  }
+
+  /** ST [addr.at(k)] of lane `lane` of the pair node `pair`, register r(p + lane). */
+  final case class StoreLane(addr: Address, pair: Ref, lane: Int) extends LoopNode {
+    def mnemonic: String = "ST"
+    def operands: Vector[Ref] = Vector(pair)
+  }
+
+  /** The operand fields of a vector operation or of ST.W, in order; empty for the other nodes. */
+  def fields(n: LoopNode): Vector[VRef] = n match {
+    case VCompute(_, a, b) => Vector(a, b)
+    case VMac(a, b, c)     => Vector(a, b, c)
+    case StoreW(_, v)      => Vector(v)
+    case _                 => Vector.empty
+  }
+
+  /** Whether the node's value is an aligned register pair (LD.W and the vector operations). */
+  def isPair(n: LoopNode): Boolean = n match {
+    case _: LoadW | _: VCompute | _: VMac => true
+    case _                                => false
+  }
+
+  /** Whether the node stores (ST, ST.W, a lane ST), and so has no value. */
+  def isStore(n: LoopNode): Boolean = n match {
+    case _: Store | _: StoreW | _: StoreLane => true
+    case _                                   => false
+  }
+}
+
+/** An operand field of a W loop node (`dag.Src` on the loop graph): the pair of a pair node, the
+  * gather of two scalar nodes into r(p) (`lo`) and r(p+1) (`hi`), or one scalar node for both lanes
+  * (only the rs1 of VMUL and VMAC). `refs` flattens the field: a gather gives two refs.
+  */
+sealed trait VRef extends Product with Serializable {
+  def refs: Vector[Ref]
+}
+object VRef {
+  final case class Pair(r: Ref) extends VRef {
+    def refs: Vector[Ref] = Vector(r)
+  }
+  final case class Gather(lo: Ref, hi: Ref) extends VRef {
+    def refs: Vector[Ref] = Vector(lo, hi)
+  }
+  final case class Broadcast(r: Ref) extends VRef {
+    def refs: Vector[Ref] = Vector(r)
   }
 }
 
@@ -111,14 +183,31 @@ final case class LoopGraph(
     def lat(m: String) = machine.operation(m).latency
     def data(from: Int, to: Int): Unit =
       edges += Edge(from, to, lat(dagNodes(from).mnemonic), EdgeKind.Data)
+    def src(v: VRef, k: Option[Int]): Src = v match {
+      case VRef.Pair(r)        => Src.Pair(resolve(r, k))
+      case VRef.Gather(lo, hi) => Src.Gather(resolve(lo, k), resolve(hi, k))
+      case VRef.Broadcast(r)   => Src.Broadcast(resolve(r, k))
+    }
+    def dataFrom(fields: Seq[Src], id: Int): Unit =
+      fields.flatMap(_.nodes).distinct.foreach(data(_, id))
+    // Memory order by word: LD.W and ST.W have the edges of both their words.
+    def read(w: Int, id: Int): Unit = {
+      lastStore.get(w).foreach(st => edges += Edge(st, id, lat("ST"), EdgeKind.StoreToLoad))
+      loadsSinceStore(w) = loadsSinceStore(w) :+ id
+    }
+    def write(w: Int, id: Int): Unit = {
+      loadsSinceStore(w).foreach(ld => edges += Edge(ld, id, 0, EdgeKind.LoadToStore))
+      lastStore.get(w).foreach(st => edges += Edge(st, id, 1, EdgeKind.StoreToStore))
+      lastStore(w) = id
+      loadsSinceStore(w) = Vector.empty
+    }
     origin.zipWithIndex.foreach { case (Instance(n, k), id) =>
       val at = k.getOrElse(0)
       nodes(n) match {
         case LoopNode.Load(a) =>
           val w = a.at(at)
           dagNodes += Node.Load(w)
-          lastStore.get(w).foreach(st => edges += Edge(st, id, lat("ST"), EdgeKind.StoreToLoad))
-          loadsSinceStore(w) = loadsSinceStore(w) :+ id
+          read(w, id)
         case LoopNode.Compute(op, a, b) =>
           val (x, y) = (resolve(a, k), resolve(b, k))
           dagNodes += Node.Compute(op, x, y)
@@ -133,10 +222,33 @@ final case class LoopGraph(
           val x = resolve(v, k)
           dagNodes += Node.Store(w, x)
           data(x, id)
-          loadsSinceStore(w).foreach(ld => edges += Edge(ld, id, 0, EdgeKind.LoadToStore))
-          lastStore.get(w).foreach(st => edges += Edge(st, id, 1, EdgeKind.StoreToStore))
-          lastStore(w) = id
-          loadsSinceStore(w) = Vector.empty
+          write(w, id)
+        case LoopNode.LoadW(a) =>
+          val w = a.at(at)
+          dagNodes += Node.LoadW(w)
+          read(w, id)
+          read(w + 1, id)
+        case LoopNode.VCompute(op, a, b) =>
+          val (x, y) = (src(a, k), src(b, k))
+          dagNodes += Node.VCompute(op, x, y)
+          dataFrom(Seq(x, y), id)
+        case LoopNode.VMac(a, b, c) =>
+          val (x, y, z) = (src(a, k), src(b, k), src(c, k))
+          dagNodes += Node.VMac(x, y, z)
+          dataFrom(Seq(x, y, z), id)
+        case LoopNode.StoreW(a, v) =>
+          val w = a.at(at)
+          val x = src(v, k)
+          dagNodes += Node.StoreW(w, x)
+          dataFrom(Seq(x), id)
+          write(w, id)
+          write(w + 1, id)
+        case LoopNode.StoreLane(a, p, lane) =>
+          val w = a.at(at)
+          val x = resolve(p, k)
+          dagNodes += Node.StoreLane(w, x, lane)
+          data(x, id)
+          write(w, id)
       }
     }
     assert(edges.forall(e => e.from < e.to), "the expanded loop is not in a topological order")
