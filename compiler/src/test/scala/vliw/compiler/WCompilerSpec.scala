@@ -210,14 +210,22 @@ class WCompilerSpec extends AnyFunSuite {
     val w = compiled(matmul3, mw1)
     assert(w.bundles.map(_.memory).collect { case MemoryOp.St(a, _) => a }.sorted == (18 to 26))
     assert(w.dag.gathers.size == 3)
-    // read_ports 4 (the estimates are 26 and 24): VMAC and ST.W share a bundle.
-    for ((k, cycles) <- Seq(fir4x8 -> 23, matmul3 -> 24)) {
+    // read_ports 4 (the estimates are 26 and 24): VMAC and ST.W share a bundle (matmul3 also has
+    // MAC with ST, which `fourFields` would accept). fir4x8 copies 4 LD.W, as on W-full.
+    val rp4Rows = Seq(fir4x8 -> 23, matmul3 -> 24).map { case (k, cycles) =>
       val c = compiled(k, rp4)
       assert(c.simd.isInstanceOf[Simd.Packed] && c.cycles == cycles, k.name)
-      assert(c.allocated.attempt.toString == limited && c.bundles.exists(fourFields), k.name)
+      assert(c.allocated.attempt.toString == limited && c.bundles.exists(vmacStW), k.name)
       invariants(c)
       (0 until 3).foreach(_ => computes(c, RandomKernels.values(k, rng)))
+      c
     }
+    assert(operations(rp4Rows.head)("LD.W") == 14)
+    // mvp2_vlat packs matmul3 (34 cycles); rule 1 as written falls back to the scalar code (39).
+    val vl = compiled(matmul3, vlat)
+    assert(vl.simd.isInstanceOf[Simd.Packed] && vl.cycles == 34)
+    invariants(vl)
+    (0 until 3).foreach(_ => computes(vl, RandomKernels.values(matmul3, rng)))
   }
 
   test("saxpy1: the kernel fallback NothingToPack, with the mvp-1 code") {
@@ -293,7 +301,7 @@ class WCompilerSpec extends AnyFunSuite {
         }
     info(got.mkString("; "))
     // read_ports 4 lets VMAC and ST.W share a bundle (the #78 estimate for saxpy8 is 14).
-    assert(compiled(saxpy8, rp4).bundles.exists(fourFields))
+    assert(compiled(saxpy8, rp4).bundles.exists(vmacStW))
     assert(compiled(saxpy8, rp4).cycles == 14)
   }
 }
@@ -334,6 +342,10 @@ object WCompilerSpec {
   def fourFields(b: Bundle): Boolean =
     (b.compute.isInstanceOf[ComputeOp.Mac] || b.compute.isInstanceOf[ComputeOp.VMac]) &&
       (b.memory.isInstanceOf[MemoryOp.St] || b.memory.isInstanceOf[MemoryOp.StW])
+
+  /** A bundle with VMAC and ST.W (4 operand fields; possible only with `read_ports` 4). */
+  def vmacStW(b: Bundle): Boolean =
+    b.compute.isInstanceOf[ComputeOp.VMac] && b.memory.isInstanceOf[MemoryOp.StW]
 
   /** The registers an operation writes. */
   def writes(op: ComputeOp): Seq[Int] = op match {

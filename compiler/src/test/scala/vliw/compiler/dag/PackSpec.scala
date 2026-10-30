@@ -292,11 +292,15 @@ class PackSpec extends AnyFunSuite {
     // [10] = [0] * [5]; [11] = [1] * [5]: the multiplicand equal in both lanes moves to rs1.
     assert(free(Write(10, mul(r(0), r(5))), Write(11, mul(r(1), r(5)))))
     // Not gather-free: a copy of two LDs (no operation at the root); the same value outside a
-    // multiplication's rs1; adjacent LDs of a word that is written; LDs in the other lane order;
-    // different operations; a word stored twice.
+    // multiplication's rs1 (an ADD, a MAC's rs3 beside a broadcast at its rs1); adjacent LDs of a
+    // word that is written (lane 0's or lane 1's); LDs in the other lane order; different
+    // operations; a word stored twice.
     assert(!free(Write(10, r(0)), Write(11, r(1))))
     assert(!free(Write(10, add(r(0), r(5))), Write(11, add(r(1), r(5)))))
+    assert(free(Write(10, add(mul(r(0), r(5)), r(7))), Write(11, add(mul(r(1), r(5)), r(8)))))
+    assert(!free(Write(10, add(mul(r(0), r(5)), r(7))), Write(11, add(mul(r(1), r(5)), r(7)))))
     assert(!free(Write(10, add(r(0), r(2))), Write(11, add(r(1), r(3))), Write(0, r(4))))
+    assert(!free(Write(10, add(r(0), r(2))), Write(11, add(r(1), r(3))), Write(1, r(4))))
     assert(!free(Write(10, add(r(1), r(2))), Write(11, add(r(0), r(3)))))
     assert(!free(Write(10, add(r(0), r(2))), Write(11, sub(r(1), r(3)))))
     assert(!free(Write(10, add(r(0), r(2))), Write(10, r(4)), Write(11, add(r(1), r(3)))))
