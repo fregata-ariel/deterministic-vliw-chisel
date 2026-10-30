@@ -41,8 +41,9 @@ object NotDoubled {
 
 /** Loop vectorization by 2 (ISA mvp-2, ADR-0023; docs/COMPILER.md "ループのベクトル化と Modulo
   * Scheduling（W-full）"), on the fused scalar loop graph G (after `LoopFusion`, ADR-0019). Iteration
-  * k' of the doubled graph runs iterations 2k' (lane 0) and 2k' + 1 (lane 1) of G. Body packing of
-  * the loops that are not doubled is #110 stage 5b.
+  * k' of the doubled graph runs iterations 2k' (lane 0) and 2k' + 1 (lane 1) of G. The body of a
+  * loop that is not doubled is packed by `LoopPack` (#110 stage 5b), which reads G as the doubling
+  * does ([[unshared]], [[chains]]); the two are never combined.
   */
 object LoopVector {
   import NotDoubled._
@@ -145,20 +146,6 @@ object LoopVector {
         }
       }
       .distinct
-  }
-
-  /** Whether G has a rule-1 candidate: two body stores at `Address(b, s)` and `Address(b + 1, s)`
-    * with the same stride (adjacent in every iteration), or two stores after the loop at w and w + 1.
-    * A body store never pairs with a final. Without one no pair can form, so the loop has nothing
-    * to pack (ADR-0023's `NothingToPack`); #110 stage 5a decides only this, and stage 5b packs the
-    * body.
-    */
-  def ruleOneCandidate(g: LoopGraph): Boolean = {
-    val stores = g.nodes.indices.collect {
-      case n if g.places(n) != Place.Before && g.nodes(n).isInstanceOf[LoopNode.Store] =>
-        (g.places(n), g.nodes(n).asInstanceOf[LoopNode.Store].addr)
-    }.toSet
-    stores.exists { case (p, a) => stores.contains((p, Address(a.base + 1, a.stride))) }
   }
 
   /** The read of the operand `r` of G when it is a LD: its place, and its address in the iteration

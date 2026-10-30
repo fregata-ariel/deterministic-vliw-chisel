@@ -10,8 +10,8 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.{CompiledKernel, FallbackReason, KernelCompiler, Simd, Verifier}
 import vliw.compiler.dsl.{Benchmarks, Interpreter, Kernel, RandomKernels, Values}
-import vliw.compiler.loop.{LoopBenchmarks, LoopKernel, RandomLoops}
-import vliw.compiler.modulo.{LoopSimd, ModuloCompiled, ModuloCompiler}
+import vliw.compiler.loop.{LoopBenchmarks, LoopKernel, LoopNode, Place, RandomLoops, VRef}
+import vliw.compiler.modulo.{LoopDecision, LoopSimd, ModuloCompiled, ModuloCompiler}
 import vliw.hw.{AssertionSpec, CaseBuildSpec, CaseSpec}
 import vliw.hw.{Core, CoreDriver, CoreParams, CoreRun, VliwChiselSim}
 import vliw.isa._
@@ -553,21 +553,42 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
   private lazy val vlatCompiled = compiledFor(vlat, 20, small = false)
   private lazy val variantCompiled = compiledFor(variant, 20, small = false)
 
-  // Modulo-scheduled loops (#110 stage 5a) in the same builds: on W-full the six loops (saxpy8
-  // and fir4x8 doubled), saxpy(7) and the first 20 random vectorizable loops with a program; on
-  // W-reg the six as scalar loops (#78 Q8 (c)); on vlat the six; on the variant saxpy8 (doubled,
-  // II 5), fir4x8 (its scalar loop: no W II), product8 and dot8 (matmul3 has no program there).
+  // Modulo-scheduled loops (#110 stage 5) in the same builds: on W-full the six loops (saxpy8 and
+  // fir4x8 doubled, matmul3's two loops packed), saxpy(7), the first 20 random vectorizable loops
+  // with a program, and the first 6 packed `packable` loops with a vector state or a gather of two
+  // values before the loop; on W-reg the six as scalar loops (#78 Q8 (c)); on vlat the six; on the
+  // variant saxpy8 (doubled, II 5), fir4x8 (its scalar loop: no W II), product8 and dot8 (matmul3
+  // has no program there).
 
   private def loopsFor(m: MachineDescription, ks: Seq[LoopKernel]): Vector[ModuloCompiled] =
     ks.map(k =>
       ModuloCompiler.compile(k, m).fold(e => fail(s"${k.name} on ${m.machineId}: $e"), identity)
     ).toVector
 
+  /** A packed loop with a vector state, or with a gather of two values before the loop. */
+  private def packedWithState(c: ModuloCompiled) = c.simd match {
+    case LoopSimd.Vectorized(d) if d.packed =>
+      val g = c.graph
+      d.body.exists(_.vectorStates > 0) || g
+        .ids(Place.Each)
+        .flatMap(n => LoopNode.fields(g.nodes(n)))
+        .exists {
+          case VRef.Gather(lo, _) => g.places(lo.node) == Place.Before
+          case _                  => false
+        }
+    case _ => false
+  }
+
   private lazy val fullLoops = loopsFor(full, LoopBenchmarks.all :+ LoopBenchmarks.saxpy(7)) ++
     RandomLoops
       .vectorizable(110, 30)
       .flatMap(ModuloCompiler.compile(_, full).toOption)
-      .take(20)
+      .take(20) ++
+    RandomLoops
+      .packable(5, 50)
+      .flatMap(ModuloCompiler.compile(_, full).toOption)
+      .filter(packedWithState)
+      .take(6)
   private lazy val mw1Loops = loopsFor(mw1, LoopBenchmarks.all)
   private lazy val vlatLoops = loopsFor(vlat, LoopBenchmarks.all)
   private lazy val variantLoops = loopsFor(
@@ -582,9 +603,13 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
 
   /** Runs the loops on the core: as the model (trace, cycles, registers, memory), the DSL reference
     * implementation, the scheduler's cycles, and `ModuloTrace` on the core's trace. Returns how
-    * many were doubled.
+    * many were doubled, and how many had their body packed.
     */
-  private def runLoops(dut: Core, m: MachineDescription, loops: Vector[ModuloCompiled]): Int = {
+  private def runLoops(
+      dut: Core,
+      m: MachineDescription,
+      loops: Vector[ModuloCompiled]
+  ): (Int, Int) = {
     val rng = new Random(1105L + m.registerCount)
     loops.foreach { c =>
       val in = RandomKernels.values(c.kernel.unroll, rng)
@@ -597,15 +622,19 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       val ii = Option.when(c.graph.trips > 1)(c.ii)
       assert(ModuloTrace.check(c.graph, c.result.map, r.trace, c.ii) == Right(ii), label)
     }
-    val doubled = loops.count(_.simd.isInstanceOf[LoopSimd.Vectorized])
+    def count(p: LoopDecision => Boolean) = loops.count(_.simd match {
+      case LoopSimd.Vectorized(d) => p(d)
+      case _                      => false
+    })
+    val (doubled, packed) = (count(_.doubled), count(_.packed))
     info(
-      s"${loops.size} modulo-scheduled loops, $doubled doubled; " +
+      s"${loops.size} modulo-scheduled loops, $doubled doubled, $packed packed; " +
         loops
           .take(6)
           .map(c => s"${c.kernel.name} (${c.kernel.index}) ${c.ii} / ${c.cycles}")
           .mkString(", ")
     )
-    doubled
+    (doubled, packed)
   }
 
   // The minimum counts are about half of those measured when they were set (#110 stage 3); the
@@ -669,8 +698,10 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       val kinds = runCompiled(dut, full, compiled)
       // Measured: 27 packed (14 with a lane fallback) and 3 NothingToPack of 30 random kernels.
       assert(kinds("packed") >= 13 && kinds("lane fallback") >= 7 && kinds("NothingToPack") >= 1)
-      // saxpy8, fir4x8 and the doubled random loops (measured: 2 + 8 of 27 loops).
-      assert(runLoops(dut, full, loops) >= 8)
+      // Of 33 loops, measured: 10 doubled (saxpy8, fir4x8 and 8 random) and 14 packed (matmul3's
+      // two loops, 6 random vectorizable and 6 packable loops).
+      val (doubled, packed) = runLoops(dut, full, loops)
+      assert(doubled >= 8 && packed >= 12, (doubled, packed))
     }
   }
 
@@ -711,7 +742,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
         )
       )
       val kinds = runCompiled(dut, mw1, compiled)
-      assert(runLoops(dut, mw1, loops) == 0) // W-reg: the scalar loops (#78 Q8 (c))
+      assert(runLoops(dut, mw1, loops) == ((0, 0))) // W-reg: the scalar loops (#78 Q8 (c))
       // Measured: 10 packed (all with a lane fallback) and 20 NothingToPack (RootDiffers, mostly).
       assert(kinds("packed") >= 5 && kinds("lane fallback") >= 5 && kinds("NothingToPack") >= 10)
     }
@@ -760,7 +791,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
         )
       )
       val kinds = runCompiled(dut, vlat, compiled)
-      assert(runLoops(dut, vlat, loops) == 2) // saxpy8 and fir4x8
+      assert(runLoops(dut, vlat, loops) == ((2, 2))) // saxpy8 and fir4x8; matmul3 (i) and (m)
       assert(kinds("packed") >= 9) // measured: 18 of 20
     }
   }
@@ -808,7 +839,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
         )
       )
       val kinds = runCompiled(dut, variant, compiled)
-      assert(runLoops(dut, variant, loops) == 1) // saxpy8; fir4x8 falls back (no W II)
+      assert(runLoops(dut, variant, loops) == ((1, 0))) // saxpy8; fir4x8 falls back (no W II)
       // 8 registers. Measured: 15 packed and 3 kernel fallbacks (NoAttemptFits) of 20.
       assert(kinds("packed") >= 7 && kinds("NoAttemptFits") >= 1)
     }

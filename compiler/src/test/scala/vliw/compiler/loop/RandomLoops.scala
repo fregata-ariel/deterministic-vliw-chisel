@@ -135,4 +135,147 @@ object RandomLoops {
       vectorizableKernel(rng, i, trips)
     }
   }
+
+  /** A leaf or an operation of a [[packableKernel]] template, instantiated for lanes 0 and 1. */
+  private sealed trait Template
+  private object Template {
+
+    /** `x(s·i + o + lane)`: adjacent elements (LD.W). */
+    final case class Adjacent(array: Int, s: Int, o: Int) extends Template
+
+    /** `x(s·i + o + lane·d)`: elements that are not adjacent (a gather). */
+    final case class Far(array: Int, s: Int, o: Int, d: Int) extends Template
+
+    /** The same invariant in both lanes (`a`, a constant or `x(0)`): a broadcast or `SameValue`. */
+    final case class Invariant(which: Int) extends Template
+
+    /** The same element in both lanes. */
+    final case class Same(array: Int, s: Int, o: Int) extends Template
+
+    /** A constant per lane. */
+    final case class Constants(c0: Long, c1: Long) extends Template
+
+    /** `op` in lane 0 and `op1` in lane 1. */
+    final case class Operation(op: Op, a: Template, b: Template, op1: Op) extends Template
+  }
+
+  /** A random loop with isomorphic adjacent stores, for body packing (ISA mvp-2, #110 stage 5b): 1
+    * to 2 store pairs `out(per·i + 2j)` and `out(per·i + 2j + 1)` (`per` 2 to 5), each a random
+    * template of depth 2 to 3 instantiated for lanes 0 and 1, and with probability 1/3 one more
+    * scalar output. The template's leaves are adjacent elements (strides 1, 2, −1, 3), elements
+    * that are not adjacent, the same invariant or element in both lanes, or a constant per lane;
+    * one operation in 10 differs between the lanes. With probability 1/3, 1 to 2 pairs of states,
+    * with initial values `y(2j + lane)`, `a · x(2j + lane)`, a constant per lane, or the same
+    * constant 1, next values `s + e`, `s · e` or `s + other · e` (states that read each other), and
+    * finals `fin(2j + lane)`. With `stateStores`, a loop with states also stores `t(2i)` and
+    * `t(2i + 1)` from the first pair of states (the state value, the state plus a template, or a
+    * template times the state), and that pair has no finals, so that a store of a vector state can
+    * pack.
+    */
+  def packableKernel(rng: Random, id: Int, trips: Int, stateStores: Boolean): LoopKernel = {
+    import Template._
+    val pairs = 1 + rng.nextInt(2)
+    val extra = rng.nextInt(3) == 0
+    val per = 2 * pairs + (if (extra) 1 else 0)
+    val statePairs = if (rng.nextInt(3) == 0) 1 + rng.nextInt(2) else 0
+    val len = 4 * trips + 14
+    val ops = Seq(Op.Add, Op.Sub, Op.Mul)
+    LoopKernel(s"pack$id", "i", trips) { b =>
+      val arrays = Seq(b.input("x", len), b.input("y", len))
+      val a = b.scalar("a")
+      def stride() = Seq(1, 1, 1, 1, 2, -1, 3)(rng.nextInt(7))
+      def base(s: Int) = {
+        val lo = (if (s < 0) -s * (trips - 1) else 0) + 3
+        val hi = len - 1 - (if (s > 0) s * (trips - 1) else 0) - 3
+        lo + rng.nextInt(hi - lo + 1)
+      }
+      def leaf(): Template = rng.nextInt(10) match {
+        case 0 | 1 | 2 | 3 => val s = stride(); Adjacent(rng.nextInt(2), s, base(s))
+        case 4             =>
+          val s = stride(); Far(rng.nextInt(2), s, base(s), Seq(2, 3, -1)(rng.nextInt(3)))
+        case 5 | 6 => Invariant(rng.nextInt(3))
+        case 7     => val s = stride(); Same(rng.nextInt(2), s, base(s))
+        case _     => Constants(rng.nextInt(6).toLong, rng.nextInt(6).toLong)
+      }
+      def template(d: Int): Template =
+        if (d == 0 || rng.nextInt(4) == 0) leaf()
+        else {
+          val op = ops(rng.nextInt(3))
+          val op1 = if (rng.nextInt(10) == 0) ops(rng.nextInt(3)) else op
+          rng.nextInt(4) match {
+            case 0 => Operation(Op.Mul, Invariant(rng.nextInt(3)), template(d - 1), Op.Mul)
+            case _ => Operation(op, template(d - 1), template(d - 1), op1)
+          }
+        }
+      def invariant(w: Int): LoopExpr = w match {
+        case 0 => a
+        case 1 => b.const(3L)
+        case _ => arrays(0)(Index(0, 0))
+      }
+      def lane(t: Template, l: Int): LoopExpr = t match {
+        case Adjacent(r, s, o)        => arrays(r)(Index(s, o + l))
+        case Far(r, s, o, d)          => arrays(r)(Index(s, o + l * d))
+        case Invariant(w)             => invariant(w)
+        case Same(r, s, o)            => arrays(r)(Index(s, o))
+        case Constants(c0, c1)        => b.const(if (l == 0) c0 else c1)
+        case Operation(op, x, y, op1) =>
+          LoopExpr.Bin(if (l == 0) op else op1, lane(x, l), lane(y, l))
+      }
+      val out = b.output("out", per * trips)
+      val states = (0 until statePairs).map { j =>
+        val initKind = rng.nextInt(4)
+        def init(l: Int): LoopExpr = initKind match {
+          case 0 => arrays(1)(Index(0, 2 * j + l))
+          case 1 => a * arrays(0)(Index(0, 2 * j + l))
+          case 2 => b.const((7 + 2 * j + l).toLong)
+          case _ => b.const(1L)
+        }
+        (b.state(s"s${j}_0", init(0)), b.state(s"s${j}_1", init(1)))
+      }
+      val t = Option.when(stateStores && statePairs > 0)(b.output("t", 2 * trips))
+      // With `t`, the first pair of states has no finals: `t` reads it, and nothing after the loop.
+      val finals = if (t.isEmpty) states else states.drop(1)
+      val fin = Option.when(finals.nonEmpty)(b.output("fin", 2 * finals.size))
+      b.body { i =>
+        for (j <- 0 until pairs) {
+          val tp = template(if (pairs == 1) 2 + rng.nextInt(2) else 2)
+          out(i * per + 2 * j) = lane(tp, 0)
+          out(i * per + (2 * j + 1)) = lane(tp, 1)
+        }
+        if (extra) out(i * per + 2 * pairs) = lane(template(2), 0)
+        states.foreach { case (s0, s1) =>
+          val tp = template(2)
+          val kind = rng.nextInt(6)
+          def next(l: Int, me: LoopExpr, other: LoopExpr) = kind match {
+            case 0 => me * lane(tp, l)
+            case 1 => me + other * lane(tp, l)
+            case _ => me + lane(tp, l)
+          }
+          s0 := next(0, s0.value, s1.value)
+          s1 := next(1, s1.value, s0.value)
+        }
+        t.foreach { o =>
+          val (s0, s1) = states.head
+          val tp = template(1)
+          val kind = rng.nextInt(3)
+          def value(l: Int, s: LoopExpr) = kind match {
+            case 0 => s
+            case 1 => s + lane(tp, l)
+            case _ => lane(tp, l) * s
+          }
+          o(i * 2) = value(0, s0.value)
+          o(i * 2 + 1) = value(1, s1.value)
+        }
+      }
+      fin.foreach(f =>
+        finals.zipWithIndex.foreach { case ((s0, s1), j) => f(2 * j) = s0; f(2 * j + 1) = s1 }
+      )
+    }
+  }
+
+  /** `n` loops of [[packableKernel]] from the seed, with 1 to 8 iterations. */
+  def packable(seed: Long, n: Int, stateStores: Boolean = false): Vector[LoopKernel] = {
+    val rng = new Random(seed)
+    Vector.tabulate(n)(i => packableKernel(rng, i, 1 + rng.nextInt(8), stateStores))
+  }
 }
