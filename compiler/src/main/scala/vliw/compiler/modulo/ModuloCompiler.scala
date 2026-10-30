@@ -29,7 +29,7 @@ object FusionChoice {
     }
 }
 
-/** The loop vectorization decision on a machine with LD.W (ADR-0023; docs/COMPILER.md "ループの ベクトル化と
+/** The loop vectorization decision on a machine with LD.W (ADR-0023; docs/COMPILER.md "ループのベクトル化と
   * Modulo Scheduling（W-full）"): information, never a fallback. `notDoubled` is every reason not to
   * double (empty when doubled); the MIIs compared leave out the third read port (`scalarMII` of G,
   * `doubledMII` of the doubled graph when it was built); `candidate` says whether G has a rule-1
@@ -49,7 +49,10 @@ final case class LoopDecision(
     else s"not doubled: ${notDoubled.map(_.describe).mkString(", ")}$miis"
 }
 
-/** Why a loop runs as its scalar loop G, the mvp-1 code (ADR-0023's loop fallback). */
+/** Why a loop runs as its scalar loop G (ADR-0023's loop fallback). G's code is the mvp-1 code on a
+  * machine whose scalar latencies are mvp-1's; `mvp2_vii` stores with latency 2 and ends one cycle
+  * later.
+  */
 sealed trait LoopFallback extends Product with Serializable {
   def describe: String
 }
@@ -73,8 +76,8 @@ object LoopFallback {
     def describe: String = s"NotImplemented: $what"
   }
 
-  /** W-reg (no LD.W): #78's question 8 (c) (ADR-0023 既定; #110 第5段の Q1. オーナーが異を唱えなけ
-    * れば既定とする推奨で、決定ではない).
+  /** W-reg (no LD.W): #78's question 8 (c) (ADR-0023 既定; #110 第5段の Q1.
+    * オーナーが異を唱えなければ既定とする推奨で、決定ではない).
     */
   val WReg: String = "W-reg Modulo Scheduling (#78 Q8 (c))"
 
@@ -136,7 +139,7 @@ final case class ModuloCompiled(
   /** The cycles the schedule predicts: `h + 1` with HALT at h. */
   def cycles: Int = result.cycles
 
-  /** MinAvg at the MII with ASAP times, the #78 estimate's bound (docs/COMPILER.md, "記録"). */
+  /** MinAvg at the MII with ASAP times, the #78 estimate's bound (docs/COMPILER.md, "記録の定義"). */
   lazy val minAvgAtMii: Int = ModuloScheduler.minAvgAtMii(graph)
 
   /** MinAvg of the found schedule at its II. */

@@ -12,9 +12,9 @@ import vliw.isa.MachineDescription
 import Outcome.{Fits, TooManyLive}
 import WModuloSpec.{Row, Scalar}
 
-/** Modulo Scheduling on ISA mvp-2 with loop vectorization (#110 stage 5a; docs/COMPILER.md "ルー
-  * プのベクトル化と Modulo Scheduling（W-full）"): the records of the six loops on the mvp-2 machines, cell
-  * by cell, the fallbacks and the comparison API, and the random loops' counts.
+/** Modulo Scheduling on ISA mvp-2 with loop vectorization (#110 stage 5a; docs/COMPILER.md
+  * "ループのベクトル化と Modulo Scheduling（W-full）"): the records of the six loops on the mvp-2 machines,
+  * cell by cell, the fallbacks and the comparison API, and the random loops' counts.
   */
 class WModuloSpec extends AnyFunSuite {
   private def load(path: String*) = MachineDescription
@@ -64,13 +64,21 @@ class WModuloSpec extends AnyFunSuite {
     )
   }
 
+  /** Whether an II of `c`'s search, or of the doubled graph's when `c` fell back to G (`NoIiFits`),
+    * found no aligned pair free (b′).
+    */
+  private def noAlignedPair(c: ModuloCompiled) = (c.result.attempts ++ (c.simd match {
+    case LoopSimd.Fallback(LoopFallback.NoIiFits(as), _) => as
+    case _                                               => Nil
+  })).exists(_.outcome.isInstanceOf[Outcome.NoAlignedPair])
+
   private val memory = Seq("memory slot")
   private val compute = Seq("compute slot", "compute write-back port", "third read port")
   private val notImplemented = LoopFallback.NotImplemented("body packing: #110 stage 5b")
   private val doubled = Some(Vector.empty[NotDoubled])
 
-  /** COMPILER.md "結果（W）": per machine and loop, the decision (the reasons not to double; None for
-    * W-reg), the fallback, MII and its resources, II, the attempts, cycles, MinAvg at the MII
+  /** COMPILER.md "結果（16 レジスタ）": per machine and loop, the decision (the reasons not to double; None
+    * for W-reg), the fallback, MII and its resources, II, the attempts, cycles, MinAvg at the MII
     * (ASAP) and at the II, and MaxLive.
     */
   private val rows: Seq[(MachineDescription, String, Row)] = {
@@ -173,7 +181,7 @@ class WModuloSpec extends AnyFunSuite {
       assert(compile(loop(label), vii).cycles == compile(loop(label), mvp1).cycles + 1, label)
   }
 
-  test("fir4x8 on W-full: the sweep of every II; registers raise the II from 4 to 5") {
+  test("fir4x8 on W-full and vlat: the sweep of every II; registers raise the II from 4 to 5") {
     val c = compile(fir(8), full)
     val sweep = ModuloScheduler.sweep(c.graph)
     assert(
@@ -187,6 +195,25 @@ class WModuloSpec extends AnyFunSuite {
       )
     )
     assert(c.result.iiMax == 9 && c.result.attempts.map(_.ii) == Seq(4, 5))
+    // On vlat, raising the II costs 2 cycles: II 4 would take 32, II 5 takes 34.
+    val v = compile(fir(8), vlat)
+    def fits(ii: Int, cycles: Int, live: Int, minAvg: Int) =
+      Sweep(ii, Fits, Some(cycles), Some(live), Some(minAvg))
+    assert(
+      ModuloScheduler.sweep(v.graph) == Vector(
+        Sweep(4, TooManyLive(20, 16), Some(32), Some(20), Some(19)),
+        fits(5, 34, 16, 15),
+        fits(6, 39, 16, 14),
+        fits(7, 40, 14, 12),
+        fits(8, 43, 14, 12),
+        fits(9, 47, 14, 12),
+        fits(10, 49, 14, 11),
+        fits(11, 53, 14, 11),
+        fits(12, 57, 14, 11),
+        fits(13, 58, 12, 11)
+      )
+    )
+    assert(v.result.iiMax == 13 && v.result.attempts.map(_.ii) == Seq(4, 5))
   }
 
   test("describeW gives the decision, the shape and the records") {
@@ -430,8 +457,7 @@ class WModuloSpec extends AnyFunSuite {
           counts("no program") += 1; assert(e.contains("the doubled loop fits no II either"), e)
         case Right(c) =>
           correct(c, Seq(1L))
-          if (c.result.attempts.exists(_.outcome.isInstanceOf[Outcome.NoAlignedPair]))
-            counts("NoAlignedPair") += 1
+          if (noAlignedPair(c)) counts("NoAlignedPair") += 1
           c.simd match {
             case LoopSimd.Fallback(_: LoopFallback.NoIiFits, _) => counts("NoIiFits") += 1
             case LoopSimd.Vectorized(_)                         =>
@@ -481,7 +507,64 @@ class WModuloSpec extends AnyFunSuite {
     assert(dr + ir == 130 && ir >= 30 && wr >= 10, (dr, ir, wr))
   }
 
-  test("RandomLoops(76): the reasons by the reduction definition and the 5a split") {
+  test("random vectorizable loops on the other configurations: no NoAlignedPair, right outputs") {
+    // COMPILER.md, "`NoAlignedPair` は、測ったどのループでも起きなかった" and "乱数のループ": vlat,
+    // rp4, vii, RtlMvp2Spec's variant, and W-full with 8 and 6 registers. A loop with no program
+    // has no II for the doubled graph nor for G. On vlat, 20 doubled loops take more cycles than
+    // their scalar loop G and 3 have a worse II per original iteration (W-full: 4 and 1, above).
+    val ks = RandomLoops.vectorizable(110, 300)
+    for (m <- Seq(vlat, rp4, vii, variant, withRegisters(full, 8), withRegisters(full, 6))) {
+      var slower = 0
+      var worseIi = 0
+      ks.foreach { k =>
+        ModuloCompiler.compile(k, m) match {
+          case Left(e)  => assert(e.contains("no II from"), s"${k.name} on ${m.machineId}: $e")
+          case Right(c) =>
+            assert(!noAlignedPair(c), s"${k.name} on ${m.machineId}")
+            correct(c, Seq(1L))
+            if ((m eq vlat) && c.simd.isInstanceOf[LoopSimd.Vectorized]) {
+              val p = ModuloCompiler.prepare(k, m).fold(e => fail(e), identity)
+              ModuloScheduler.schedule(p.scalar).foreach { s =>
+                if (c.cycles > s.cycles) slower += 1
+                if (c.ii > 2 * s.ii) worseIi += 1
+              }
+            }
+        }
+      }
+      if (m eq vlat) assert((slower, worseIi) == ((20, 3)))
+    }
+  }
+
+  test("no NoAlignedPair in the benchmark loops with fewer registers, nor in any II of a sweep") {
+    for (m <- Seq(full, rp4, vlat, vii); n <- Seq(16, 12, 10, 8); k <- LoopBenchmarks.all)
+      ModuloCompiler
+        .compile(k, withRegisters(m, n))
+        .foreach(c => assert(!noAlignedPair(c), s"${k.name} on ${m.machineId}, $n registers"))
+    LoopBenchmarks.all.foreach(k =>
+      ModuloCompiler.compile(k, variant).foreach(c => assert(!noAlignedPair(c), k.name))
+    )
+    // Every II from the MII to the span of the 130 doubled random loops: 568 outcomes for each
+    // register count, and each one fits, has no table (a) or has too many values live (b).
+    val ks = RandomLoops.vectorizable(110, 300)
+    for (n <- Seq(16, 8, 6, 4)) {
+      val m = withRegisters(full, n)
+      val outcomes = ks.flatMap { k =>
+        val p = ModuloCompiler.prepare(k, m).fold(e => fail(e), identity)
+        if (p.simd.isInstanceOf[LoopSimd.Vectorized]) ModuloScheduler.sweep(p.graph).map(_.outcome)
+        else Nil
+      }
+      assert(outcomes.size == 568, n)
+      assert(
+        outcomes.forall {
+          case Fits | _: Outcome.NoMrt | _: TooManyLive => true
+          case _                                        => false
+        },
+        n
+      )
+    }
+  }
+
+  test("RandomLoops(76): the reasons by the reduction definition, the 5a split and the code") {
     val ks = RandomLoops.kernels(76, 300).map(_._1)
     val counts = scala.collection.mutable.Map.empty[String, Int].withDefaultValue(0)
     ks.foreach { k =>
@@ -491,6 +574,14 @@ class WModuloSpec extends AnyFunSuite {
           counts(r.describe) += 1
           d.notDoubled.map(_.name).distinct.foreach(counts(_) += 1)
         case other => fail(s"${k.name}: $other")
+      }
+      // The doubled loops give the DSL's outputs; every other loop is the mvp-1 code (states
+      // included), and a loop with no program on W-full has none on mvp-1 either.
+      (ModuloCompiler.compile(k, full), ModuloCompiler.compile(k, mvp1)) match {
+        case (Right(c), _) if c.simd.isInstanceOf[LoopSimd.Vectorized] => correct(c, Seq(1L))
+        case (Right(c), Right(c1)) => assert(c.bundles == c1.bundles, k.name)
+        case (Left(_), Left(_))    => counts("no program") += 1
+        case (c, c1)               => fail(s"${k.name}: W-full ${c.isRight}, mvp-1 ${c1.isRight}")
       }
     }
     assert(
@@ -502,7 +593,8 @@ class WModuloSpec extends AnyFunSuite {
         "LoopState" -> 192,
         "SameValue" -> 263,
         "NotImplemented: body packing: #110 stage 5b" -> 196,
-        "NothingToPack" -> 101
+        "NothingToPack" -> 101,
+        "no program" -> 4
       )
     )
     val (_, _, _, _, increase, wouldDouble) = gatherCounts(ks, full)
