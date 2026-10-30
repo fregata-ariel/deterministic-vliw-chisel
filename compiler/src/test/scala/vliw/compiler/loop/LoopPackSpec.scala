@@ -9,7 +9,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import vliw.compiler.{IsaExecutor, KernelCompiler}
 import vliw.compiler.dag.{Dag, DagRun, Edge, EdgeKind, LaneReason, Node, Pack}
 import vliw.compiler.dsl.{Interpreter, Op}
-import vliw.compiler.loop.Loop.{Bin, Read, Write}
+import vliw.compiler.loop.Loop.{Bin, Read, StateRef, Update, Write}
 import vliw.compiler.modulo.{FusionChoice, LoopSimd, Mii, ModuloCompiler, ModuloScheduler}
 import vliw.isa.MachineDescription
 
@@ -213,9 +213,10 @@ class LoopPackSpec extends AnyFunSuite {
     // (i): its only gather-free candidate is also the lowest, so (a) is (b).
     val (i, _) = scalar(LoopBenchmarks.matmulRows(3))
     assert(LoopPack.packInOrder(i, LoopPack.byAddress(i)) == LoopPack.pack(i))
-    // packable(5, 300): (a) and (b) differ in 11 loops that are not doubled. Where both packed
-    // graphs schedule (5 loops), (b) is never slower; in the other 6 neither schedules.
-    var (differ, both, neither) = (0, 0, 0)
+    // packable(5, 300): the loops that are not doubled where (a) and (b) pack differently, by
+    // whether each packed graph schedules on W-full, and where both do, by (b)'s cycles against
+    // (a)'s.
+    val counts = scala.collection.mutable.Map.empty[String, Int].withDefaultValue(0)
     for (k <- RandomLoops.packable(5, 300)) {
       val p = ModuloCompiler.prepare(k, full).fold(e => fail(e), identity)
       val doubled = p.simd match {
@@ -226,18 +227,28 @@ class LoopPackSpec extends AnyFunSuite {
         val (pa, pb) =
           (LoopPack.packInOrder(p.scalar, LoopPack.byAddress(p.scalar)), LoopPack.pack(p.scalar))
         if (pa != pb) {
-          differ += 1
+          counts("differ") += 1
           def run(x: LoopPacking) =
             Option.when(!x.body.nothingToPack)(ModuloScheduler.schedule(x.graph).toOption).flatten
           (run(pa), run(pb)) match {
-            case (Some(sa), Some(sb)) => both += 1; assert(sb.cycles <= sa.cycles, k.name)
-            case (None, None)         => neither += 1
-            case other                => fail(s"${k.name}: $other")
+            case (Some(sa), Some(sb)) =>
+              counts(s"both, (b) ${sb.cycles.compare(sa.cycles).sign}") += 1
+            case (Some(_), None) => counts("(a) only") += 1
+            case (None, Some(_)) => counts("(b) only") += 1
+            case (None, None)    => counts("neither") += 1
           }
         }
       }
     }
-    assert((differ, both, neither) == ((11, 5, 6)))
+    assert(
+      counts.toMap == Map(
+        "differ" -> 18,
+        "both, (b) -1" -> 7,
+        "both, (b) 1" -> 1,
+        "(a) only" -> 1,
+        "neither" -> 9
+      )
+    )
   }
 
   /** `o(2i) = s0`, `o(2i+1) = s1` with s0 and s1 the sums of x(2i) and x(2i+1) from y(0) and y(1)
@@ -368,6 +379,30 @@ class LoopPackSpec extends AnyFunSuite {
         (l5.elem("f", 0), NoNeighbour, false)
       )
     )
+    // Two finals of different operations (s0 + x(i), s1 · x(i)): a gather after the loop of the
+    // last iteration's values, as Pack gathers them (W-full: the ST.W of a gathered root).
+    val fin = LoopKernel("fin", "i", 3) { b =>
+      val x = b.input("x", 3); val f = b.output("f", 2)
+      val s0 = b.state("s0", b.const(0)); val s1 = b.state("s1", b.const(1))
+      b.body { i => s0 := s0.value + x(i); s1 := s1.value * x(i) }
+      f(0) = s0; f(1) = s1
+    }
+    val (g6, l6) = scalar(fin)
+    val p6 = sameValues(fin, new Random(7))
+    assert(
+      p6.body == LoopBody(Vector(LoopPair(After, Address(l6.layout.elem("f", 0), 0))), Vector(), 0)
+    )
+    val (n60, n61) = (g6.states(0).next, g6.states(1).next)
+    assert(
+      p6.graph.ids(After).map(p6.graph.nodes) == Vector(
+        LoopNode.StoreW(
+          Address(l6.layout.elem("f", 0), 0),
+          VRef.Gather(Ref(p6.graph.states(0).next), Ref(p6.graph.states(1).next))
+        )
+      )
+    )
+    assert(Seq(n60, n61).map(g6.nodes(_).mnemonic) == Seq("ADD", "MUL"))
+    correct(fin)
   }
 
   test(
@@ -424,6 +459,74 @@ class LoopPackSpec extends AnyFunSuite {
     }
     assert(st >= 0 && st < v.nodes.indexOf(LoopNode.Load(Address(20, 1))))
     sameValues(v, loop, 40, new Random(3))
+  }
+
+  test(
+    "the build makes a value read with back > 0 after its root: a recurrence, a state that loads a stored word, one VMUL per vector state"
+  ) {
+    val rng = new Random(6)
+    // s := s * 3 + z(i) next to an unrelated pair: p(i) = s * 3 reads s's next value with back 1,
+    // and that next value reads s * 3 with back 0.
+    val rec = LoopKernel("rec", "i", 4) { b =>
+      val x = b.input("x", 8); val y = b.input("y", 8); val z = b.input("z", 4)
+      val o = b.output("o", 8); val p = b.output("p", 4); val f = b.output("f", 1)
+      val s = b.state("s", b.const(1))
+      b.body { i =>
+        o(i * 2) = x(i * 2) + y(i * 2); o(i * 2 + 1) = x(i * 2 + 1) + y(i * 2 + 1)
+        p(i) = s.value * b.const(3)
+        s := s.value * b.const(3) + z(i)
+      }
+      f(0) = s
+    }
+    assert(sameValues(rec, rng).body.pairs.size == 1)
+    val c = ModuloCompiler.compile(rec, full).fold(e => fail(e), identity)
+    assert(c.simd.isInstanceOf[LoopSimd.Vectorized] && (c.ii, c.cycles) == ((6, 29)))
+    correct(rec)
+    // The pair's tree reads a state (a broadcast, or a vector state) whose next value loads a word
+    // that the pair stores: the ST.W comes before that LD, as the ST does in G.
+    // Lane l: [20 + l + 2k] = s0 · [l + 2k] (s0 broadcast) or s_l · [52] (a vector state), with
+    // s_l := s_l + [20 + l + 2k].
+    def loop(vectorState: Boolean) = {
+      def value(l: Int) =
+        if (vectorState) Bin(Op.Mul, StateRef(l), Read(Address(52, 0)))
+        else Bin(Op.Mul, StateRef(0), Read(Address(l, 2)))
+      Loop(
+        3,
+        Vector(Read(Address(50, 0)), Read(Address(51, 0))),
+        Vector(
+          Write(Address(20, 2), value(0)),
+          Write(Address(21, 2), value(1)),
+          Update(0, Bin(Op.Add, StateRef(0), Read(Address(20, 2)))),
+          Update(1, Bin(Op.Add, StateRef(1), Read(Address(21, 2))))
+        ),
+        Vector()
+      )
+    }
+    for (vectorState <- Seq(false, true)) {
+      val l = loop(vectorState)
+      val p = LoopPack.pack(LoopGraph.build(full, l))
+      assert(p.body.pairs == Vector(LoopPair(Each, Address(20, 2))), vectorState)
+      assert(p.body.vectorStates == (if (vectorState) 1 else 0))
+      val stw = p.graph.nodes.indexWhere(_.isInstanceOf[LoopNode.StoreW])
+      assert(stw >= 0 && stw < p.graph.nodes.indexOf(LoopNode.Load(Address(20, 2))), vectorState)
+      sameValues(p.graph, l, 64, rng)
+    }
+    // Two first-order IIR filters, o(2i + l) = a · s_l and s_l := a · s_l + x(2i + l): one VMUL,
+    // stored by the ST.W and read by the next value.
+    val iir = LoopKernel("iir2", "i", 4) { b =>
+      val x = b.input("x", 8); val y = b.input("y", 2); val a = b.scalar("a")
+      val o = b.output("o", 8)
+      val s0 = b.state("s0", y(0)); val s1 = b.state("s1", y(1))
+      b.body { i =>
+        o(i * 2) = a * s0.value; o(i * 2 + 1) = a * s1.value
+        s0 := a * s0.value + x(i * 2); s1 := a * s1.value + x(i * 2 + 1)
+      }
+    }
+    val q = sameValues(iir, rng)
+    assert(q.body.vectorStates == 1 && q.graph.nodes.count(_.mnemonic == "VMUL") == 1)
+    val ci = ModuloCompiler.compile(iir, full).fold(e => fail(e), identity)
+    assert((ci.ii, ci.cycles) == ((3, 16)))
+    correct(iir)
   }
 
   test("vector states: a store of a state pair, a state in a pair's tree, an LD.W initial pair") {
@@ -548,15 +651,34 @@ class LoopPackSpec extends AnyFunSuite {
     correct(k)
   }
 
-  test("random packable loops: the packed graph computes the loop") {
+  test("random packable loops: the packed graph computes the loop, LD.W chains of every stride") {
     val rng = new Random(110)
-    for (k <- RandomLoops.packable(5, 100) ++ RandomLoops.packable(7, 60, stateStores = true)) {
+    // packable(13, 60) with `chains`: the packed loops with a LD.W read one iteration back or more
+    // (`LoopVector.chains`), by stride.
+    val chained = scala.collection.mutable.Map.empty[Int, Int].withDefaultValue(0)
+    val sets = Seq(
+      RandomLoops.packable(5, 100) -> false,
+      RandomLoops.packable(7, 60, stateStores = true) -> false,
+      RandomLoops.packable(13, 60, chains = true) -> true
+    )
+    for ((ks, chains) <- sets; k <- ks) {
       val (g, lowered) = scalar(k)
       if (LoopVector.reasons(g).nonEmpty) {
         val p = LoopPack.pack(g)
-        if (!p.body.nothingToPack) sameValues(p.graph, lowered.loop, lowered.layout.words, rng, 1)
+        if (!p.body.nothingToPack) {
+          sameValues(p.graph, lowered.loop, lowered.layout.words, rng, 1)
+          val v = p.graph
+          if (chains)
+            v.ids(Each)
+              .flatMap(n => v.nodes(n).operands)
+              .collect { case Ref(n, back, _) if back > 0 && v.places(n) == Each => v.nodes(n) }
+              .collect { case LoopNode.LoadW(a) => a.stride }
+              .distinct
+              .foreach(chained(_) += 1)
+        }
       }
     }
+    assert(chained.toMap == Map(1 -> 3, 2 -> 2, -1 -> 1, 3 -> 2))
   }
 
   /** `Pack` on the straight-line DAG of one iteration of the state-free G: every read without

@@ -453,21 +453,23 @@ private final class LoopPacker(
     * オーナーが異を唱えなければ既定とする推奨で、決定ではない), and a LD before the loop gathered in the body is loaded in
     * every iteration (rule 4's LD copy in a loop, an exception to ADR-0014's invariants held in
     * registers). Any other lane is the node itself, homed as that gather's lane: it must have back
-    * 0 and be in the gather's place (a computed value before the loop next to a value of the
-    * iteration is the loop-only case of rule 4: it would be a lane of every iteration's gather),
-    * and have no other home.
+    * 0, be in the gather's place or be read by a gather after the loop (which reads a value before
+    * the loop, and a value of the body in the last iteration, as `Pack` gathers two final values),
+    * and have no other home. A computed value before the loop next to a value of the iteration is
+    * the loop-only case of rule 4: it would be a lane of every iteration's gather.
     */
   private def gather(s: State, r0: Ref, r1: Ref, reader: Place): Result[(State, PSrc)] = {
     val at =
       if (Seq(r0, r1).forall(r => r.back == 0 && g.places(r.node) == Place.Before)) Place.Before
       else reader
     val key = (at, (r0, r1))
+    def placed(n: Int) = oneIteration || at == Place.After || g.places(n) == at
     def lane(st: State, r: Ref, l: Int): Result[(State, GLane)] =
       LoopVector.unshared(g, r) match {
         case Some((p, a)) if LoopPack.unwrittenWord(g, writes, p, a) => Right((st, GLane.Fresh(a)))
         case _                                                       =>
           val n = r.node
-          if (r.back != 0 || (!oneIteration && g.places(n) != at) || st.home.contains(n))
+          if (r.back != 0 || !placed(n) || st.home.contains(n))
             reject(LaneReason.NeededElsewhere(n))
           else
             Right(
@@ -582,10 +584,14 @@ private final class LoopPacker(
     * value of every scalar state) in G's order, fields in order, as `LoopVector.double` and
     * `LoopGraph.build` number a body; before a LD or a store, its predecessors in G's memory order
     * within one iteration come first, so that the packed graph keeps G's order of every word. A
-    * store pair is its ST.W at its first store; a node read with back > 0 is made where it is first
-    * read (a state cycle reads it through a placeholder, patched at the end). Each LD.W reads are
-    * shared by ADR-0014's rule on their stride (`LoopVector.chains`); a read k < back iterations
-    * from the start reads the Before LD.W `Address(a.at(k), 0)`.
+    * store pair is its ST.W at its first store. A node read with back > 0 that is not made yet (a
+    * state's next value, a vector state) is read through a placeholder and made after the root that
+    * first reads it, patched at the end: the walk of a root follows only back-0 operands and G's
+    * memory order within one iteration, the edges of `cyclic`, so it never reaches a node being
+    * made, and a ST.W is placed before every node that follows it in that order. A LD read with
+    * back > 0 (a chain of G, ADR-0014) is made where it is first read, as `LoopGraph.build` makes
+    * it. Each LD.W reads are shared by ADR-0014's rule on their stride (`LoopVector.chains`); a
+    * read k < back iterations from the start reads the Before LD.W `Address(a.at(k), 0)`.
     */
   private def build(s: State): LoopGraph = {
     val nodes = mutable.ArrayBuffer.empty[LoopNode]
@@ -598,6 +604,9 @@ private final class LoopPacker(
     val placeholders = mutable.LinkedHashMap.empty[Either[Int, (Int, Int)], Int]
     def placeholder(k: Either[Int, (Int, Int)]): Int =
       placeholders.getOrElseUpdate(k, -(placeholders.size + 1))
+    // The nodes read with back > 0 through a placeholder, made after the root (`drain`).
+    val pending = mutable.LinkedHashSet.empty[Either[Int, (Int, Int)]]
+    def later(k: Either[Int, (Int, Int)]): Int = { pending += k; placeholder(k) }
     val inPair = s.pairs.flatMap(p => Seq(p.c.st0 -> p, p.c.st1 -> p)).toMap
     val memoryPreds = g.edges
       .filter(e => e.iterations == 0 && e.kind != EdgeKind.Data)
@@ -606,6 +615,7 @@ private final class LoopPacker(
     val busyV = mutable.Set.empty[(Int, Int)]
     val gatherLanes = mutable.HashMap.empty[Int, (Int, Int)]
     val stored = mutable.Set.empty[Int]
+    val busyP = mutable.Set.empty[Int]
 
     val chains =
       LoopVector.chains(s.wides.toVector.collect { case (Place.Each, a) => a }, trips)
@@ -627,8 +637,9 @@ private final class LoopPacker(
 
     def scalarRef(r: Ref): Ref = {
       val init = r.initial.map(scalar)
-      if (r.back > 0 && !scalarId.contains(r.node) && busyS(r.node))
-        Ref(placeholder(Left(r.node)), r.back, init)
+      val load = g.nodes(r.node).isInstanceOf[LoopNode.Load] && !busyS(r.node)
+      if (r.back > 0 && !scalarId.contains(r.node) && !load)
+        Ref(later(Left(r.node)), r.back, init)
       else Ref(scalar(r.node), r.back, init)
     }
     def memoryFirst(n: Int): Unit = memoryPreds.getOrElse(n, Vector.empty).foreach { m =>
@@ -663,8 +674,7 @@ private final class LoopPacker(
           case VRef.Pair(Ref(n, 0, _)) => n
           case other                   => sys.error(s"the initial pair $other is not one pair node")
         }
-        val id = vectorId.getOrElse(k, if (busyV(k)) placeholder(Right(k)) else vector(k))
-        VRef.Pair(Ref(id, 1, Vector(i)))
+        VRef.Pair(Ref(vectorId.getOrElse(k, later(Right(k))), 1, Vector(i)))
       case PSrc.Gather(at, lo, hi, index) =>
         val (l0, l1) = gatherLanes.getOrElseUpdate(
           index, {
@@ -681,6 +691,7 @@ private final class LoopPacker(
     def vector(k: (Int, Int)): Int = vectorId.get(k) match {
       case Some(i) => i
       case None    =>
+        require(!busyV(k), s"the vector node $k reads itself with back 0")
         busyV += k
         val v = s.vectors(k)
         val f = v.fields.map(x => vref(x.src))
@@ -690,12 +701,24 @@ private final class LoopPacker(
         vectorId(k) = i
         i
     }
-    def pairStore(p: StorePair): Unit = if (stored.add(p.c.st0)) {
-      val v = vref(p.root)
-      memoryFirst(p.c.st0)
-      memoryFirst(p.c.st1)
-      add(p.c.place, LoopNode.StoreW(p.c.addr, v))
-      ()
+    def pairStore(p: StorePair): Unit =
+      if (stored.add(p.c.st0)) {
+        busyP += p.c.st0
+        val v = vref(p.root)
+        memoryFirst(p.c.st0)
+        memoryFirst(p.c.st1)
+        add(p.c.place, LoopNode.StoreW(p.c.addr, v))
+        busyP -= p.c.st0
+        ()
+      } else
+        require(!busyP(p.c.st0), s"the ST.W of ${p.c.addr} comes before and after a node")
+    def drain(): Unit = while (pending.nonEmpty) {
+      val k = pending.head
+      pending -= k
+      k match {
+        case Left(n)  => scalar(n)
+        case Right(v) => vector(v)
+      }
     }
     val nexts = g.states.map(_.next).toSet
     g.nodes.indices.foreach { n =>
@@ -705,6 +728,7 @@ private final class LoopPacker(
         case _ if nexts(n) && !s.home.get(n).exists(_.vector) => scalar(n)
         case _                                                => ()
       }
+      drain()
     }
     val target: Map[Int, Int] = placeholders.map {
       case (Left(n), ph)  => ph -> scalarId(n)

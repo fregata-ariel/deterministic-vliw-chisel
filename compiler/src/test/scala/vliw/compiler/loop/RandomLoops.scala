@@ -170,9 +170,16 @@ object RandomLoops {
     * finals `fin(2j + lane)`. With `stateStores`, a loop with states also stores `t(2i)` and
     * `t(2i + 1)` from the first pair of states (the state value, the state plus a template, or a
     * template times the state), and that pair has no finals, so that a store of a vector state can
-    * pack.
+    * pack. With `chains`, half of the adjacent leaves after the first reuse an earlier adjacent
+    * leaf one iteration back, `x(s·i + o − s + lane)`, so that LD.W chains of every stride occur.
     */
-  def packableKernel(rng: Random, id: Int, trips: Int, stateStores: Boolean): LoopKernel = {
+  def packableKernel(
+      rng: Random,
+      id: Int,
+      trips: Int,
+      stateStores: Boolean,
+      chains: Boolean = false
+  ): LoopKernel = {
     import Template._
     val pairs = 1 + rng.nextInt(2)
     val extra = rng.nextInt(3) == 0
@@ -189,9 +196,14 @@ object RandomLoops {
         val hi = len - 1 - (if (s > 0) s * (trips - 1) else 0) - 3
         lo + rng.nextInt(hi - lo + 1)
       }
+      val adjacent = scala.collection.mutable.ArrayBuffer.empty[Adjacent]
       def leaf(): Template = rng.nextInt(10) match {
-        case 0 | 1 | 2 | 3 => val s = stride(); Adjacent(rng.nextInt(2), s, base(s))
-        case 4             =>
+        case 0 | 1 | 2 | 3 if chains && adjacent.nonEmpty && rng.nextInt(2) == 0 =>
+          val Adjacent(r, s, o) = adjacent(rng.nextInt(adjacent.size))
+          Adjacent(r, s, o - s)
+        case 0 | 1 | 2 | 3 =>
+          val s = stride(); val a = Adjacent(rng.nextInt(2), s, base(s)); adjacent += a; a
+        case 4 =>
           val s = stride(); Far(rng.nextInt(2), s, base(s), Seq(2, 3, -1)(rng.nextInt(3)))
         case 5 | 6 => Invariant(rng.nextInt(3))
         case 7     => val s = stride(); Same(rng.nextInt(2), s, base(s))
@@ -274,8 +286,13 @@ object RandomLoops {
   }
 
   /** `n` loops of [[packableKernel]] from the seed, with 1 to 8 iterations. */
-  def packable(seed: Long, n: Int, stateStores: Boolean = false): Vector[LoopKernel] = {
+  def packable(
+      seed: Long,
+      n: Int,
+      stateStores: Boolean = false,
+      chains: Boolean = false
+  ): Vector[LoopKernel] = {
     val rng = new Random(seed)
-    Vector.tabulate(n)(i => packableKernel(rng, i, 1 + rng.nextInt(8), stateStores))
+    Vector.tabulate(n)(i => packableKernel(rng, i, 1 + rng.nextInt(8), stateStores, chains))
   }
 }

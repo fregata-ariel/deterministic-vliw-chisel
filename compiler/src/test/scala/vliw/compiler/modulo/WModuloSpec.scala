@@ -85,8 +85,9 @@ class WModuloSpec extends AnyFunSuite {
   }
 
   /** A packed loop's shape: its pairs, vector states, gathers (also of two values before the loop),
-    * vector operations before the loop, LDs of a word before the loop in the body (rule 4's LD copy
-    * in a loop, an exception to ADR-0014), and whether its MII is above G's.
+    * gathers after the loop (a pair of finals of different operations), vector operations before
+    * the loop, LDs of a word before the loop in the body (rule 4's LD copy in a loop, an exception
+    * to ADR-0014), and whether its MII is above G's.
     */
   private def shape(p: ModuloCompiler.Prepared, d: LoopDecision, counts: Counts): Unit = {
     val g = p.graph
@@ -102,6 +103,11 @@ class WModuloSpec extends AnyFunSuite {
       }
     )
       counts("packed: gather before the loop") += 1
+    if (
+      g.ids(Place.After)
+        .exists(n => LoopNode.fields(g.nodes(n)).exists(_.isInstanceOf[VRef.Gather]))
+    )
+      counts("packed: gather after the loop") += 1
     if (
       g.ids(Place.Before).exists(n => LoopNode.isPair(g.nodes(n)) && g.nodes(n).mnemonic != "LD.W")
     )
@@ -714,13 +720,16 @@ class WModuloSpec extends AnyFunSuite {
   test(
     "no NoAlignedPair in the benchmark loops with fewer registers; the sweeps of the random loops"
   ) {
+    // A loop with no program (matmul3 with fewer registers) has no (b′) among its W attempts either:
+    // the error lists them.
+    def noB(k: LoopKernel, m: MachineDescription, where: String) =
+      ModuloCompiler.compile(k, m) match {
+        case Right(c) => assert(!noAlignedPair(c), where)
+        case Left(e)  => assert(!e.contains("no aligned register pair"), s"$where: $e")
+      }
     for (m <- Seq(full, rp4, vlat, vii); n <- Seq(16, 12, 10, 8); k <- LoopBenchmarks.all)
-      ModuloCompiler
-        .compile(k, withRegisters(m, n))
-        .foreach(c => assert(!noAlignedPair(c), s"${k.name} on ${m.machineId}, $n registers"))
-    LoopBenchmarks.all.foreach(k =>
-      ModuloCompiler.compile(k, variant).foreach(c => assert(!noAlignedPair(c), k.name))
-    )
+      noB(k, withRegisters(m, n), s"${k.name} on ${m.machineId}, $n registers")
+    LoopBenchmarks.all.foreach(k => noB(k, variant, k.name))
     // Every II from the MII to the span: of the 130 doubled random loops, 568 outcomes for each
     // register count, each one fits, has no table (a) or has too many values live (b); of the 66
     // packed ones, 361 outcomes, of which 5, 9, 11 and 0 are (b′) with 16, 8, 6 and 4 registers.
@@ -777,8 +786,10 @@ class WModuloSpec extends AnyFunSuite {
                   if (noAlignedPair(c)) counts("NoAlignedPair (packed, NoIiFits)") += 1
                 case _ => ()
               }
-            case (Left(_), Left(_)) => counts("no program") += 1
-            case (c, c1)            => fail(s"${k.name}: W-full ${c.isRight}, mvp-1 ${c1.isRight}")
+            case (Left(_), Left(_)) =>
+              counts("no program") += 1
+              if (d.packed) counts("no program (packed)") += 1
+            case (c, c1) => fail(s"${k.name}: W-full ${c.isRight}, mvp-1 ${c1.isRight}")
           }
       }
     }
@@ -790,35 +801,44 @@ class WModuloSpec extends AnyFunSuite {
         "AssociationOrder" -> 28,
         "LoopState" -> 192,
         "SameValue" -> 263,
-        "packed" -> 115,
-        "NothingToPack" -> 182,
-        "NothingToPack: a candidate" -> 81,
+        "packed" -> 162,
+        "NothingToPack" -> 135,
+        "NothingToPack: a candidate" -> 34,
         "no program" -> 4,
+        "no program (packed)" -> 2,
         "pair each" -> 112,
-        "pair after" -> 4,
+        "pair after" -> 80,
         "packed: vector states" -> 4,
         "packed: gathers" -> 114,
         "packed: gather before the loop" -> 13,
+        "packed: gather after the loop" -> 76,
         "packed: vector operation before the loop" -> 5,
         "packed: LD before the loop in the body" -> 30,
         "packed: MII > G's" -> 2,
         "lane NoNeighbour" -> 302,
-        "lane NeededElsewhere" -> 212,
+        "lane NeededElsewhere" -> 60,
         "lane NeededElsewhere (initial pair)" -> 44,
         "lane SameValue" -> 12,
         "NoIiFits (packed)" -> 7,
-        "NoAlignedPair (packed, NoIiFits)" -> 2,
+        "NoAlignedPair (packed)" -> 1,
         "II per iteration -1" -> 2,
         "II per iteration 0" -> 1,
         "cycles -1" -> 2,
         "cycles 0" -> 1,
-        "packed: II -1" -> 43,
-        "packed: II 0" -> 56,
-        "packed: II 1" -> 8,
-        "packed: cycles -1" -> 59,
-        "packed: cycles 0" -> 20,
-        "packed: cycles 1" -> 28
+        "packed: II -1" -> 35,
+        "packed: II 0" -> 111,
+        "packed: II 1" -> 7,
+        "packed: cycles -1" -> 58,
+        "packed: cycles 0" -> 73,
+        "packed: cycles 1" -> 22
       )
+    )
+    // COMPILER.md: of the 162 packed loops, 153 compile packed (compared with G), 7 fall back to G
+    // and 2 have no program.
+    val compared = Seq(-1, 0, 1).map(d => counts(s"packed: II $d")).sum
+    assert(
+      (compared, compared + counts("NoIiFits (packed)") + counts("no program (packed)")) ==
+        ((153, counts("packed")))
     )
     val (_, _, _, _, increase, wouldDouble) = gatherCounts(ks, full)
     assert(increase == 3 && wouldDouble == 0) // no gather of these three is sharable
@@ -850,23 +870,24 @@ class WModuloSpec extends AnyFunSuite {
     assert(
       counts.toMap == Map(
         "doubled" -> 22,
-        "packed" -> 231,
-        "NothingToPack" -> 47,
-        "NothingToPack: a candidate" -> 47,
+        "packed" -> 233,
+        "NothingToPack" -> 45,
+        "NothingToPack: a candidate" -> 45,
         "pair each" -> 297,
-        "pair after" -> 45,
-        "packed: vector states" -> 41,
-        "packed: gathers" -> 138,
-        "packed: gather before the loop" -> 22,
+        "pair after" -> 62,
+        "packed: vector states" -> 38,
+        "packed: gathers" -> 136,
+        "packed: gather before the loop" -> 21,
+        "packed: gather after the loop" -> 20,
         "packed: vector operation before the loop" -> 45,
         "packed: LD before the loop in the body" -> 19,
         "packed: MII > G's" -> 3,
         "packed: a gather-free candidate" -> 102,
-        "lane NoNeighbour" -> 58,
-        "lane NeededElsewhere" -> 89,
-        "lane NeededElsewhere (initial pair)" -> 29,
-        "lane SameValue" -> 332,
-        "lane SameValue (initial pair)" -> 72,
+        "lane NoNeighbour" -> 75,
+        "lane NeededElsewhere" -> 62,
+        "lane NeededElsewhere (initial pair)" -> 25,
+        "lane SameValue" -> 325,
+        "lane SameValue (initial pair)" -> 59,
         "no program" -> 27,
         "NoIiFits (doubled)" -> 1,
         "NoIiFits (packed)" -> 11,
@@ -878,12 +899,12 @@ class WModuloSpec extends AnyFunSuite {
         "cycles -1" -> 16,
         "cycles 0" -> 1,
         "cycles 1" -> 4,
-        "packed: II -1" -> 152,
-        "packed: II 0" -> 30,
+        "packed: II -1" -> 150,
+        "packed: II 0" -> 33,
         "packed: II 1" -> 10,
         "packed: cycles -1" -> 157,
-        "packed: cycles 0" -> 22,
-        "packed: cycles 1" -> 13
+        "packed: cycles 0" -> 24,
+        "packed: cycles 1" -> 12
       )
     )
   }
@@ -905,7 +926,7 @@ class WModuloSpec extends AnyFunSuite {
     assert(
       Seq("no program", "NoIiFits (packed)", "NoAlignedPair (packed)")
         .:+("NoAlignedPair (packed, NoIiFits)")
-        .map(counts) == Seq(6, 5, 1, 1)
+        .map(counts) == Seq(7, 4, 2, 1)
     )
   }
 
