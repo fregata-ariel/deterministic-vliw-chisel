@@ -448,22 +448,25 @@ private final class LoopPacker(
 
   /** Rule 4: the gather of `r0` and `r1`, shared by its lanes (rule 6). It is before the loop when
     * both lanes are values before the loop (an invariant pair, read by every iteration), otherwise
-    * in the reader's place. A LD lane whose words no iteration writes is a fresh LD of its read
-    * without ADR-0014's sharing: gathers are not shared across iterations (#110 第5段の Q3:
-    * オーナーが異を唱えなければ既定とする推奨で、決定ではない), and a LD before the loop gathered in the body is loaded in
-    * every iteration (rule 4's LD copy in a loop, an exception to ADR-0014's invariants held in
-    * registers). Any other lane is the node itself, homed as that gather's lane: it must have back
-    * 0, be in the gather's place or be read by a gather after the loop (which reads a value before
-    * the loop, and a value of the body in the last iteration, as `Pack` gathers two final values),
-    * and have no other home. A computed value before the loop next to a value of the iteration is
-    * the loop-only case of rule 4: it would be a lane of every iteration's gather.
+    * in the reader's place, and in the body for a reader after the loop: a node after the loop
+    * reads the body's values in the last iteration, so the gather of two final values is the last
+    * iteration's gather of those values, one gather with the body's gather of the same refs (as
+    * `Pack` gathers them once on the unrolled loop, whichever pair is walked first). A LD lane
+    * whose words no iteration writes is a fresh LD of its read without ADR-0014's sharing: gathers
+    * are not shared across iterations (#110 第5段の Q3: オーナーが異を唱えなければ既定とする推奨で、決定ではない), and a LD before
+    * the loop gathered in the body is loaded in every iteration (rule 4's LD copy in a loop, an
+    * exception to ADR-0014's invariants held in registers). Any other lane is the node itself,
+    * homed as that gather's lane: it must have back 0, be in the gather's place, and have no other
+    * home. A computed value before the loop next to a value of the iteration is the loop-only case
+    * of rule 4: it would be a lane of every iteration's gather.
     */
   private def gather(s: State, r0: Ref, r1: Ref, reader: Place): Result[(State, PSrc)] = {
     val at =
       if (Seq(r0, r1).forall(r => r.back == 0 && g.places(r.node) == Place.Before)) Place.Before
+      else if (reader == Place.After) Place.Each
       else reader
     val key = (at, (r0, r1))
-    def placed(n: Int) = oneIteration || at == Place.After || g.places(n) == at
+    def placed(n: Int) = oneIteration || g.places(n) == at
     def lane(st: State, r: Ref, l: Int): Result[(State, GLane)] =
       LoopVector.unshared(g, r) match {
         case Some((p, a)) if LoopPack.unwrittenWord(g, writes, p, a) => Right((st, GLane.Fresh(a)))

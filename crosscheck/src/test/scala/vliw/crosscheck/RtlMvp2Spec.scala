@@ -36,8 +36,8 @@ import RtlPrograms.canonical
   *     for programs that break only L8;
   *   - programs compiled for the machine (#110 stage 4: the benchmarks, odd sizes and random
   *     kernels, packed or fallen back) against the model, the DSL reference implementation and the
-  *     scheduler's cycles; and (#110 stage 5a) modulo-scheduled loops, doubled or scalar, also
-  *     against the trace check of their II (`ModuloTrace`);
+  *     scheduler's cycles; and (#110 stage 5) modulo-scheduled loops, doubled (5a), with the body
+  *     packed (5b) or scalar, also against the trace check of their II (`ModuloTrace`);
   *   - last, in the three builds with cases, one case whose assertion must really fire, so that the
   *     bound assertions of the build are checked too. The generated variant runs only the random
   *     programs, in stop mode: no assertion fires there. With the builds of `hw/CaseSpec` and

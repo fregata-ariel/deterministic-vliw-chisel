@@ -302,7 +302,7 @@ class LoopPackSpec extends AnyFunSuite {
   }
 
   test(
-    "rule 4: NeededElsewhere for a shared lane, a computed value before the loop, a gathered initial pair, crossed states, a state next to another value"
+    "rule 4: NeededElsewhere for a shared lane, a computed value before the loop, a gathered initial pair, crossed states, a state next to another value; one gather for a body pair and a pair after the loop"
   ) {
     def body(build: LoopKernel.Builder => Unit, trips: Int = 3) = {
       val (g, lowered) = scalar(LoopKernel("r4", "i", trips)(build))
@@ -403,6 +403,56 @@ class LoopPackSpec extends AnyFunSuite {
     )
     assert(Seq(n60, n61).map(g6.nodes(_).mnemonic) == Seq("ADD", "MUL"))
     correct(fin)
+    // The same two values stored in the body and after the loop (o(2i) and f(0) store s0's next
+    // value, o(2i + 1) and f(1) store s1's): the pair after the loop gathers the last iteration's
+    // values, so both pairs read one gather, as Pack gathers them once on the unrolled loop. The
+    // outputs declared in both orders: whichever pair is tried first, neither is NeededElsewhere.
+    for (finalsFirst <- Seq(true, false)) {
+      val k = LoopKernel(if (finalsFirst) "fo" else "of", "i", 3) { b =>
+        val x = b.input("x", 3)
+        val (f, o) =
+          if (finalsFirst) { val f = b.output("f", 2); (f, b.output("o", 6)) }
+          else { val o = b.output("o", 6); (b.output("f", 2), o) }
+        val s0 = b.state("s0", b.const(0)); val s1 = b.state("s1", b.const(1))
+        b.body { i =>
+          o(i * 2) = s0.value + x(i); o(i * 2 + 1) = s1.value * x(i)
+          s0 := s0.value + x(i); s1 := s1.value * x(i)
+        }
+        f(0) = s0; f(1) = s1
+      }
+      val (g7, l7) = scalar(k)
+      val (fw, ow) = (l7.layout.elem("f", 0), l7.layout.elem("o", 0))
+      assert((fw < ow) == finalsFirst, k.name)
+      val p7 = sameValues(k, new Random(11))
+      assert(
+        p7.body == LoopBody(
+          Vector(LoopPair(Each, Address(ow, 2)), LoopPair(After, Address(fw, 0)))
+            .sortBy(_.addr.base),
+          Vector(),
+          0
+        ),
+        k.name
+      )
+      val v = p7.graph
+      val gathered = VRef.Gather(Ref(v.states(0).next), Ref(v.states(1).next))
+      assert(
+        v.ids(Each).map(v.nodes).collect { case w: LoopNode.StoreW => w } ==
+          Vector(LoopNode.StoreW(Address(ow, 2), gathered)),
+        k.name
+      )
+      assert(
+        v.ids(After).map(v.nodes) == Vector(LoopNode.StoreW(Address(fw, 0), gathered)),
+        k.name
+      )
+      // Pack on the unrolled loop: the three body pairs and the pair after the loop.
+      val unrolled = Pack.pack(g7.expanded.dag)
+      assert(
+        unrolled.pairs.map(_.addr).sorted == (Vector(fw) ++ (0 until 3).map(ow + 2 * _)).sorted &&
+          unrolled.scalarLanes.isEmpty,
+        k.name
+      )
+      correct(k)
+    }
   }
 
   test(
