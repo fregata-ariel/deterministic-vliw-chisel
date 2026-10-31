@@ -32,7 +32,7 @@
 | 配置・入力 | `MemoryLayout.fixedOrder`（ループは `LoopLowering.layout`）と `KernelCompiler.sampleInputs(kernel, 1)`。期待値は DSL の参照実装。どの構成でも、配置・入力・融合したスカラーの DAG は mvp-1 と同じである（`BenchmarkSpec` が確かめる） |
 | レジスタ | どの構成も 16 本。戦略を固定した系列の行（20 の試行）は、どの構成でも同じである |
 | コンパイラの試行 | 優先度 ×（上限なし、上限 16 で load reserve 0〜8）× 方式。rematerialization は行き詰まる試行だけ（[ADR-0016](../docs/DECISIONS.md)。W-full では LD.W も複製する。集めのレーンの LD は複製しない、#110 第4段の Q5） |
-| W の詰め込み | 固定の規則で、戦略の次元にしない（[ADR-0023](../docs/DECISIONS.md)）。W の行は、どれも同じ詰めた DAG（`Prepared.packing`）をスケジュールする。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない） |
+| W の詰め込み | 固定の規則で、戦略の次元にしない（[ADR-0023](../docs/DECISIONS.md)）。W の行は、どれも同じ詰めた DAG（`Prepared.packing`）をスケジュールする。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない）で、list scheduling とループで同じである（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る） |
 | ループ | 戦略は1つ。II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。融合は `FusionChoice`、W-full のベクトル化（2倍か本体の詰め込み）は固定の規則（ADR-0023） |
 | 比較での fallback | W の候補をスカラーの値に置き換えない（#78 の質問10、ADR-0023）。詰めた DAG のすべての試行が失敗した候補は理由付きの「不成立」、詰めるものの無いカーネルとループ（`NothingToPack`）はスカラーの命令列を理由と一緒に測る。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」とする |
 | 記録の形式 | 基準は `vliw-metrics/2`、W は `vliw-metrics/3`（[docs/METRICS.md](../docs/METRICS.md)）。W では、操作の数、レジスタの語の数、転送の語の数を分ける（#78 の質問9）。`/2` では、どの操作も1語を動かすので、3つは一致する |
@@ -860,6 +860,10 @@ W-full と `mvp2_rp4` は `read_ports` だけが違い、同じカーネル・�
 | `matmul3`（m） | 6 / 6 | 28 / 24 | 4 | 4 | 4 / 0 |
 | `product8`（i） | 2 / 2 | 19 / 19 | 0 | 0 | 0 / 0 |
 | `dot8`（i） | 2 / 2 | 21 / 21 | 0 | 0 | 0 / 0 |
+| `matmul4`（i） | 不成立（MII 20（元の1反復 10）、II 20〜31 のどれにも収まらない） / 不成立（MII 16（元の1反復 8）、II 16〜29 のどれにも収まらない） | - / - | - | - | - |
+| `matmul4`（m） | 不成立（MII 8（元の1反復 8）、II 8〜12 のどれにも収まらない） / 不成立（MII 8（元の1反復 8）、II 8〜12 のどれにも収まらない） | - / - | - | - | - |
+
+不成立のループは、命令列が無いので cycles と違反を書かない。すべての II の結果は「Modulo Scheduling」にある。
 
 ## Modulo Scheduling
 
@@ -885,6 +889,8 @@ W-full と `mvp2_rp4` は `read_ports` だけが違い、同じカーネル・�
 | `matmul4`（i） | mvp2_rp4 | 2倍 | `doubled (MII 16 vs 2 × 16)` | 不成立: II 16〜29 のどれにも収まらない |
 | `matmul4`（m） | W-full | 本体の詰め込み | `not doubled: OddTripCount, AssociationOrder; body: 8 pairs (after 32, 34, 36, 38, 40, 42, 44, 46), 0 scalar lanes, 8 vector states` | 不成立: II 8〜12 のどれにも収まらない |
 | `matmul4`（m） | mvp2_rp4 | 本体の詰め込み | `not doubled: OddTripCount, AssociationOrder; body: 8 pairs (after 32, 34, 36, 38, 40, 42, 44, 46), 0 scalar lanes, 8 vector states` | 不成立: II 8〜12 のどれにも収まらない |
+
+判定の MII（G と、作ったときは2倍にしたグラフ）は、3本目の読出しポートを除いて比べる（`Mii.withoutReadPort`。[ADR-0023](../docs/DECISIONS.md)、[docs/COMPILER.md](../docs/COMPILER.md)）。そのため `read_ports` 3 と 4 で同じ判定になり、下の「ループごとの結果」の MII（3本目の読出しポートを含む）と違うことがある。除いた値は「資源ごとの ResMII」にある。
 
 ### ループごとの結果
 
@@ -935,9 +941,48 @@ W-full と `mvp2_rp4` は `read_ports` だけが違い、同じカーネル・�
 - MinAvg と MaxLive は重みで数える（組は2。[docs/COMPILER.md](../docs/COMPILER.md)「記録の定義」）。割り当ては、レジスタ（(b) と (b′)）で II を上げたときの、その II の結果である
 - 理由の (a)・(b)・(b′) は [MAC.md](MAC.md) と [docs/COMPILER.md](../docs/COMPILER.md) と同じ。「不成立」の行は、すべての II の結果を書き、cycles を書かない（W の値をスカラーの値で置き換えない）
 
+### 資源ごとの ResMII
+
+スケジュールしたグラフ（W-full と `mvp2_rp4` では W のグラフ、`NothingToPack` ではスカラーのループ）の1反復が、資源ごとに使う回数である（[docs/COMPILER.md](../docs/COMPILER.md)「Modulo Scheduling」。どの資源も1サイクルに1回）。2倍にしたループでは、1反復は元の2反復である。「-」はその資源を使わないか、その構成に無い（3本目の読出しポートは、MAC があり `read_ports` 3 の構成だけの資源である）。演算器は、その演算の数 × II である。W-reg は測っていない（#78 の質問8 の (c)）ので、この表に無い。
+
+| ループ | 構成 | 形 | Compute のスロット | Memory のスロット | Compute の書戻しポート | Memory の書戻しポート | 3本目の読出しポート | 演算器 | ResMII（律速の資源） | ResMII（3本目の読出しポートを除く） | MII（3本目の読出しポートを除く。元の1反復） |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `saxpy8`（i） | mvp-1 | スカラー（W なし） | 1 | 3 | 1 | 2 | 2 | LD 2、MAC 1、ST 1 | 3（`memory slot`） | 3（`memory slot`） | 3（3） |
+| `saxpy8`（i） | W-full | 2倍 | 1 | 3 | 1 | 2 | 2 | LD.W 2、ST.W 1、VMAC 1 | 3（`memory slot`） | 3（`memory slot`） | 3（1.5） |
+| `saxpy8`（i） | mvp1_rp4 | スカラー（W なし） | 1 | 3 | 1 | 2 | - | LD 2、MAC 1、ST 1 | 3（`memory slot`） | 3（`memory slot`） | 3（3） |
+| `saxpy8`（i） | mvp2_rp4 | 2倍 | 1 | 3 | 1 | 2 | - | LD.W 2、ST.W 1、VMAC 1 | 3（`memory slot`） | 3（`memory slot`） | 3（1.5） |
+| `fir4x8`（i） | mvp-1 | スカラー（W なし） | 4 | 2 | 4 | 1 | 4 | LD 1、MAC 3、MUL 1、ST 1 | 4（`compute slot`、`compute write-back port`、`third read port`） | 4（`compute slot`、`compute write-back port`） | 4（4） |
+| `fir4x8`（i） | W-full | 2倍 | 4 | 3 | 4 | 2 | 4 | LD.W 2、ST.W 1、VMAC 3、VMUL 1 | 4（`compute slot`、`compute write-back port`、`third read port`） | 4（`compute slot`、`compute write-back port`） | 4（2） |
+| `fir4x8`（i） | mvp1_rp4 | スカラー（W なし） | 4 | 2 | 4 | 1 | - | LD 1、MAC 3、MUL 1、ST 1 | 4（`compute slot`、`compute write-back port`） | 4（`compute slot`、`compute write-back port`） | 4（4） |
+| `fir4x8`（i） | mvp2_rp4 | 2倍 | 4 | 3 | 4 | 2 | - | LD.W 2、ST.W 1、VMAC 3、VMUL 1 | 4（`compute slot`、`compute write-back port`） | 4（`compute slot`、`compute write-back port`） | 4（2） |
+| `matmul3`（i） | mvp-1 | スカラー（W なし） | 9 | 6 | 9 | 3 | 9 | LD 3、MAC 6、MUL 3、ST 3 | 9（`compute slot`、`compute write-back port`、`third read port`） | 9（`compute slot`、`compute write-back port`） | 9（9） |
+| `matmul3`（i） | W-full | 本体の詰め込み | 6 | 5 | 6 | 3 | 6 | LD 3、MAC 2、MUL 1、ST 1、ST.W 1、VMAC 2、VMUL 1 | 6（`compute slot`、`compute write-back port`、`third read port`） | 6（`compute slot`、`compute write-back port`） | 6（6） |
+| `matmul3`（i） | mvp1_rp4 | スカラー（W なし） | 9 | 6 | 9 | 3 | - | LD 3、MAC 6、MUL 3、ST 3 | 9（`compute slot`、`compute write-back port`） | 9（`compute slot`、`compute write-back port`） | 9（9） |
+| `matmul3`（i） | mvp2_rp4 | 本体の詰め込み | 6 | 5 | 6 | 3 | - | LD 3、MAC 2、MUL 1、ST 1、ST.W 1、VMAC 2、VMUL 1 | 6（`compute slot`、`compute write-back port`） | 6（`compute slot`、`compute write-back port`） | 6（6） |
+| `matmul3`（m） | mvp-1 | スカラー（W なし） | 9 | 6 | 9 | 6 | 9 | LD 6、MAC 9 | 9（`compute slot`、`compute write-back port`、`third read port`、`MAC unit`） | 9（`compute slot`、`compute write-back port`、`MAC unit`） | 9（9） |
+| `matmul3`（m） | W-full | 本体の詰め込み | 6 | 5 | 6 | 5 | 6 | LD 4、LD.W 1、MAC 3、VMAC 3 | 6（`compute slot`、`compute write-back port`、`third read port`） | 6（`compute slot`、`compute write-back port`） | 6（6） |
+| `matmul3`（m） | mvp1_rp4 | スカラー（W なし） | 9 | 6 | 9 | 6 | - | LD 6、MAC 9 | 9（`compute slot`、`compute write-back port`、`MAC unit`） | 9（`compute slot`、`compute write-back port`、`MAC unit`） | 9（9） |
+| `matmul3`（m） | mvp2_rp4 | 本体の詰め込み | 6 | 5 | 6 | 5 | - | LD 4、LD.W 1、MAC 3、VMAC 3 | 6（`compute slot`、`compute write-back port`） | 6（`compute slot`、`compute write-back port`） | 6（6） |
+| `product8`（i） | mvp-1 | スカラー（W なし） | 1 | 1 | 1 | 1 | - | LD 1、MUL 1 | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 2（2） |
+| `product8`（i） | W-full | スカラー（`NothingToPack`） | 1 | 1 | 1 | 1 | - | LD 1、MUL 1 | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 2（2） |
+| `product8`（i） | mvp1_rp4 | スカラー（W なし） | 1 | 1 | 1 | 1 | - | LD 1、MUL 1 | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 2（2） |
+| `product8`（i） | mvp2_rp4 | スカラー（`NothingToPack`） | 1 | 1 | 1 | 1 | - | LD 1、MUL 1 | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 1（`compute slot`、`memory slot`、`compute write-back port`、`memory write-back port`、`LD unit`、`MUL unit`） | 2（2） |
+| `dot8`（i） | mvp-1 | スカラー（W なし） | 1 | 2 | 1 | 2 | 1 | LD 2、MAC 1 | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（2） |
+| `dot8`（i） | W-full | スカラー（`NothingToPack`） | 1 | 2 | 1 | 2 | 1 | LD 2、MAC 1 | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（2） |
+| `dot8`（i） | mvp1_rp4 | スカラー（W なし） | 1 | 2 | 1 | 2 | - | LD 2、MAC 1 | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（2） |
+| `dot8`（i） | mvp2_rp4 | スカラー（`NothingToPack`） | 1 | 2 | 1 | 2 | - | LD 2、MAC 1 | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（`memory slot`、`memory write-back port`、`LD unit`） | 2（2） |
+| `matmul4`（i） | mvp-1 | スカラー（W なし） | 16 | 8 | 16 | 4 | 16 | LD 4、MAC 12、MUL 4、ST 4 | 16（`compute slot`、`compute write-back port`、`third read port`） | 16（`compute slot`、`compute write-back port`） | 16（16） |
+| `matmul4`（i） | W-full | 2倍 | 16 | 16 | 16 | 8 | 20 | LD 8、ST 8、VMAC 12、VMUL 4 | 20（`third read port`） | 16（`compute slot`、`memory slot`、`compute write-back port`） | 16（8） |
+| `matmul4`（i） | mvp1_rp4 | スカラー（W なし） | 16 | 8 | 16 | 4 | - | LD 4、MAC 12、MUL 4、ST 4 | 16（`compute slot`、`compute write-back port`） | 16（`compute slot`、`compute write-back port`） | 16（16） |
+| `matmul4`（i） | mvp2_rp4 | 2倍 | 16 | 16 | 16 | 8 | - | LD 8、ST 8、VMAC 12、VMUL 4 | 16（`compute slot`、`memory slot`、`compute write-back port`） | 16（`compute slot`、`memory slot`、`compute write-back port`） | 16（8） |
+| `matmul4`（m） | mvp-1 | スカラー（W なし） | 16 | 8 | 16 | 8 | 16 | LD 8、MAC 16 | 16（`compute slot`、`compute write-back port`、`third read port`、`MAC unit`） | 16（`compute slot`、`compute write-back port`、`MAC unit`） | 16（16） |
+| `matmul4`（m） | W-full | 本体の詰め込み | 8 | 6 | 8 | 6 | 8 | LD 4、LD.W 2、VMAC 8 | 8（`compute slot`、`compute write-back port`、`third read port`、`VMAC unit`） | 8（`compute slot`、`compute write-back port`、`VMAC unit`） | 8（8） |
+| `matmul4`（m） | mvp1_rp4 | スカラー（W なし） | 16 | 8 | 16 | 8 | - | LD 8、MAC 16 | 16（`compute slot`、`compute write-back port`、`MAC unit`） | 16（`compute slot`、`compute write-back port`、`MAC unit`） | 16（16） |
+| `matmul4`（m） | mvp2_rp4 | 本体の詰め込み | 8 | 6 | 8 | 6 | - | LD 4、LD.W 2、VMAC 8 | 8（`compute slot`、`compute write-back port`、`VMAC unit`） | 8（`compute slot`、`compute write-back port`、`VMAC unit`） | 8（8） |
+
 ### `matmul4` のループ
 
-レジスタ 16 本では、どの構成でも命令列ができない。理由は構造的で、スケジュールしたグラフから数えた、ループの間ずっと生きる値の重み（不変の値はループの前に LD してループの間レジスタに置く（ADR-0014）。Modulo Scheduling は LD を複製しない（ADR-0016））と、レジスタ（(b)）で不成立の II の同時に生きる値を書く。
+レジスタ 16 本では、測った構成（mvp-1、W-full、mvp1_rp4、mvp2_rp4）のどれでも、2つのループの命令列ができない（W-reg は測っていない。#78 の質問8 の (c)）。理由は構造的で、スケジュールしたグラフから数えた、ループの間ずっと生きる値の重み（不変の値はループの前に LD してループの間レジスタに置く（ADR-0014）。Modulo Scheduling は LD を複製しない（ADR-0016））と、レジスタ（(b)）で不成立の II の同時に生きる値を書く。
 
 | ループ | 構成 | 形 | 不変の値の重み | 反復をまたいで渡す値の重み | レジスタ（(b)）で不成立の II の、同時に生きる値の最小 | 通常の利用のスカラーのループ G |
 |---|---|---|---|---|---|---|
@@ -997,7 +1042,7 @@ list scheduling、方式ごとに cycles 最小（vliw）。見積りの括弧�
 - `fir4x8` の W-full: 見積り 26、測定 25（LD 18）、LD を複製しない行の最小 27。見積りが数えていない LD.W の rematerialization と、詰めた DAG のノードの番号の付け方（既定）
 - `fir4x8` の mvp2_rp4: 見積り 26、測定 23（LD 18）、LD を複製しない行の最小 27。見積りが数えていない LD.W の rematerialization と、詰めた DAG のノードの番号の付け方（既定）
 
-`matmul4`（見積りなし）: mvp-1 77（下限 65、cs・wbC・rp）、W-reg 不成立（下限 49、ms）、W-full 58（下限 33、cs・ms・wbC・rp）、mvp1_rp4 76（下限 65、cs・wbC）、mvp2_rp4 60（下限 33、cs・ms・wbC）。
+`matmul4`（見積りなし）: mvp-1 77（下限 65、cs・wbC・rp）、W-reg 不成立（TooManyLive 2、Stuck 18。下限 49、ms）、W-full 58（下限 33、cs・ms・wbC・rp）、mvp1_rp4 76（下限 65、cs・wbC）、mvp2_rp4 60（下限 33、cs・ms・wbC）。
 
 ループの MII（元の1単位当たり。`saxpy8` は要素、`fir4x8` は出力、`matmul3`（i）は行、（m）は段）と、W-full の MinAvg（MII、ASAP）:
 
@@ -1010,12 +1055,12 @@ list scheduling、方式ごとに cycles 最小（vliw）。見積りの括弧�
 
 ## ADR-0022「引き受ける危険」の確認
 
-- 16本のレジスタは8組しかない・割り当てが断片化する: 戦略を固定した系列で `NoAlignedPair` の行は、W-reg は `matmul3`（vliw）1。W-full は `matmul4`（vliw）1、`matmul4`（single）2。mvp2_rp4 は `matmul4`（vliw）2、`matmul4`（single）2である（不成立の行の数と理由は上の各表）。ループには、II を (b′) で上げたものも、(b′) で不成立の II も無い
+- 16本のレジスタは8組しかない・割り当てが断片化する: 戦略を固定した系列で `NoAlignedPair` の行は、W-reg は `matmul3`（vliw）1。W-full は `matmul4`（vliw）1、`matmul4`（single）2。mvp2_rp4 は `matmul4`（vliw）2、`matmul4`（single）2である（不成立の行の数と理由は上の各表）。記録した W のループ（W-full と mvp2_rp4 で 16）には、II を (b′) で上げたものも、(b′) で不成立の II も無い（ほかのループについては [ADR-0023](../docs/DECISIONS.md) の第5段の後半の補足）
 - W-reg では集めが要る: W-reg の不成立の行（vliw / single）は `saxpy8` 0 / 1、`fir4x8` 11 / 11、`matmul3` 8 / 7、`matmul4` 20 / 20。方式ごとに cycles 最小で不成立なのは `matmul4`（vliw。TooManyLive 2、Stuck 18）、`matmul4`（single。TooManyLive 2、Stuck 18）（集めのレーンの LD は複製しない。#110 第4段の Q5 の既定）。集め全体の複製を足さずに不成立と記録するのは #110 第6段の Q2 で、オーナーが異を唱えなければ既定とする推奨で、決定ではない。W-reg の Modulo Scheduling は測っていない（#78 の質問8 の (c)）
 - 2つ目の乗算器と RF の配線の費用: 測っていない（#57）。上の「構成ごとに足すもの」は書いた値である
 - DMA（#111）との bank のサイクル: Scratchpad の bank ごとの語を「スロットとポート」に記録した。DMA との共有は測っていない（#111）
-- 命令領域（#81）: 記録した命令列の bundle は最大 128（命令領域 256 bundle）
-- `matmul3` の3列目はスカラーのまま残る: W-full の `matmul3` の詰め方は 組 3（行をまたぐ組 0）、スカラーのレーン 3: c(0,2)（NoNeighbour）、c(1,2)（NoNeighbour）、c(2,2)（NoNeighbour）、ブロードキャスト 9、集め 0 で、3列目の語 c(0,2)、c(1,2)、c(2,2) はどれもスカラーのレーンである（危険のとおり）。`matmul4` は 組 8（行をまたぐ組 0）、スカラーのレーン 0、ブロードキャスト 16、集め 0 である。規則1は2段の規則で（#110 第4段の Q1 の (b)）、この文は `Pack` の結果から作る
+- 命令領域（#81）: 記録した命令列の bundle は、W の構成では最大 82（`matmul4_single_w`）、基準（mvp-1 と `mvp1_rp4`）では最大 128（`matmul4_single_mac`）である（命令領域 256 bundle）
+- `matmul3` の3列目はスカラーのまま残る: W-full の `matmul3` の詰め方は 組 3（行をまたぐ組 0）、スカラーのレーン 3: c(0,2)（NoNeighbour）、c(1,2)（NoNeighbour）、c(2,2)（NoNeighbour）、ブロードキャスト 9、集め 0 で、3列目の語 c(0,2)、c(1,2)、c(2,2) はどれもスカラーのレーンである（危険のとおり）。`matmul4` は 組 8（行をまたぐ組 0）、スカラーのレーン 0、ブロードキャスト 16、集め 0 である（この文の詰め方は `Pack` の結果から作る）。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない）で、list scheduling とループで同じである（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る）
 - `dot8`・`product8` は速くならない: `product8`（i）（W-full）19 cycles、mvp-1 19 cycles、`product8`（i）（mvp2_rp4）19 cycles、mvp1_rp4 19 cycles、`dot8`（i）（W-full）21 cycles、mvp-1 21 cycles、`dot8`（i）（mvp2_rp4）21 cycles、mvp1_rp4 21 cycles（`NothingToPack`。スカラーの命令列で、mvp-1 と同じ cycles）
 
 ## 測っていないもの

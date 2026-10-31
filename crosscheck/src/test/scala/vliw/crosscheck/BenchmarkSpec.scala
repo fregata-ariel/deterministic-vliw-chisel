@@ -9,7 +9,7 @@ import scala.util.Try
 import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.{KernelCompiler, Simd, Verifier}
-import vliw.compiler.dag.{Dag, Fusion}
+import vliw.compiler.dag.{Dag, Fusion, Node, Pack}
 import vliw.compiler.dsl.{Benchmarks, Lowering}
 import vliw.compiler.modulo.{LoopCandidate, LoopFallback, LoopSimd, ModuloCompiler, Outcome}
 import vliw.compiler.regalloc.{NoFit, RegisterAllocator}
@@ -840,9 +840,10 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
           // A doubled loop's iteration is two original iterations.
           val doubled = SimdRecords.doubled(l)
           assert(r.compiled.graph.trips * (if (doubled) 2 else 1) == l.kernel.trips, name)
+          val perOriginal = BigDecimal(r.compiled.ii) / (if (doubled) 2 else 1)
           assert(
             SimdRecords.perOriginal(l, r.compiled.ii) ==
-              (if (doubled) SimdRecords.half(r.compiled.ii) else r.compiled.ii.toString),
+              perOriginal.bigDecimal.stripTrailingZeros.toPlainString,
             name
           )
           l.candidate.foreach {
@@ -863,6 +864,23 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
       }
     }
     assert(s.loops.filter(_.config.name == "W-reg").forall(_.compiled.isEmpty))
+    // The values that ADR-0022's stage-6 supplement cites: the II per original iteration on
+    // W-full, against mvp-1's.
+    def perOriginal(c: String, name: String, index: String) = {
+      val l = s.loops
+        .find(l => l.config.name == c && l.kernel.name == name && l.kernel.index == index)
+        .get
+      l.compiled.map(x => SimdRecords.perOriginal(l, x.ii))
+    }
+    Seq(
+      ("saxpy8", "i", "3", "1.5"),
+      ("fir4x8", "i", "4", "2.5"),
+      ("matmul3", "i", "9", "6"),
+      ("matmul3", "m", "9", "6")
+    ).foreach { case (name, index, base, w) =>
+      assert(perOriginal("mvp-1", name, index).contains(base), s"$name ($index) mvp-1")
+      assert(perOriginal("W-full", name, index).contains(w), s"$name ($index) W-full")
+    }
   }
 
   test(
@@ -898,16 +916,73 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   test("SIMD: the per-resource bounds hold for every row and give #78's table for three kernels") {
     val s = simd.get
     import SimdRecords._
+    // Each bound again, with this test's own counts: the Memory operations by mnemonic; every
+    // Compute operation writes rd, and the Memory write-back port takes LD and LD.W only (ISA.md);
+    // a word's bank is its address mod banks, and LD.W and ST.W access two words.
+    val memory = Set("LD", "LD.W", "ST", "ST.W")
+    def expected(d: Dag): Map[String, Option[Int]] = {
+      val m = d.machine
+      val ops = d.nodes.map(_.mnemonic)
+      val compute = ops.count(!memory(_))
+      val words = d.nodes.flatMap {
+        case Node.Load(a)            => Seq(a)
+        case Node.Store(a, _)        => Seq(a)
+        case Node.StoreLane(a, _, _) => Seq(a)
+        case Node.LoadW(a)           => Seq(a, a + 1)
+        case Node.StoreW(a, _)       => Seq(a, a + 1)
+        case _                       => Nil
+      }
+      val fields = d.nodes.map(_.fields).sum
+      Map(
+        "dep" -> Some(d.cyclesLowerBound),
+        "cs" -> Some(compute + 1),
+        "ms" -> Some(ops.count(memory) + 1),
+        "wbC" -> Some(compute + 1),
+        "wbM" -> Some(ops.count(Set("LD", "LD.W")) + 1),
+        "rp" -> Some(math.ceil(fields.toDouble / m.readPorts).toInt + 1)
+      ) ++ Seq("MUL", "MAC", "VMUL", "VMAC", "LD", "LD.W").map(u =>
+        u -> Option.when(ops.contains(u))(ops.count(_ == u) * m.operation(u).ii + 1)
+      ) ++ (0 until m.banks).map(k => s"bank $k" -> Some(words.count(_ % m.banks == k) + 1))
+    }
+    var checkedBanks = Set.empty[String]
     for (f <- s.fewest) {
+      val where = s"${f.kernel.name} ${f.mode.name} (${f.config.name})"
       val b = bounds(f.dag)
-      assert(b.binding.forall(n => b(n).contains(b.max)) && b.binding.nonEmpty)
+      val e = expected(f.dag)
+      assert(b.values.toMap == e && b.values.size == e.size, where)
+      val max = e.values.flatten.max
+      assert(
+        b.max == max && b.binding.toSet == e.collect { case (n, Some(v)) if v == max => n }.toSet,
+        where
+      )
       (0 until f.config.machine.banks).foreach(k => assert(b(s"bank $k").get <= b("ms").get))
       for (st <- s.strategies; x <- s.row(f.config.name, f.kernel, f.mode, st).result.toOption) {
         val cc = x.compiled
-        assert(cc.cycles >= b.max, s"${f.kernel.name} ${f.mode.name} $st (${f.config.name})")
+        val row = s"$where $st"
+        assert(cc.cycles >= b.max, row)
         if (f.mode.singleIssue) assert(cc.cycles >= cc.allocated.dag.nodes.size + 1)
+        // Against the row's run: rematerialization copies only LD and LD.W.
+        val copies = BenchmarkRecords.loads(cc) - f.dag.loads
+        assert(operations(x.metrics)._1 == b("cs").get - 1, row)
+        assert(commits(x.metrics)._1 == b("wbC").get - 1, row)
+        assert(operations(x.metrics)._2 - copies == b("ms").get - 1, row)
+        assert(commits(x.metrics)._2 - copies == b("wbM").get - 1, row)
+        Seq("MUL", "MAC", "VMUL", "VMAC").foreach { u =>
+          val n = byOperation(x.metrics).toMap.getOrElse(u, 0)
+          assert(b(u) == Option.when(n > 0)(n * f.config.machine.operation(u).ii + 1), s"$row $u")
+        }
+        if (copies == 0) {
+          assert(
+            bankWords(x.metrics).map(_ + 1) == (0 until f.config.machine.banks).map(k =>
+              b(s"bank $k").get
+            ),
+            row
+          )
+          checkedBanks += f.config.name
+        }
       }
     }
+    assert(checkedBanks == s.configs.map(_.name).toSet)
     for (
       k <- Benchmarks.all;
       (e, c) <- Seq("M1" -> "mvp-1", "WR" -> "W-reg", "WF" -> "W-full", "WF4" -> "mvp2_rp4")
@@ -982,6 +1057,13 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
     }
     val crossing = p.pairs.count(q => (q.addr - f.prepared.layout.elem(c.name, 0)) % 3 == 2)
     assert(text.contains(s"（行をまたぐ組 $crossing）"))
+    // The rule that the text names is the one the packing shows: with the two passes (b), every
+    // pair of matmul3 is gather-free (pass 1); rule 1 as written (a) pairs a store that needs a
+    // gather (docs/COMPILER.md). The text is in the 条件 table and in the third-column risk.
+    val twoPasses = p.pairs.forall(q => Pack.gatherFree(f.prepared.dag, q.addr))
+    val rule = if (twoPasses) "規則1は2段の規則" else "規則1は書かれたとおりの1段の規則"
+    assert(SimdRecords.rule1(s) == ((twoPasses, twoPasses)))
+    assert(simdReport.split(rule, -1).length - 1 == 2, rule)
   }
 }
 

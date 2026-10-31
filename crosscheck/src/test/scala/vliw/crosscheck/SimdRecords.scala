@@ -3,13 +3,14 @@ package vliw.crosscheck
 import java.nio.file.Path
 
 import vliw.compiler.{CompiledKernel, FallbackReason, KernelCompiler, Simd, SimdCandidate}
-import vliw.compiler.dag.{Dag, Node, Packing}
+import vliw.compiler.dag.{Dag, Node, Pack, Packing}
 import vliw.compiler.dsl.{Benchmarks, Interpreter, Kernel, MemoryLayout, Values}
-import vliw.compiler.loop.{LoopBenchmarks, LoopGraph, LoopKernel, LoopNode, Place}
+import vliw.compiler.loop.{LoopBenchmarks, LoopGraph, LoopKernel, LoopNode, LoopPack, Place}
 import vliw.compiler.modulo.{
   LoopCandidate,
   LoopDecision,
   LoopSimd,
+  Mii,
   ModuloCompiled,
   ModuloCompiler,
   ModuloScheduler,
@@ -533,6 +534,57 @@ object SimdRecords {
         (if (p.copies > 0) s"、`Pack` の LD の複製 ${p.copies}" else "")
   }
 
+  /** Which reading of rule 1 (#110 第4段の Q1) the compiler implements, for list scheduling and for
+    * loops: true for (b), the two passes (the gather-free candidates by address, then every
+    * candidate by address), false for (a), rule 1 as written (by address alone). It is read from
+    * the order in which `Pack.storePairs` tries the candidates of `matmul3`'s fused DAG and
+    * `LoopPack.storePairs` those of its loop (m) on W-full, where the two readings differ. An order
+    * that is neither is an error, so that the sentences built from it follow the compiler.
+    */
+  def rule1(s: Series): (Boolean, Boolean) = {
+    def twoPasses[A](what: String, order: Vector[A], byAddress: Vector[A], free: A => Boolean) = {
+      val two = byAddress.filter(free) ++ byAddress
+      require(two != byAddress, s"$what: the two readings of rule 1 try matmul3's stores alike")
+      if (order == two) true
+      else if (order == byAddress) false
+      else sys.error(s"$what: the order of rule 1 is neither (a) nor (b): $order")
+    }
+    val matmul3 = Benchmarks.all.find(_.name == "matmul3").get
+    val dag = s.of("W-full", matmul3, Mode.Vliw).prepared.dag
+    val stored = dag.nodes.collect { case Node.Store(a, _) => a }.toSet
+    val list = twoPasses[Int](
+      "Pack",
+      Pack.storePairs(dag),
+      stored.toVector.sorted.filter(w => stored(w + 1)),
+      Pack.gatherFree(dag, _)
+    )
+    val acc = loops.find(l => l.name == "matmul3" && l.index == "m").get
+    val g = s.loop("W-full", acc).prepared.scalar
+    val loop = twoPasses[LoopPack.Candidate](
+      "LoopPack",
+      LoopPack.storePairs(g),
+      LoopPack.byAddress(g),
+      LoopPack.gatherFree(g, _)
+    )
+    (list, loop)
+  }
+
+  /** The sentence on rule 1, from [[rule1]]. */
+  def rule1Text(s: Series): String = {
+    def text(twoPasses: Boolean) =
+      if (twoPasses) "2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない）"
+      else "書かれたとおりの1段の規則（#110 第4段の Q1 の (a)）"
+    val (list, loop) = rule1(s)
+    val which =
+      if (list == loop) s"${text(list)}で、list scheduling とループで同じである"
+      else s"list scheduling では${text(list)}、ループでは${text(loop)}である"
+    s"規則1は$which（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る）"
+  }
+
+  /** The cycles of a fewest-cycles entry, or 不成立 with the failures by reason. */
+  private def fewestCell(f: Fewest): String =
+    f.result.fold(fs => s"不成立（${failureCounts(fs.map(_._2))}）", r => cyclesCell(r.compiled))
+
   /** The W outcome of a fewest-cycles entry. */
   private def outcome(f: Fewest): String = f.packing match {
     case None    => "-（W なし）"
@@ -613,7 +665,9 @@ ${machines.mkString("\n")}
 | 配置・入力 | `MemoryLayout.fixedOrder`（ループは `LoopLowering.layout`）と `KernelCompiler.sampleInputs(kernel, $Seed)`。期待値は DSL の参照実装。どの構成でも、配置・入力・融合したスカラーの DAG は mvp-1 と同じである（`BenchmarkSpec` が確かめる） |
 | レジスタ | どの構成も $r 本。戦略を固定した系列の行（20 の試行）は、どの構成でも同じである |
 | コンパイラの試行 | 優先度 ×（上限なし、上限 $r で load reserve 0〜${r / 2}）× 方式。rematerialization は行き詰まる試行だけ（[ADR-0016](../docs/DECISIONS.md)。W-full では LD.W も複製する。集めのレーンの LD は複製しない、#110 第4段の Q5） |
-| W の詰め込み | 固定の規則で、戦略の次元にしない（[ADR-0023](../docs/DECISIONS.md)）。W の行は、どれも同じ詰めた DAG（`Prepared.packing`）をスケジュールする。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない） |
+| W の詰め込み | 固定の規則で、戦略の次元にしない（[ADR-0023](../docs/DECISIONS.md)）。W の行は、どれも同じ詰めた DAG（`Prepared.packing`）をスケジュールする。${rule1Text(
+        s
+      )} |
 | ループ | 戦略は1つ。II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。融合は `FusionChoice`、W-full のベクトル化（2倍か本体の詰め込み）は固定の規則（ADR-0023） |
 | 比較での fallback | W の候補をスカラーの値に置き換えない（#78 の質問10、ADR-0023）。詰めた DAG のすべての試行が失敗した候補は理由付きの「不成立」、詰めるものの無いカーネルとループ（`NothingToPack`）はスカラーの命令列を理由と一緒に測る。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」とする |
 | 記録の形式 | 基準は `vliw-metrics/2`、W は `vliw-metrics/3`（[docs/METRICS.md](../docs/METRICS.md)）。W では、操作の数、レジスタの語の数、転送の語の数を分ける（#78 の質問9）。`/2` では、どの操作も1語を動かすので、3つは一致する |
@@ -1126,24 +1180,36 @@ ${lines.mkString("\n")}
       }
       s"`${k.name}` ${strategies.size} 行のうち $same 行"
     }
-    val loopRows = loops.flatMap { k =>
-      (s.loop("W-full", k).compiled, s.loop("mvp2_rp4", k).compiled) match {
-        case (Some(a), Some(b)) =>
+    val loopRows = loops.map { k =>
+      (programOrWhy(s.loop("W-full", k)), programOrWhy(s.loop("mvp2_rp4", k))) match {
+        case (Right(a), Right(b)) =>
           val (l11, other) = onFull(s, b.layout, b.words)
           val both = b.bundles.count(isRs3WithStore)
-          Some(
-            row(
-              Seq(
-                ModuloRecords.label(k),
-                s"${a.ii} / ${b.ii}",
-                s"${a.cycles} / ${b.cycles}",
-                (a.cycles - b.cycles).toString,
-                both.toString,
-                s"$l11 / $other"
-              )
+          row(
+            Seq(
+              ModuloRecords.label(k),
+              s"${a.ii} / ${b.ii}",
+              s"${a.cycles} / ${b.cycles}",
+              (a.cycles - b.cycles).toString,
+              both.toString,
+              s"$l11 / $other"
             )
           )
-        case _ => None
+        case (a, b) =>
+          val rp4 = b.toOption.map { y =>
+            val (l11, other) = onFull(s, y.layout, y.words)
+            (y.bundles.count(isRs3WithStore).toString, s"$l11 / $other")
+          }
+          row(
+            Seq(
+              ModuloRecords.label(k),
+              s"${a.fold(identity, _.ii.toString)} / ${b.fold(identity, _.ii.toString)}",
+              s"${a.fold(_ => "-", _.cycles.toString)} / ${b.fold(_ => "-", _.cycles.toString)}",
+              "-",
+              rp4.fold("-")(_._1),
+              rp4.fold("-")(_._2)
+            )
+          )
       }
     }
     s"""## 読出しポートの制約（W-full と `mvp2_rp4`）
@@ -1188,7 +1254,29 @@ ${head(
           "W-full で検査した違反（L11 / ほか）"
         )
       )}
-${loopRows.mkString("\n")}"""
+${loopRows.mkString("\n")}
+
+不成立のループは、命令列が無いので cycles と違反を書かない。すべての II の結果は「Modulo Scheduling」にある。"""
+  }
+
+  /** A loop's program, or why it has none: 不成立 with the IIs tried, or 測っていない. */
+  private def programOrWhy(l: LoopEntry): Either[String, ModuloCompiled] = l.result match {
+    case LoopResult.Measured(r)       => Right(r.compiled)
+    case LoopResult.NoProgram(no)     => Left(noFitText(l, no))
+    case LoopResult.Infeasible(_, no) => Left(noFitText(l, no))
+    case LoopResult.NotMeasured(_)    => Left(form(l))
+  }
+
+  /** A loop that fits no II: its MII (per original iteration) and the IIs tried. */
+  private def noFitText(l: LoopEntry, no: NoSchedule): String =
+    s"不成立（MII ${no.mii.mii}（元の1反復 ${perOriginal(l, no.mii.mii)}）、II ${no.mii.mii}〜${no.iiMax} のどれにも収まらない）"
+
+  /** The MII of a loop's graph that was scheduled (None when not measured). */
+  private def miiOf(l: LoopEntry): Option[Mii] = l.result match {
+    case LoopResult.Measured(r)       => Some(r.compiled.result.mii)
+    case LoopResult.NoProgram(no)     => Some(no.mii)
+    case LoopResult.Infeasible(_, no) => Some(no.mii)
+    case LoopResult.NotMeasured(_)    => None
   }
 
   /** Whether a bundle holds (MAC or VMAC) and (ST or ST.W). */
@@ -1338,6 +1426,48 @@ ${loopRows.mkString("\n")}"""
       row(Seq(ModuloRecords.label(k), c.name, form(l)) ++ cells)
     }
     val registers = s.configs.head.machine.registerCount
+    val resourceRows = for {
+      k <- loops
+      c <- s.configs
+      l = s.loop(c.name, k)
+      mii <- miiOf(l)
+    } yield {
+      def uses(r: String) = mii.resources.find(_.resource == r).fold("-")(_.uses.toString)
+      val units = mii.resources
+        .filter(_.resource.endsWith(" unit"))
+        .map(r => s"${r.resource.stripSuffix(" unit")} ${r.uses}")
+      val without = mii.withoutReadPort
+      row(
+        Seq(
+          ModuloRecords.label(k),
+          c.name,
+          form(l),
+          uses("compute slot"),
+          uses("memory slot"),
+          uses("compute write-back port"),
+          uses("memory write-back port"),
+          uses(Mii.ReadPort),
+          if (units.isEmpty) "-" else units.mkString("、"),
+          s"${mii.resMII}（${mii.bounding.map(code).mkString("、")}）",
+          s"${without.resMII}（${without.bounding.map(code).mkString("、")}）",
+          s"${without.mii}（${perOriginal(l, without.mii)}）"
+        )
+      )
+    }
+    def m4(p: LoopResult => Boolean) =
+      s.configs.filter(c => matmul4Loops.forall(k => p(s.loop(c.name, k).result)))
+    val m4None = m4 {
+      case _: LoopResult.NoProgram | _: LoopResult.Infeasible => true
+      case _                                                  => false
+    }
+    val m4NotMeasured = m4(_.isInstanceOf[LoopResult.NotMeasured])
+    val m4Others = s.configs.filterNot(c => m4None.contains(c) || m4NotMeasured.contains(c))
+    val m4Sentence =
+      s"レジスタ $registers 本では、測った構成（${m4None.map(_.name).mkString("、")}）のどれでも、2つのループの命令列ができない" +
+        (if (m4NotMeasured.isEmpty) ""
+         else s"（${m4NotMeasured.map(_.name).mkString("、")} は測っていない。#78 の質問8 の (c)）") +
+        (if (m4Others.isEmpty) ""
+         else s"。${m4Others.map(_.name).mkString("、")} では、どちらかのループに命令列がある")
     s"""## Modulo Scheduling
 
 `LoopBenchmarks.all` の6つのループと、`matmul4` の2つのループ（`matmulRows(4)`、`matmulAcc(4)`。#110 第6段の Q1。オーナーが異を唱えなければ既定とする推奨で、決定ではない）を、${s.configs.size}つの構成で。配置と入力は list scheduling と同じである（`BenchmarkSpec` が確かめる）。戦略は1つで、II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。ここでの II はループの II で、`metrics` の `ii` に、トレースで確かめた値（`crosscheck/ModuloTrace`）を記録する。`vliw-metrics/3` の `ii` は、スケジュールしたループの反復の開始間隔で、2倍にしたループではベクトルの1反復（元の2反復）の間隔である（[docs/METRICS.md](../docs/METRICS.md)）。比べるときは、元の1反復当たりの II（2倍にしたループでは `ii` / 2、本体を詰めたループとスカラーのループでは `ii`）を使い、`ii` だけを比べない。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」で、値を書かない（`LoopCandidate.NotMeasured`）。
@@ -1346,6 +1476,8 @@ ${loopRows.mkString("\n")}"""
 
 ${head(Seq("ループ", "構成", "形", "判定（`LoopDecision`）", "W の候補"))}
 ${decisions.mkString("\n")}
+
+判定の MII（G と、作ったときは2倍にしたグラフ）は、3本目の読出しポートを除いて比べる（`Mii.withoutReadPort`。[ADR-0023](../docs/DECISIONS.md)、[docs/COMPILER.md](../docs/COMPILER.md)）。そのため `read_ports` 3 と 4 で同じ判定になり、下の「ループごとの結果」の MII（3本目の読出しポートを含む）と違うことがある。除いた値は「資源ごとの ResMII」にある。
 
 ### ループごとの結果
 
@@ -1375,9 +1507,31 @@ ${results.mkString("\n")}
 - MinAvg と MaxLive は重みで数える（組は2。[docs/COMPILER.md](../docs/COMPILER.md)「記録の定義」）。割り当ては、レジスタ（(b) と (b′)）で II を上げたときの、その II の結果である
 - 理由の (a)・(b)・(b′) は [MAC.md](MAC.md) と [docs/COMPILER.md](../docs/COMPILER.md) と同じ。「不成立」の行は、すべての II の結果を書き、cycles を書かない（W の値をスカラーの値で置き換えない）
 
+### 資源ごとの ResMII
+
+スケジュールしたグラフ（W-full と `mvp2_rp4` では W のグラフ、`NothingToPack` ではスカラーのループ）の1反復が、資源ごとに使う回数である（[docs/COMPILER.md](../docs/COMPILER.md)「Modulo Scheduling」。どの資源も1サイクルに1回）。2倍にしたループでは、1反復は元の2反復である。「-」はその資源を使わないか、その構成に無い（3本目の読出しポートは、MAC があり `read_ports` 3 の構成だけの資源である）。演算器は、その演算の数 × II である。W-reg は測っていない（#78 の質問8 の (c)）ので、この表に無い。
+
+${head(
+        Seq(
+          "ループ",
+          "構成",
+          "形",
+          "Compute のスロット",
+          "Memory のスロット",
+          "Compute の書戻しポート",
+          "Memory の書戻しポート",
+          "3本目の読出しポート",
+          "演算器",
+          "ResMII（律速の資源）",
+          "ResMII（3本目の読出しポートを除く）",
+          "MII（3本目の読出しポートを除く。元の1反復）"
+        )
+      )}
+${resourceRows.mkString("\n")}
+
 ### `matmul4` のループ
 
-レジスタ $registers 本では、どの構成でも命令列ができない。理由は構造的で、スケジュールしたグラフから数えた、ループの間ずっと生きる値の重み（不変の値はループの前に LD してループの間レジスタに置く（ADR-0014）。Modulo Scheduling は LD を複製しない（ADR-0016））と、レジスタ（(b)）で不成立の II の同時に生きる値を書く。
+$m4Sentence。理由は構造的で、スケジュールしたグラフから数えた、ループの間ずっと生きる値の重み（不変の値はループの前に LD してループの間レジスタに置く（ADR-0014）。Modulo Scheduling は LD を複製しない（ADR-0016））と、レジスタ（(b)）で不成立の II の同時に生きる値を書く。
 
 ${head(
         Seq(
@@ -1447,7 +1601,7 @@ ${structural.mkString("\n")}
                 code(k.name),
                 s"$e（$c）",
                 est,
-                f.result.fold(_ => "不成立", r => cyclesCell(r.compiled)),
+                fewestCell(f),
                 plain.fold("-")(p => s"${p.cycles}（${p.allocated.attempt}）"),
                 s"${b.max}（$binding）"
               )
@@ -1463,13 +1617,17 @@ ${structural.mkString("\n")}
         .map(_.compiled)
         .filter(x => loads(x) == x.dag.loads)
         .minByOption(_.cycles)
-      f = s.of(c, k, Mode.Vliw).result.toOption.map(_.compiled)
-      if !plain.exists(_.cycles == cycles) || !f.exists(_.cycles == cycles)
-    } yield s"- ${code(k.name)} の ${c}: 見積り $cycles、測定 ${f.fold("不成立")(x => cyclesCell(x))}、LD を複製しない行の最小 ${plain.fold("-")(_.cycles.toString)}。${KnownDifferences.getOrElse(k.name -> c, "理由は調べていない")}"
+      f = s.of(c, k, Mode.Vliw)
+      if !plain.exists(_.cycles == cycles) || !f.result.exists(_.compiled.cycles == cycles)
+    } yield s"- ${code(k.name)} の ${c}: 見積り $cycles、測定 ${fewestCell(f)}、LD を複製しない行の最小 ${plain.fold("-")(_.cycles.toString)}。${KnownDifferences.getOrElse(k.name -> c, "理由は調べていない")}"
     val m4 = s.configs.map { c =>
       val f = s.of(c.name, matmul4, Mode.Vliw)
       val b = bounds(f.dag)
-      s"${c.name} ${f.result.fold(_ => "不成立", r => r.compiled.cycles.toString)}（下限 ${b.max}、${b.binding.mkString("・")}）"
+      val bound = s"下限 ${b.max}、${b.binding.mkString("・")}"
+      f.result.fold(
+        fs => s"${c.name} 不成立（${failureCounts(fs.map(_._2))}。$bound）",
+        r => s"${c.name} ${r.compiled.cycles}（$bound）"
+      )
     }
     val loopRows =
       for (
@@ -1479,15 +1637,25 @@ ${structural.mkString("\n")}
         val k = loops.find(l => (l.name, l.index) == key).get
         def measured(c: String) = {
           val l = s.loop(c, k)
-          l.compiled.fold(form(l))(x => perOriginal(l, x.result.mii.mii))
+          l.result match {
+            case LoopResult.Measured(r)       => perOriginal(l, r.compiled.result.mii.mii)
+            case LoopResult.NoProgram(no)     => noFitText(l, no)
+            case LoopResult.Infeasible(_, no) => noFitText(l, no)
+            case LoopResult.NotMeasured(_)    => form(l)
+          }
         }
         val wf = s.loop("W-full", k)
+        val wfMinAvg = wf.result match {
+          case LoopResult.Measured(r)    => r.compiled.minAvgAtMii.toString
+          case LoopResult.NotMeasured(_) => "-"
+          case _ => s"${ModuloScheduler.minAvgAtMii(wf.prepared.graph)}（不成立のグラフ）"
+        }
         row(
           Seq(
             ModuloRecords.label(k),
             LoopConfigs.zip(values).map { case (cfg, v) => s"$cfg $v" }.mkString("、"),
             s"M1 ${measured("mvp-1")}、WR ${measured("W-reg")}、WF ${measured("W-full")}、WF4 ${measured("mvp2_rp4")}",
-            s"${MinAvgEstimates.get(key).fold("-")(_.toString)} / ${wf.compiled.fold("-")(_.minAvgAtMii.toString)}"
+            s"${MinAvgEstimates.get(key).fold("-")(_.toString)} / $wfMinAvg"
           )
         )
       }
@@ -1544,9 +1712,21 @@ ${loopRows.mkString("\n")}"""
     val wregInfeasible =
       for (k <- kernels; mode <- Mode.all; fs <- s.of("W-reg", k, mode).result.left.toOption)
         yield s"${code(k.name)}（${mode.name}。${failureCounts(fs.map(_._2))}）"
-    val bundles = (s.fewest.flatMap(_.result.toOption).map(_.compiled.bundles.size) ++ s.loops
-      .flatMap(_.compiled)
-      .map(_.bundles.size)).max
+    // The longest recorded program of the W configurations, and of the baseline.
+    def longest(w: Boolean): (Int, String) =
+      (s.fewest
+        .filter(_.config.w == w)
+        .flatMap(_.result.toOption)
+        .map(r => (r.compiled.bundles.size, r.name)) ++ s.loops.filter(_.config.w == w).collect {
+        case LoopEntry(_, _, _, _, LoopResult.Measured(r)) => (r.compiled.bundles.size, r.name)
+      }).maxBy(_._1)
+    val (wLongest, baseLongest) = (longest(true), longest(false))
+    val loopsWithAttempts = s.loops.filter(l =>
+      l.config.w && (l.result match {
+        case _: LoopResult.Measured | _: LoopResult.Infeasible => true
+        case _                                                 => false
+      })
+    )
     val capacity = s.configs.head.machine.instructionMemoryBundles
     val third = s.of("W-full", matmul3, Mode.Vliw)
     val thirdPacking = third.packing.get
@@ -1571,8 +1751,13 @@ ${loopRows.mkString("\n")}"""
 
 - 16本のレジスタは8組しかない・割り当てが断片化する: 戦略を固定した系列で `NoAlignedPair` の行は、${napText.mkString(
         "。"
-      )}である（不成立の行の数と理由は上の各表）。${if (loopNap.isEmpty) "ループには、II を (b′) で上げたものも、(b′) で不成立の II も無い"
-      else s"ループで (b′) の II があったのは ${loopNap.mkString("、")}"}
+      )}である（不成立の行の数と理由は上の各表）。記録した W のループ（${loopsWithAttempts
+        .map(_.config.name)
+        .distinct
+        .mkString(" と ")} で ${loopsWithAttempts.size}）${if (loopNap.isEmpty)
+        "には、II を (b′) で上げたものも、(b′) で不成立の II も無い"
+      else
+        s"で (b′) の II があったのは ${loopNap.mkString("、")}"}（ほかのループについては [ADR-0023](../docs/DECISIONS.md) の第5段の後半の補足）
 - W-reg では集めが要る: W-reg の不成立の行（vliw / single）は ${wreg.mkString("、")}。方式ごとに cycles 最小で不成立なのは ${if (
         wregInfeasible.isEmpty
       ) "無い"
@@ -1582,8 +1767,8 @@ ${loopRows.mkString("\n")}"""
         )}（集めのレーンの LD は複製しない。#110 第4段の Q5 の既定）。集め全体の複製を足さずに不成立と記録するのは #110 第6段の Q2 で、オーナーが異を唱えなければ既定とする推奨で、決定ではない。W-reg の Modulo Scheduling は測っていない（#78 の質問8 の (c)）
 - 2つ目の乗算器と RF の配線の費用: 測っていない（#57）。上の「構成ごとに足すもの」は書いた値である
 - DMA（#111）との bank のサイクル: Scratchpad の bank ごとの語を「スロットとポート」に記録した。DMA との共有は測っていない（#111）
-- 命令領域（#81）: 記録した命令列の bundle は最大 $bundles（命令領域 $capacity bundle）
-- `matmul3` の3列目はスカラーのまま残る: $thirdText。規則1は2段の規則で（#110 第4段の Q1 の (b)）、この文は `Pack` の結果から作る
+- 命令領域（#81）: 記録した命令列の bundle は、W の構成では最大 ${wLongest._1}（`${wLongest._2}`）、基準（mvp-1 と `mvp1_rp4`）では最大 ${baseLongest._1}（`${baseLongest._2}`）である（命令領域 $capacity bundle）
+- `matmul3` の3列目はスカラーのまま残る: $thirdText（この文の詰め方は `Pack` の結果から作る）。${rule1Text(s)}
 - `dot8`・`product8` は速くならない: ${nothing.flatten.mkString(
         "、"
       )}（`NothingToPack`。スカラーの命令列で、mvp-1 と同じ cycles）"""
