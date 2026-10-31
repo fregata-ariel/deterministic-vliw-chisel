@@ -129,7 +129,7 @@ sbt "isa/run machine"    # machine_id、revision、hash を表示する
 
 | ファイル | machine_id | 内容 |
 |---|---|---|
-| `config/machine-mvp2.json` | `vliw2-i32-sp2-mac-w2` | W-full（既定）。revision 1、`proposed`（#110 Phase A の後に `frozen` にする。mvp-1 を #77 Phase A の後に凍結したのと同じ）。`config/machine-mvp1.json` に対し、`schema_version`・`isa_version`・`machine_id`・`status` を変え、RF の2つのキー、`max_words_per_access` 2、6つの演算を足した。`read_ports` は RF の bank ごとに3。#57 で変えるときは revision を上げ、ISA の版は mvp-2 のままにする（ADR-0018 と同じ） |
+| `config/machine-mvp2.json` | `vliw2-i32-sp2-mac-w2` | W-full（既定）。revision 1、`frozen`（#110 Phase A の第6段で凍結した。mvp-1 を #77 Phase A の後に凍結したのと同じ。ファイルの sha256 と machine の hash は `isa/Mvp2Spec` が固定する）。`config/machine-mvp1.json` に対し、`schema_version`・`isa_version`・`machine_id`・`status` を変え、RF の2つのキー、`max_words_per_access` 2、6つの演算を足した。`read_ports` は RF の bank ごとに3。#57 で変えるときは revision を上げ、ISA の版は mvp-2 のままにする（ADR-0018 と同じ） |
 | `tests/machines/mvp2_mw1.json` | `vliw2-i32-sp2-mac-w2-mw1` | W-reg: `max_words_per_access` 1 で、`operations` に LD.W・ST.W が無い |
 | `tests/machines/mvp2_rp4.json` | `vliw2-i32-sp2-mac-w2-rp4` | `read_ports` だけ4（制約なしの比較用。verifier と参照モデルだけで動かす） |
 | `tests/machines/mvp2_vlat.json` | `vliw2-i32-sp2-mac-w2-vlat` | 新しい演算の latency だけ変えたもの（VADD・VSUB 2、VMUL・VMAC 3、LD.W 3）。verifier・参照モデル・RTL のテスト用 |

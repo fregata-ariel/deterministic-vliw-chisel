@@ -56,13 +56,13 @@ class Mvp2Spec extends AnyFunSuite {
 
   // Machine descriptions (docs/MACHINE.md "mvp-2（schema_version 3）").
 
-  test("config/machine-mvp2.json is mvp-1 plus the W operations (W-full, proposed)") {
+  test("config/machine-mvp2.json is mvp-1 plus the W operations (W-full, frozen)") {
     assert((machine.schemaVersion, machine.isaVersion) == ((3, IsaVersion.Mvp2)))
     assert(
       (machine.machineId, machine.revision, machine.status) == ((
         "vliw2-i32-sp2-mac-w2",
         1,
-        "proposed"
+        "frozen"
       ))
     )
     assert(machine.hasMac && machine.hasVector && machine.hasWideMemory)
@@ -96,9 +96,16 @@ class Mvp2Spec extends AnyFunSuite {
     assert(MachineDescription.load(MachineDescription.Mvp2Path).map(_.hash) == Right(machine.hash))
   }
 
-  test("the frozen mvp-0 and mvp-1 machine descriptions are unchanged, byte for byte") {
+  // config/machine-mvp2.json is frozen after #110 Phase A (ADR-0022), as mvp-1 was after #77's: an
+  // edit fails here with a frozen-file message instead of being absorbed by regenerating the
+  // records. A revision 2 (#57) would update the pin on purpose.
+  test(
+    "the frozen mvp-0, mvp-1 and mvp-2 (W-full) machine descriptions are unchanged, byte for byte"
+  ) {
     def sha256(path: String) =
       MessageDigest.getInstance("SHA-256").digest(bytes(path)).map(b => f"$b%02x").mkString
+    def frozen(path: String) =
+      s"$path is frozen: a change needs a new revision (docs/MACHINE.md), not a regeneration"
     assert(
       sha256(
         "config/machine.json"
@@ -108,8 +115,18 @@ class Mvp2Spec extends AnyFunSuite {
       sha256("config/machine-mvp1.json") ==
         "8e1a5671e53f94651c4b183870b63f68ea0db105530b746ec8a955e8a4b80c67"
     )
+    assert(
+      sha256("config/machine-mvp2.json") ==
+        "e57f88f7afdf533f2c6fe894cc72a2b7301b557dc51073ad02545de525dde252",
+      frozen("config/machine-mvp2.json")
+    )
     assert(mvp0.hash == "sha256:a4af6064e049415dc9822614264a01f06b6e1be39c86bc41c5fcdda3e7d89e21")
     assert(mvp1.hash == "sha256:90f6a9667a8b9fa7be448117438c04ff40a1af6495f13c0b8d8d1ccd95f89162")
+    assert(
+      machine.hash == "sha256:9e582a03e98e95bc87f42074c1b4b899667424fbc68e9110405a517d21c01d96",
+      frozen("config/machine-mvp2.json")
+    )
+    assert((machine.status, machine.revision) == (("frozen", 1)))
     // config/machine-mvp1.json reads as before #110; the new field is 1 on schema 1 and 2.
     def spec(m: String, slot: Slot, opcode: Int, latency: Int, wb: Option[Slot]) =
       m -> OperationSpec(m, slot, opcode, latency, 1, wb)
