@@ -37,7 +37,9 @@ import RtlPrograms.canonical
   *   - programs compiled for the machine (#110 stage 4: the benchmarks, odd sizes and random
   *     kernels, packed or fallen back) against the model, the DSL reference implementation and the
   *     scheduler's cycles; and (#110 stage 5) modulo-scheduled loops, doubled (5a), with the body
-  *     packed (5b) or scalar, also against the trace check of their II (`ModuloTrace`);
+  *     packed (5b) or scalar, also against the trace check of their II (`ModuloTrace`); and (#110
+  *     stage 6) the W programs recorded in benchmarks/ (SIMD.md: W-full's kernels and loops,
+  *     W-reg's kernels) against the model and their expected outputs and cycles;
   *   - last, in the three builds with cases, one case whose assertion must really fire, so that the
   *     bound assertions of the build are checked too. The generated variant runs only the random
   *     programs, in stop mode: no assertion fires there. With the builds of `hw/CaseSpec` and
@@ -637,6 +639,48 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
     (doubled, packed)
   }
 
+  // The W test cases recorded in benchmarks/ (#110 stage 6, SimdRecords, benchmarks/SIMD.md), in
+  // the same builds: W-full's list and loop records and W-reg's list records (W-reg's loops are
+  // not measured, #78 Q8 (c); W-reg matmul4 is infeasible and has no record).
+
+  private def recorded(names: Seq[String]): Vector[TestCase] =
+    names
+      .map(n => Paths.get("benchmarks", "cases", s"$n.json"))
+      .filter(Files.exists(_))
+      .map(p => TestCase.load(p).fold(es => fail(es.mkString("\n")), identity))
+      .toVector
+  private def listNames(suffix: String) =
+    for (k <- SimdRecords.kernels; mode <- BenchmarkRecords.Mode.all)
+      yield s"${k.name}_${mode.name}$suffix"
+  private def loopName(k: LoopKernel) = s"${k.name}_${k.index}_modulo_w"
+  private lazy val fullRecorded = recorded(listNames("_w"))
+  private lazy val fullRecordedLoops = recorded(SimdRecords.loops.map(loopName))
+  private lazy val mw1Recorded = recorded(listNames("_wreg"))
+
+  /** Runs recorded W test cases on the core: as the model (trace, cycles, defined values), with the
+    * expected outputs and cycles; for a loop also the II from the core's trace, with its program
+    * compiled in `loops` (the same words).
+    */
+  private def runRecorded(
+      dut: Core,
+      m: MachineDescription,
+      cases: Vector[TestCase],
+      loops: Vector[ModuloCompiled]
+  ): Unit = cases.foreach { tc =>
+    assert(tc.machine.hash == m.hash, tc.name)
+    val r = matchesModel(dut, m, tc.words, tc.inputs, s"${tc.name} (benchmarks/cases)")
+    assert(tc.expect.cycles.contains(r.cycles), tc.name)
+    tc.expect.memory.foreach { case (a, v) =>
+      assert(r.memory(a) == BigInt(v), s"${tc.name} [$a]")
+    }
+    if (tc.name.contains("_modulo")) {
+      val c = loops.find(c => loopName(c.kernel) == tc.name).getOrElse(fail(s"${tc.name}: no loop"))
+      assert(c.words == tc.words, tc.name)
+      val ii = Option.when(c.graph.trips > 1)(c.ii)
+      assert(ModuloTrace.check(c.graph, c.result.map, r.trace, c.ii) == Right(ii), tc.name)
+    }
+  }
+
   // The minimum counts are about half of those measured when they were set (#110 stage 3); the
   // seeds are fixed, so the counts change only with the generators or the machines.
 
@@ -645,6 +689,8 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
   ) {
     val compiled = fullCompiled
     val loops = fullLoops
+    // The 4 kernels in both modes and the 6 loops (#110 stage 6).
+    assert(fullRecorded.size == 8 && fullRecordedLoops.size == 6)
     build(full) { dut =>
       assert(runCases(dut, full) == ((8, 13, 2)))
       decodes(dut)
@@ -702,6 +748,8 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       // two loops, 6 random vectorizable and 6 packable loops).
       val (doubled, packed) = runLoops(dut, full, loops)
       assert(doubled >= 8 && packed >= 12, (doubled, packed))
+      runRecorded(dut, full, fullRecorded ++ fullRecordedLoops, loops)
+      info(s"${fullRecorded.size + fullRecordedLoops.size} recorded W-full programs of SIMD.md")
     }
   }
 
@@ -710,6 +758,8 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
   ) {
     val compiled = mw1Compiled
     val loops = mw1Loops
+    // The 4 kernels in both modes but matmul4, infeasible on W-reg (#110 stage 6).
+    assert(mw1Recorded.size == 6 && mw1Recorded.forall(!_.name.startsWith("matmul4")))
     build(mw1) { dut =>
       assert(runCases(dut, mw1) == ((1, 0, 0)))
       randomPrograms(
@@ -745,6 +795,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       assert(runLoops(dut, mw1, loops) == ((0, 0))) // W-reg: the scalar loops (#78 Q8 (c))
       // Measured: 10 packed (all with a lane fallback) and 20 NothingToPack (RootDiffers, mostly).
       assert(kinds("packed") >= 5 && kinds("lane fallback") >= 5 && kinds("NothingToPack") >= 10)
+      runRecorded(dut, mw1, mw1Recorded, Vector.empty)
     }
   }
 

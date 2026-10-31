@@ -1,0 +1,104 @@
+{
+  "metrics": "vliw-metrics/3",
+  "isa": "mvp-2",
+  "machine": {
+    "id": "vliw2-i32-sp2-mac-w2",
+    "revision": 1,
+    "hash": "sha256:9e582a03e98e95bc87f42074c1b4b899667424fbc68e9110405a517d21c01d96"
+  },
+  "program": {
+    "name": "matmul3_vliw_w",
+    "hash": "sha256:239f9bf0a8c2d12bf79204edb64d0a4d4339f5a0d3135c27498e6a606d07fb8f",
+    "bundles": 28
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 28,
+  "issue": {
+    "compute": {
+      "operations": 18,
+      "nop": 9,
+      "nop_rate": 0.321429
+    },
+    "memory": {
+      "operations": 21,
+      "nop": 7,
+      "nop_rate": 0.25
+    },
+    "by_operation": {
+      "ADD": 0,
+      "SUB": 0,
+      "MUL": 3,
+      "MAC": 6,
+      "VADD": 0,
+      "VSUB": 0,
+      "VMUL": 3,
+      "VMAC": 6,
+      "LD": 12,
+      "ST": 3,
+      "LD.W": 3,
+      "ST.W": 3,
+      "HALT": 1
+    },
+    "register_reads": {
+      "read_ports": 3,
+      "reads": 54,
+      "registers": 72,
+      "banks": [
+        {
+          "bank": 0,
+          "registers": 39
+        },
+        {
+          "bank": 1,
+          "registers": 33
+        }
+      ],
+      "bundles_by_reads": {
+        "0": 8,
+        "1": 2,
+        "2": 2,
+        "3": 16
+      }
+    },
+    "rs3_with_store": 0
+  },
+  "writeback": {
+    "compute": {
+      "commits": 18,
+      "registers": 27,
+      "utilization": 0.642857
+    },
+    "memory": {
+      "commits": 15,
+      "registers": 18,
+      "utilization": 0.535714
+    }
+  },
+  "scratchpad": {
+    "read_operations": 15,
+    "write_operations": 6,
+    "reads": 18,
+    "writes": 9,
+    "accesses_per_cycle": 0.964286,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 9,
+        "writes": 5,
+        "accesses_per_cycle": 0.5
+      },
+      {
+        "bank": 1,
+        "reads": 9,
+        "writes": 4,
+        "accesses_per_cycle": 0.464286
+      }
+    ]
+  },
+  "ii": null,
+  "rtl": null
+}

@@ -1,6 +1,6 @@
 # Benchmarks
 
-Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）の記録。結果の表は [RESULTS.md](RESULTS.md) にある。MAC のある構成（ISA mvp-1、#77）とない構成の比較は [MAC.md](MAC.md) にある。
+Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）の記録。結果の表は [RESULTS.md](RESULTS.md) にある。MAC のある構成（ISA mvp-1、#77）とない構成の比較は [MAC.md](MAC.md) に、W（ISA mvp-2、#110）と mvp-1 の比較は [SIMD.md](SIMD.md) にある。
 
 **cycle ベースの比較である。** Fmax・面積・電力は未測定（#57）で、時間や電力の主張はしない。
 
@@ -13,8 +13,11 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 | `saxpy8` | `out(i) = a * x(i) + y(i)` | スカラー `a`、`x`・`y` 各8語 | `out` 8語 | 25 |
 | `fir4x8` | `out(i) = Σ_{t<4} h(t) * x(i + t)`、係数 `h = (1, 2, 3, 4)` は定数 | `x` 11語 | `out` 8語 | 23（定数4語を含む） |
 | `matmul3` | `c = a × b`（3×3、行優先） | `a`・`b` 各9語 | `c` 9語 | 27 |
+| `matmul4` | `c = a × b`（4×4、行優先） | `a`・`b` 各16語 | `c` 16語 | 48 |
 
 期待出力は、DSL の参照実装（`vliw.compiler.dsl.Interpreter`）で、命令列を経由せずに計算する。
+
+`matmul4`（`Benchmarks.matmul(4)`）は、W のレーンに合う大きさとして #110 の第6段で足した（#78 の質問13 の (b)）。`Benchmarks.all` には入れず、[RESULTS.md](RESULTS.md)・[MAC.md](MAC.md)・[MODULO.md](MODULO.md)・[REGISTERS.md](REGISTERS.md) には無い。mvp-1 の基準も W の記録も [SIMD.md](SIMD.md) だけにある（ADR-0023）。
 
 ## 比べる方式
 
@@ -55,6 +58,13 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 - MAC のある構成の DAG は、MUL + ADD を MAC に融合したもので、演算数が mvp-0 と違う。融合は戦略の次元ではない（全ての試行が同じ DAG を使う。ADR-0019）ので、同じ行の比は、MAC と融合の効果と読む
 - 読出しポート3本の制約（L11、MAC と ST を同じ bundle に置けない）の効果は、mvp-1 と rp4 の同じ行の差で言う。rp4 には RTL が無い（#57）ので、rp4 の値は参照モデルと verifier だけで確かめた値だと書く。mac3 は感度の確認で、mvp-1 との差は MAC の latency だけの効果である
 - MAC の latency と II（`operations.MAC`）は演算器の契約の値である。Modulo Scheduling のループの II（`metrics` の `ii`）と混同しない
+- W（ISA mvp-2）と mvp-1 の比較（#110、[SIMD.md](SIMD.md)）では、mvp-1（`config/machine-mvp1.json`）と、W-reg（`tests/machines/mvp2_mw1.json`）、W-full（`config/machine-mvp2.json`）、読出しポート4本の `mvp1_rp4` と `mvp2_rp4` を、同じカーネル・入力・配置・試行で比べる。比べる組は、同じ行の mvp-1 と W-reg（演算の幅）、W-reg と W-full（メモリの幅）、mvp-1 と W-full（両方）である（ADR-0023）。`mvp1_rp4` と `mvp2_rp4` は読出しポート4本での W、W-full と `mvp2_rp4` は W の4本目の読出しポートで、後者の差は L11 の損失だけでなく、スケジュールと割り当ての違いも含む（`mvp2_rp4` の方が遅い行もある）
+- W の詰め込みは固定の規則で、戦略の次元ではない。W の構成の戦略を固定した系列の各行は、どれも同じ詰めた DAG をその試行でスケジュールした結果である
+- 操作の数、レジスタの語の数、転送の語の数を分けて書く（`vliw-metrics/3`、[docs/METRICS.md](../docs/METRICS.md)）。W は操作の数を減らす。転送の語は、カーネルの DAG では `fir4x8` の窓のほかは mvp-1 と同じだが、命令列では rematerialization の複製で変わる（LD.W の複製は2語を読む）ので、どちらの水準の値かを書く
+- W の候補が成り立たない行は、理由付きの「不成立」と書き、スカラーの値で置き換えない（#78 の質問10）。通常の利用ではスカラーの命令列に戻るが、その値を W の値として書かない。詰めるもののないカーネルとループ（`NothingToPack`）は、スカラーの命令列を理由と一緒に書く。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」と書き、不成立とも書かない
+- ループの II は、元の1反復当たりの値で比べる。2倍にしたループの `ii` はベクトルの1反復（元の2反復）の間隔なので、`ii` / 2 を書く。`ii` だけを比べない
+- #78 の見積りは情報で、目標ではない。S2・WFa・P16 は実装しない見積りだけで、P16 は 16bit の結果なので i32 の記録と比べない
+- W の比較も cycle ベースで、#57 まで暫定である（#78 の質問14）
 
 ## 記録
 
@@ -69,6 +79,10 @@ Phase 2 のベンチマーク（整数 SAXPY、FIR、固定サイズ行列積）
 | [MAC.md](MAC.md) | MAC のある構成とない構成の記録（ISA mvp-1、#77 Phase A）。mvp-0・mvp-1・rp4・mac3 の条件（machine の id・revision・hash、MAC の latency と II）、方式ごとに cycles 最小の系列（cycles、mvp-0 に対する比、LD の数、試行、MUL・MAC・ADD の数と融合した組、Compute の NOP 率と書戻しポートの利用率、書戻しポートと読出しポートで待ったサイクル、MAC と ST の bundle、読出しの数ごとの bundle）、戦略を固定した系列（試行ごとの4つの構成の cycles と、同じ行どうしの比。同じ行の、書戻しポートと読出しポートで待ったサイクル、MAC と ST の bundle、読出しの数ごとの bundle）、読出しポートの制約（mvp-1 と rp4 の行ごとの差、制約が当たった bundle、rp4 の命令列を mvp-1 で検査した L11 の違反の数）、6つのループの Modulo Scheduling（3本目の読出しポートを含む・除く ResMII、RecMII、II と理由、配置、cycles、融合の判定）、ADR-0018 の見積りとの比較 |
 | `cases/<kernel>_<mode>_mac.json`・`_mac_rp4.json`・`_mac3.json`、`metrics/` の同じ名前 | mvp-1・rp4・mac3 の、方式ごとに cycles 最小の系列の命令列・入力・期待値と、実行の記録（`vliw-metrics/2`） |
 | `cases/<kernel>_<loop>_modulo_mac.json`・`_mac_rp4.json`・`_mac3.json`、`metrics/` の同じ名前 | mvp-1・rp4・mac3 の、6つのループを Modulo Scheduling した命令列・入力・期待値と、実行の記録（`vliw-metrics/2`。`ii` はトレースで確かめた II） |
+| [SIMD.md](SIMD.md) | W（ISA mvp-2）と mvp-1 の比較の記録（#110 の第6段）。5つの構成（mvp-1・W-reg・W-full・`mvp1_rp4`・`mvp2_rp4`）の条件と足すもの、方式ごとに cycles 最小の系列（cycles、比、W の詰め方、操作の数・レジスタの語の数・転送の語の数、スロットとポート、資源ごとの下限と律速の資源）、戦略を固定した系列（試行ごとの5つの構成の cycles と、同じ行どうしの比。同じ行の NOP 率、書戻しポートの使用率、待ったサイクル、読出しの欄の数ごとの bundle）、読出しポートの制約（W-full と `mvp2_rp4`）、Modulo Scheduling（ベクトル化の判定、元の1反復当たりの II、MinAvg、MaxLive、割り当て、`matmul4` のループ）、#78 の見積りとの比較、ADR-0022 の「引き受ける危険」の確認 |
+| `cases/<kernel>_<mode>_w.json`・`_wreg.json`・`_w_rp4.json`、`metrics/` の同じ名前 | W-full・W-reg・`mvp2_rp4` の、方式ごとに cycles 最小の系列の命令列・入力・期待値と、実行の記録（`vliw-metrics/3`）。W-reg の `matmul4` は不成立なのでファイルが無い |
+| `cases/<kernel>_<loop>_modulo_w.json`・`_w_rp4.json`、`metrics/` の同じ名前 | W-full・`mvp2_rp4` の、6つのループを Modulo Scheduling した命令列・入力・期待値と、実行の記録（`vliw-metrics/3`。`ii` はトレースで確かめた II）。`NothingToPack` のループはスカラーの命令列 |
+| `cases/matmul4_<mode>_mac.json`・`_mac_rp4.json`、`metrics/` の同じ名前 | SIMD.md の、`matmul4` の mvp-1・`mvp1_rp4` の基準（`vliw-metrics/2`）。接尾辞は MAC.md の構成のものだが、MAC.md の記録ではない（`_mac3` は無い） |
 | `metrics/<kernel>_<mode>.json` | 方式ごとに cycles 最小の系列の、参照モデルでの実行の記録。`vliw-metrics/1`（[docs/METRICS.md](../docs/METRICS.md)）。machine の revision と hash、命令列の hash を含む |
 
 記録は、すべてソースから生成する。手で編集しない。
@@ -91,3 +105,4 @@ CI の `crosscheck/BenchmarkSpec` は、次を確かめる。
 - 固定パイプライン（#75）が、記録した入力で、記録した出力と cycles を ChiselSim で出すこと。「VLIW の命令列」の回路の計画が、記録した命令列の各 bundle と同じ操作を同じ cycle に発行し、cycles が VLIW と同じであること。PATH の Verilator が期待する版で、JDK が `jdk.major` であること。期待する版は、記録が名前を挙げる固定の版（`project/toolchain.properties`）で、手元と候補を試す workflow でだけ `VLIW_VERILATOR_EXPECTED` で上書きできる（[docs/toolchain/README.md](../docs/toolchain/README.md)）
 - 8・12 本の machine description が、既定の構成とレジスタ数だけ違うこと。8・12 本のテストケースが、参照モデルでも RTL でも成り立つこと。戦略を固定した系列と、方式ごとに cycles 最小の系列についての上の確認を、8・12・16 本のそれぞれで行うこと
 - MAC のある構成（#77）: rp4 と mac3 が、`config/machine-mvp1.json` と `read_ports` だけ、MAC の latency だけ違うこと。RTL の範囲外は rp4 だけであること。配置と入力が mvp-0 と同じで、融合した組の数だけ MUL と ADD が減り、MAC が増えること。テストケースが参照モデルで成り立ち、mvp-1 と mac3 では RTL でも同じ出力と cycles になり、RTL のトレースが参照モデルのトレースと一致すること（ループは RTL のトレースでも II を確かめる）。戦略を固定した系列と、方式ごとに cycles 最小の系列についての上の確認を、3つの構成でも行うこと。`vliw-metrics/2` の読出しの欄が命令列と一致すること。戦略を固定した系列の各行で、読出しの数ごとの bundle の合計が cycles になり、読出しの合計が行によらないこと。MAC の無い構成と読出し4本の構成で `heldByReadPorts` が0であること。選ばれた試行の行の `heldByWritePort`・`heldByReadPorts`・読出しの数ごとの bundle が、方式ごとに cycles 最小の系列の記録と同じであること。rp4 の全ての命令列（両方の系列とループ）を mvp-1 の machine で検査すると、MAC と ST の bundle ごとにちょうど1つ L11 の違反になり、ほかの違反が無いこと。読出し3本の構成の命令列に MAC と ST の bundle が無く、単一発行の命令列が mvp-1 と rp4 で同じであること
+- W と mvp-1 の比較（#110 の第6段、SIMD.md）: SIMD.md と W・`matmul4` の記録が生成し直した内容と一致し、ほかに SIMD の名前のファイルが無いこと。テストケースが参照モデルで成り立ち、どの構成でも配置・入力・融合したスカラーの DAG が mvp-1 と同じであること。W-reg と `mvp2_rp4` が `config/machine-mvp2.json`（`frozen`）と、書いたキーだけで違うこと。W の戦略を固定した系列が、全ての試行を試す順に両方の方式に与え、各行がその試行で詰めた DAG をスケジュールした結果であること（成立した行は W の操作を持つか `NothingToPack` で、verifier に合法と判定され、参照モデルで期待した出力と予測どおりの cycles になる）。方式ごとに cycles 最小の記録が、その中で cycles 最小（同じならば LD 最少）の最初の行で、不成立の候補の失敗が各行の失敗と同じであること。操作の数・レジスタの語の数・転送の語の数が命令列と合い、DAG の転送の語が `fir4x8` の窓のほかは mvp-1 と同じであること。`mvp2_rp4` の全ての命令列を W-full で検査すると、(MAC か VMAC) と (ST か ST.W) の bundle ごとにちょうど1つ L11 の違反になること。W のループの `ii` が記録した II で、W-reg のループが「測っていない」こと。`matmul4` のループが、どの II でも命令列ができず、その結果を全て書くこと。資源ごとの下限がどの行の cycles 以下で、3つのカーネルで #78 の表の下限と律速の資源になること。`matmul3` の3列目の文が `Pack` の結果のとおりであること。mvp-1 の `matmul4` の記録は、上の mvp-1 の RTL のビルドで RTL のトレースも参照モデルと一致し、W-full と W-reg の記録は `crosscheck/RtlMvp2Spec` が RTL で確かめる

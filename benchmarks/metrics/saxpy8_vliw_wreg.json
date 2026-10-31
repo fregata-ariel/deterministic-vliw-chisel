@@ -1,0 +1,104 @@
+{
+  "metrics": "vliw-metrics/3",
+  "isa": "mvp-2",
+  "machine": {
+    "id": "vliw2-i32-sp2-mac-w2-mw1",
+    "revision": 1,
+    "hash": "sha256:50834abdfc813d5bbdf7df3c4a1357e578d5894f1532396b0263cdaf162b2859"
+  },
+  "program": {
+    "name": "saxpy8_vliw_wreg",
+    "hash": "sha256:c1bc147e0b7418cb4f90684bf236009a51b9f006375e1015a0abe12768e040e0",
+    "bundles": 27
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 27,
+  "issue": {
+    "compute": {
+      "operations": 4,
+      "nop": 22,
+      "nop_rate": 0.814815
+    },
+    "memory": {
+      "operations": 25,
+      "nop": 2,
+      "nop_rate": 0.074074
+    },
+    "by_operation": {
+      "ADD": 0,
+      "SUB": 0,
+      "MUL": 0,
+      "MAC": 0,
+      "VADD": 0,
+      "VSUB": 0,
+      "VMUL": 0,
+      "VMAC": 4,
+      "LD": 17,
+      "ST": 8,
+      "LD.W": 0,
+      "ST.W": 0,
+      "HALT": 1
+    },
+    "register_reads": {
+      "read_ports": 3,
+      "reads": 20,
+      "registers": 28,
+      "banks": [
+        {
+          "bank": 0,
+          "registers": 16
+        },
+        {
+          "bank": 1,
+          "registers": 12
+        }
+      ],
+      "bundles_by_reads": {
+        "0": 15,
+        "1": 8,
+        "2": 0,
+        "3": 4
+      }
+    },
+    "rs3_with_store": 0
+  },
+  "writeback": {
+    "compute": {
+      "commits": 4,
+      "registers": 8,
+      "utilization": 0.148148
+    },
+    "memory": {
+      "commits": 17,
+      "registers": 17,
+      "utilization": 0.62963
+    }
+  },
+  "scratchpad": {
+    "read_operations": 17,
+    "write_operations": 8,
+    "reads": 17,
+    "writes": 8,
+    "accesses_per_cycle": 0.925926,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 9,
+        "writes": 4,
+        "accesses_per_cycle": 0.481481
+      },
+      {
+        "bank": 1,
+        "reads": 8,
+        "writes": 4,
+        "accesses_per_cycle": 0.444444
+      }
+    ]
+  },
+  "ii": null,
+  "rtl": null
+}

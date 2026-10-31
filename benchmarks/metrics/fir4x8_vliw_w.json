@@ -1,0 +1,104 @@
+{
+  "metrics": "vliw-metrics/3",
+  "isa": "mvp-2",
+  "machine": {
+    "id": "vliw2-i32-sp2-mac-w2",
+    "revision": 1,
+    "hash": "sha256:9e582a03e98e95bc87f42074c1b4b899667424fbc68e9110405a517d21c01d96"
+  },
+  "program": {
+    "name": "fir4x8_vliw_w",
+    "hash": "sha256:d4ce49fe80bea3e69d8601e65a76aeb30eb08e53e744adce110d732ceba547c5",
+    "bundles": 25
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 25,
+  "issue": {
+    "compute": {
+      "operations": 16,
+      "nop": 8,
+      "nop_rate": 0.32
+    },
+    "memory": {
+      "operations": 22,
+      "nop": 3,
+      "nop_rate": 0.12
+    },
+    "by_operation": {
+      "ADD": 0,
+      "SUB": 0,
+      "MUL": 0,
+      "MAC": 0,
+      "VADD": 0,
+      "VSUB": 0,
+      "VMUL": 4,
+      "VMAC": 12,
+      "LD": 4,
+      "ST": 0,
+      "LD.W": 14,
+      "ST.W": 4,
+      "HALT": 1
+    },
+    "register_reads": {
+      "read_ports": 3,
+      "reads": 48,
+      "registers": 80,
+      "banks": [
+        {
+          "bank": 0,
+          "registers": 40
+        },
+        {
+          "bank": 1,
+          "registers": 40
+        }
+      ],
+      "bundles_by_reads": {
+        "0": 5,
+        "1": 4,
+        "2": 4,
+        "3": 12
+      }
+    },
+    "rs3_with_store": 0
+  },
+  "writeback": {
+    "compute": {
+      "commits": 16,
+      "registers": 32,
+      "utilization": 0.64
+    },
+    "memory": {
+      "commits": 18,
+      "registers": 32,
+      "utilization": 0.72
+    }
+  },
+  "scratchpad": {
+    "read_operations": 18,
+    "write_operations": 4,
+    "reads": 32,
+    "writes": 8,
+    "accesses_per_cycle": 1.6,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 16,
+        "writes": 4,
+        "accesses_per_cycle": 0.8
+      },
+      {
+        "bank": 1,
+        "reads": 16,
+        "writes": 4,
+        "accesses_per_cycle": 0.8
+      }
+    ]
+  },
+  "ii": null,
+  "rtl": null
+}

@@ -1,14 +1,18 @@
 package vliw.crosscheck
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
+
+import scala.jdk.CollectionConverters._
+import scala.util.Try
 
 import org.scalatest.funsuite.AnyFunSuite
 
-import vliw.compiler.{KernelCompiler, Verifier}
+import vliw.compiler.{KernelCompiler, Simd, Verifier}
 import vliw.compiler.dag.{Dag, Fusion}
-import vliw.compiler.dsl.Lowering
-import vliw.compiler.regalloc.RegisterAllocator
+import vliw.compiler.dsl.{Benchmarks, Lowering}
+import vliw.compiler.modulo.{LoopCandidate, LoopFallback, LoopSimd, ModuloCompiler, Outcome}
+import vliw.compiler.regalloc.{NoFit, RegisterAllocator}
 import vliw.compiler.schedule.Priority
 import vliw.hw.{
   Core,
@@ -67,8 +71,22 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
       ujson.write(v)
     } else text
 
+  /** `path` holds `expected` (the generator section of a metrics file aside). */
+  private def matches(path: Path, expected: String): Unit = {
+    assert(Files.exists(path), s"$path is missing; run $regenerate")
+    val actual = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
+    assert(
+      comparable(path, actual) == comparable(path, expected),
+      s"$path is out of date; run $regenerate"
+    )
+  }
+
+  /** Every file under benchmarks/. */
+  private def present(): Set[Path] =
+    Files.walk(BenchmarkRecords.Dir).iterator().asScala.filter(Files.isRegularFile(_)).toSet
+
   test("benchmarks/ holds exactly the generated records") {
-    BenchmarkRecords
+    val generated = BenchmarkRecords
       .files(
         records,
         fixed,
@@ -78,14 +96,11 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
         Some(fixedPipelines),
         Some(mac)
       )
-      .foreach { case (path, expected) =>
-        assert(Files.exists(path), s"$path is missing; run $regenerate")
-        val actual = new String(Files.readAllBytes(path), StandardCharsets.UTF_8)
-        assert(
-          comparable(path, actual) == comparable(path, expected),
-          s"$path is out of date; run $regenerate"
-        )
-      }
+    generated.foreach { case (path, expected) => matches(path, expected) }
+    // Every other file is the hand-written README or has a name of SimdRecords' files, which the
+    // SIMD test below generates and compares (#110 stage 6).
+    val other = present() -- generated.map(_._1) - BenchmarkRecords.Dir.resolve("README.md")
+    assert(other.subsetOf(SimdRecords.names), s"not generated: ${other -- SimdRecords.names}")
   }
 
   test("the recorded test cases hold on the reference model") {
@@ -445,6 +460,13 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
   }
 
   test("the test cases with MAC hold on the reference model, and on the RTL with the same trace") {
+    // SIMD.md's mvp-1 baseline of matmul4 (#110 stage 6) runs in the same mvp-1 build, from its
+    // recorded test cases (the SIMD test compares the files with the generated records).
+    val matmul4 = BenchmarkRecords.Mode.all.map { mode =>
+      val name = s"${SimdRecords.matmul4.name}_${mode.name}_mac"
+      val path = BenchmarkRecords.Dir.resolve("cases").resolve(s"$name.json")
+      (name, TestCase.load(path).fold(es => fail(es.mkString("\n")), identity))
+    }
     mac.tail.foreach { s =>
       val m = s.config.machine
       val cases =
@@ -455,7 +477,7 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
             TestCase.parse(ujson.write(doc)).fold(es => fail(es.mkString("\n")), identity),
             loop
           )
-        }
+        } ++ (if (s.config.name == "mvp-1") matmul4.map { case (n, tc) => (n, tc, None) } else Nil)
       val runs = cases.map { case (name, tc, loop) =>
         assert(tc.machine == m, name)
         val run = ReferenceModel.run(m, tc.words, tc.inputs).fold(v => fail(s"$name: $v"), identity)
@@ -525,6 +547,441 @@ class BenchmarkSpec extends AnyFunSuite with VliwChiselSim {
         }
       }
     }
+  }
+
+  // The SIMD records (#110 stage 6, SimdRecords, benchmarks/SIMD.md). They are built only inside
+  // the tests below, so that a failure to build them (a verifier failure of a W program under a
+  // mutant, say) fails these tests, which scripts/mutation-classify.py counts, and does not abort
+  // the suite before the other records' tests run.
+
+  private lazy val simd = Try(SimdRecords.series(mac))
+  private lazy val simdReport = SimdRecords.report(simd.get)
+
+  /** Every program of the SIMD series: name, configuration, layout, bundles, words, metrics. */
+  private def simdPrograms(s: SimdRecords.Series) = {
+    val (list, loops) = SimdRecords.recordsOf(s)
+    list.map(r =>
+      (
+        r.name,
+        r.compiled.machine,
+        r.compiled.layout,
+        r.compiled.bundles,
+        r.compiled.words,
+        r.metrics
+      )
+    ) ++ loops.map(l =>
+      (
+        l.name,
+        l.compiled.machine,
+        l.compiled.layout,
+        l.compiled.bundles,
+        l.compiled.words,
+        l.metrics
+      )
+    ) ++ s.fixed.flatMap(r =>
+      r.result.toOption.map(x =>
+        (
+          s"${r.kernel.name} ${r.mode.name} ${r.strategy} (${r.config.name})",
+          r.config.machine,
+          x.compiled.layout,
+          x.compiled.bundles,
+          x.compiled.words,
+          x.metrics
+        )
+      )
+    )
+  }
+
+  test("SIMD: benchmarks/ holds exactly the SIMD records (SIMD.md, the W files, matmul4's mvp-1)") {
+    val s = simd.get
+    val generated = SimdRecords.files(s)
+    generated.foreach { case (path, expected) => matches(path, expected) }
+    assert(generated.map(_._1).toSet.subsetOf(SimdRecords.names))
+    val stale = present().filter(SimdRecords.names) -- generated.map(_._1)
+    assert(stale.isEmpty, s"not generated: $stale")
+    // 22 W list records (no W-reg matmul4), matmul4's 4 baseline records, 12 W loops.
+    val (list, loops) = SimdRecords.recordsOf(s)
+    assert((list.size, loops.size, generated.size) == ((26, 12, 77)))
+    assert(!list.exists(r => r.suffix == "_wreg" && r.kernel == SimdRecords.matmul4))
+  }
+
+  test("SIMD: the test cases hold, with mvp-1's layout, inputs and fused scalar DAG everywhere") {
+    val s = simd.get
+    val (list, loops) = SimdRecords.recordsOf(s)
+    (list.map(r => (r.name, r.testCase)) ++ loops.map(l => (l.name, l.testCase))).foreach {
+      case (name, doc) =>
+        val tc = TestCase.parse(ujson.write(doc)).fold(es => fail(es.mkString("\n")), identity)
+        val run =
+          ReferenceModel
+            .run(tc.machine, tc.words, tc.inputs)
+            .fold(v => fail(s"$name: $v"), identity)
+        assert(tc.expect.cycles.contains(run.cycles), name)
+        tc.expect.memory.foreach { case (a, v) => assert(run.memory(a).contains(v), s"$name [$a]") }
+    }
+    list.foreach { r =>
+      val v3 = r.compiled.machine.hasVector
+      assert(r.metrics("metrics").str == (if (v3) "vliw-metrics/3" else "vliw-metrics/2"), r.name)
+    }
+    for (f <- s.fewest) {
+      val b = s.of("mvp-1", f.kernel, f.mode)
+      val name = s"${f.kernel.name} ${f.mode.name} (${f.config.name})"
+      assert(f.prepared.layout == b.prepared.layout, name)
+      assert(f.prepared.dag.nodes == b.prepared.dag.nodes, name)
+      assert(f.prepared.dag.edges == b.prepared.dag.edges, name)
+      f.result.foreach(r =>
+        assert(r.testCase("inputs") == b.result.toOption.get.testCase("inputs"))
+      )
+      // The packing is the same on W-full and mvp2_rp4 (read ports do not change it).
+      if (f.config.name == "mvp2_rp4")
+        assert(f.dag.nodes == s.of("W-full", f.kernel, f.mode).dag.nodes, name)
+    }
+    for (l <- s.loops) {
+      val b = s.loop("mvp-1", l.kernel)
+      val name = s"${ModuloRecords.label(l.kernel)} (${l.config.name})"
+      assert(l.prepared.layout == b.prepared.layout, name)
+      assert(
+        l.prepared.scalar.nodes == b.prepared.scalar.nodes &&
+          l.prepared.scalar.places == b.prepared.scalar.places,
+        name
+      )
+      (l.result, b.result) match {
+        case (SimdRecords.LoopResult.Measured(x), SimdRecords.LoopResult.Measured(y)) =>
+          assert(x.testCase("inputs") == y.testCase("inputs"), name)
+          assert(x.compiled.layout == y.compiled.layout, name)
+        case _ => ()
+      }
+    }
+  }
+
+  test(
+    "SIMD: the configurations differ from machine-mvp2.json (frozen) and mvp-1 only as recorded"
+  ) {
+    def at(name: String) = SimdRecords.machineOf(name)
+    val full = at("W-full")
+    assert(MachineDescription.load(MachineDescription.Mvp2Path) == Right(full))
+    assert(full.status == "frozen" && full.hasWideMemory && full.readPorts == 3)
+    assert(Seq("W-reg", "mvp2_rp4", "mvp1_rp4").map(at(_).status).distinct == Seq("proposed"))
+    assert(at("mvp-1") == withMac("mvp-1").config.machine)
+    assert(at("mvp1_rp4") == withMac("rp4").config.machine)
+    def without(m: MachineDescription)(edit: ujson.Value => Unit) = {
+      val v = ujson.read(m.canonicalJson)
+      Seq("machine_id", "revision", "status").foreach(v.obj.remove)
+      edit(v)
+      v
+    }
+    def narrow(v: ujson.Value): Unit = {
+      v("scratchpad").obj.remove("max_words_per_access")
+      Seq("LD.W", "ST.W").foreach(v("operations").obj.remove)
+    }
+    val wreg = at("W-reg")
+    assert(!wreg.hasWideMemory && wreg.hasVector && wreg.maxWordsPerAccess == 1)
+    assert(without(wreg)(narrow) == without(full)(narrow))
+    val rp4 = at("mvp2_rp4")
+    assert(rp4.readPorts == 4)
+    assert(
+      without(rp4)(_("register_file").obj.remove("read_ports")) ==
+        without(full)(_("register_file").obj.remove("read_ports"))
+    )
+    // The RTL implements mvp-1, W-reg and W-full; not the two with four read ports (#57).
+    assert(
+      SimdRecords.Configs.map(_._1).filter(n => CoreParams.unsupported(at(n)).nonEmpty) ==
+        Seq("mvp1_rp4", "mvp2_rp4")
+    )
+  }
+
+  test("SIMD: the fixed series gives every attempt, in order, to both modes, on the packed DAG") {
+    val s = simd.get
+    for (c <- s.configs; k <- SimdRecords.kernels; mode <- BenchmarkRecords.Mode.all) {
+      val f = s.of(c.name, k, mode)
+      val name = s"${k.name} ${mode.name} (${c.name})"
+      val rows = s.strategies.map(st => s.row(c.name, k, mode, st))
+      assert(
+        rows.map(_.strategy.attempt(mode)) ==
+          RegisterAllocator.attempts(f.dag, Priority.all, mode.singleIssue),
+        name
+      )
+      // The W DAG is the packed one, or the scalar one with nothing to pack.
+      if (c.w) assert(f.dag == (if (f.nothingToPack) f.prepared.dag else f.packing.get.dag), name)
+      rows.foreach { r =>
+        r.result.foreach { x =>
+          val label = s"$name ${r.strategy}"
+          val cc = x.compiled
+          // A row holds its own attempt on the DAG of every row: never another attempt.
+          assert(cc.allocated.attempt == r.strategy.attempt(mode) && cc.dag == f.dag, label)
+          if (c.w) {
+            val w = cc.bundles.exists(b =>
+              WPrograms.isVector(b.compute) || b.memory.isInstanceOf[MemoryOp.LdW] ||
+                b.memory.isInstanceOf[MemoryOp.StW]
+            )
+            cc.simd match {
+              case Simd.Packed(_)      => assert(w, label)
+              case Simd.Fallback(_, p) => assert(p.nothingToPack && !w, label)
+              case Simd.Scalar         => fail(s"$label: no W outcome")
+            }
+          }
+          assert(
+            Verifier.verify(c.machine, cc.words, KernelCompiler.declaration(cc.layout)).isEmpty
+          )
+          assert(x.run.cycles == cc.cycles, label)
+          assert(
+            cc.layout.outputs(a => x.run.memory(a).getOrElse(-1L)) == s.expected(k.name),
+            label
+          )
+        }
+      }
+    }
+    // The checks are not vacuous: W rows of each kind, and rows that fail on each reason.
+    val w = s.fixed.filter(_.config.w)
+    assert(w.exists(_.result.isRight) && w.exists(_.result.left.exists(_ == NoFit.Stuck)))
+    assert(w.exists(_.result.left.exists(_.isInstanceOf[NoFit.NoAlignedPair])))
+    assert(w.exists(_.result.left.exists(_.isInstanceOf[NoFit.TooManyLive])))
+  }
+
+  test("SIMD: the fewest-cycles record is the fixed rows' first with the fewest cycles and LDs") {
+    val s = simd.get
+    for (f <- s.fewest) {
+      val name = s"${f.kernel.name} ${f.mode.name} (${f.config.name})"
+      val rows = s.strategies.map(st => s.row(f.config.name, f.kernel, f.mode, st))
+      val fits = rows.flatMap(_.result.toOption).map(_.compiled)
+      f.result match {
+        case Right(r) =>
+          // minBy keeps the first of equal values.
+          val best = fits.minBy(c => (c.cycles, BenchmarkRecords.loads(c)))
+          assert(best.allocated.attempt == r.compiled.allocated.attempt, name)
+          assert(best.words == r.compiled.words, name)
+        case Left(failures) =>
+          // Infeasible: every attempt failed, as the fixed rows did, in their order.
+          assert(fits.isEmpty, name)
+          assert(
+            failures == rows.map(r => r.strategy.attempt(f.mode) -> r.result.left.toOption.get),
+            name
+          )
+      }
+    }
+    // W-reg matmul4 is the only kernel without a W record, in both modes (#110 第6段の Q2).
+    assert(
+      s.fewest.filter(_.result.isLeft).map(f => (f.config.name, f.kernel.name, f.mode.name)) ==
+        Seq(("W-reg", "matmul4", "vliw"), ("W-reg", "matmul4", "single"))
+    )
+  }
+
+  test("SIMD: operations, register words and transfer words agree with the programs") {
+    val s = simd.get
+    import SimdRecords._
+    for ((name, m, _, bundles, _, x) <- simdPrograms(s)) {
+      def n(p: Bundle => Boolean) = bundles.count(p)
+      val ldw = n(_.memory.isInstanceOf[MemoryOp.LdW])
+      val stw = n(_.memory.isInstanceOf[MemoryOp.StW])
+      val vector = n(b => WPrograms.isVector(b.compute))
+      val (ops, words) = (transferOperations(x), transfer(x))
+      assert(words == ((ops._1 + ldw, ops._2 + stw)), name)
+      assert(written(x) == ((commits(x)._1 + vector, commits(x)._2 + ldw)), name)
+      if (!m.hasVector) {
+        assert(words == ops && written(x) == commits(x) && readRegisters(x) == readFields(x), name)
+        assert(x("metrics").str == "vliw-metrics/2", name)
+      }
+      assert(operations(x)._1 + operations(x)._2 == byOperation(x).map(_._2).sum, name)
+    }
+    // At the DAG level, W keeps mvp-1's transfer words but for FIR's windows: LD.W of overlapping
+    // words on W-full, the gathers' LDs on W-reg.
+    for (c <- s.configs.filter(_.w); k <- SimdRecords.kernels) {
+      val w = dagWords(s.of(c.name, k, BenchmarkRecords.Mode.Vliw).dag)
+      val b = dagWords(s.of(Baseline(c.name), k, BenchmarkRecords.Mode.Vliw).dag)
+      if (k.name == "fir4x8") assert(w == ((24, 8)) && b == ((15, 8)), c.name)
+      else assert(w == b, s"${k.name} (${c.name})")
+    }
+    // The program level sentence states the counts (no fixed claim that W keeps the words).
+    val programs = for {
+      c <- s.configs.filter(_.w)
+      k <- SimdRecords.kernels
+      mode <- BenchmarkRecords.Mode.all
+      r <- s.of(c.name, k, mode).result.toOption
+      b <- s.of(Baseline(c.name), k, mode).result.toOption
+    } yield transfer(r.metrics) == transfer(b.metrics)
+    assert(simdReport.contains(s"記録のある ${programs.size} のうち ${programs.count(identity)} で"))
+    assert(programs.contains(false) && programs.contains(true))
+  }
+
+  test(
+    "SIMD: each mvp2_rp4 program has one L11 finding on W-full per bundle with rs3 and a store"
+  ) {
+    val s = simd.get
+    val full = s.config("W-full").machine
+    val rp4 = simdPrograms(s).filter(_._2 == s.config("mvp2_rp4").machine)
+    rp4.foreach { case (name, m, layout, bundles, words, x) =>
+      assert(Verifier.verify(m, words, KernelCompiler.declaration(layout)).isEmpty, name)
+      val both = bundles.count(SimdRecords.isRs3WithStore)
+      assert(SimdRecords.rs3WithStore(x) == both, name)
+      assert(MacRecords.findingsOn(full, layout, words) == ((both, 0)), name)
+    }
+    assert(rp4.exists { case (_, _, _, b, _, _) => b.exists(SimdRecords.isRs3WithStore) })
+    // With three read ports, no W program has such a bundle.
+    simdPrograms(s).filter(p => p._2.readPorts == 3).foreach { case (name, _, _, b, _, _) =>
+      assert(!b.exists(SimdRecords.isRs3WithStore), name)
+    }
+    // No assertion that mvp2_rp4 is never slower: the generated text names the rows where it is.
+    val slower = for {
+      k <- SimdRecords.kernels
+      st <- s.strategies
+      x <- s.row("W-full", k, BenchmarkRecords.Mode.Vliw, st).result.toOption
+      y <- s.row("mvp2_rp4", k, BenchmarkRecords.Mode.Vliw, st).result.toOption
+      if y.compiled.cycles > x.compiled.cycles
+    } yield s"は `mvp2_rp4` の方が遅い（${x.compiled.cycles} → ${y.compiled.cycles}。"
+    slower.foreach(t => assert(simdReport.contains(t), t))
+  }
+
+  test("SIMD: the W loops record the II of the trace; W-reg loops are not measured") {
+    val s = simd.get
+    for (l <- s.loops) {
+      val name = s"${ModuloRecords.label(l.kernel)} (${l.config.name})"
+      (l.config.w, l.result) match {
+        case (_, SimdRecords.LoopResult.Measured(r)) =>
+          assert(r.metrics("ii").num.toInt == r.compiled.ii, name)
+          // A doubled loop's iteration is two original iterations.
+          val doubled = SimdRecords.doubled(l)
+          assert(r.compiled.graph.trips * (if (doubled) 2 else 1) == l.kernel.trips, name)
+          assert(
+            SimdRecords.perOriginal(l, r.compiled.ii) ==
+              (if (doubled) SimdRecords.half(r.compiled.ii) else r.compiled.ii.toString),
+            name
+          )
+          l.candidate.foreach {
+            case _: LoopCandidate.NothingToPack =>
+              // Nothing to pack: the scalar loop, mvp-1's program.
+              val b = s.loop(SimdRecords.Baseline(l.config.name), l.kernel).compiled.get
+              assert(r.compiled.words == b.words, name)
+              assert(r.compiled.simd.isInstanceOf[LoopSimd.Fallback], name)
+            case _: LoopCandidate.Packed =>
+              assert(r.compiled.simd.isInstanceOf[LoopSimd.Vectorized])
+            case other => fail(s"$name: measured with $other")
+          }
+        case (true, SimdRecords.LoopResult.NotMeasured(why)) =>
+          assert(l.config.name == "W-reg" && why == LoopFallback.WReg, name)
+          assert(l.candidate.contains(LoopCandidate.NotMeasured(LoopFallback.WReg)), name)
+        case (_, other) =>
+          assert(SimdRecords.matmul4Loops.contains(l.kernel), s"$name: $other")
+      }
+    }
+    assert(s.loops.filter(_.config.name == "W-reg").forall(_.compiled.isEmpty))
+  }
+
+  test(
+    "SIMD: matmul4's loops fit no II at 16 registers, with every II's outcome; W-reg not measured"
+  ) {
+    val s = simd.get
+    for (k <- SimdRecords.matmul4Loops; c <- s.configs) {
+      val l = s.loop(c.name, k)
+      val name = s"${ModuloRecords.label(k)} (${c.name})"
+      l.result match {
+        case SimdRecords.LoopResult.NoProgram(no) =>
+          assert(!c.w && ModuloCompiler.compile(k, c.machine).isLeft, name)
+          assert(no.attempts.map(_.ii) == (no.mii.mii to no.iiMax), name)
+          assert(no.attempts.forall(_.outcome != Outcome.Fits), name)
+        case SimdRecords.LoopResult.Infeasible(d, no) =>
+          // The candidate's attempts are those of the W graph's search.
+          assert(l.candidate.contains(LoopCandidate.Infeasible(d, no.attempts)), name)
+          assert(no.attempts.map(_.ii) == (no.mii.mii to no.iiMax), name)
+          assert(c.machine.hasWideMemory, name)
+        case SimdRecords.LoopResult.NotMeasured(_) => assert(c.name == "W-reg", name)
+        case other                                 => fail(s"$name: $other")
+      }
+      l.result match {
+        case SimdRecords.LoopResult.NoProgram(no) =>
+          assert(simdReport.contains(ModuloRecords.reasons(no.attempts)), name)
+        case SimdRecords.LoopResult.Infeasible(_, no) =>
+          assert(simdReport.contains(ModuloRecords.reasons(no.attempts)), name)
+        case _ => ()
+      }
+    }
+  }
+
+  test("SIMD: the per-resource bounds hold for every row and give #78's table for three kernels") {
+    val s = simd.get
+    import SimdRecords._
+    for (f <- s.fewest) {
+      val b = bounds(f.dag)
+      assert(b.binding.forall(n => b(n).contains(b.max)) && b.binding.nonEmpty)
+      (0 until f.config.machine.banks).foreach(k => assert(b(s"bank $k").get <= b("ms").get))
+      for (st <- s.strategies; x <- s.row(f.config.name, f.kernel, f.mode, st).result.toOption) {
+        val cc = x.compiled
+        assert(cc.cycles >= b.max, s"${f.kernel.name} ${f.mode.name} $st (${f.config.name})")
+        if (f.mode.singleIssue) assert(cc.cycles >= cc.allocated.dag.nodes.size + 1)
+      }
+    }
+    for (
+      k <- Benchmarks.all;
+      (e, c) <- Seq("M1" -> "mvp-1", "WR" -> "W-reg", "WF" -> "W-full", "WF4" -> "mvp2_rp4")
+    ) {
+      val (bound, names) = ListEstimates(k.name -> e)._2.get
+      val b = bounds(s.of(c, k, BenchmarkRecords.Mode.Vliw).dag)
+      assert(b.max == bound, s"${k.name} $e")
+      assert(
+        EstimateResource.filter(r => b.binding.contains(r._1)).map(_._2).mkString("・") == names,
+        s"${k.name} $e: ${b.binding}"
+      )
+    }
+  }
+
+  test("SIMD: the per-row ports agree with the programs and the fewest-cycles records") {
+    val s = simd.get
+    import SimdRecords._
+    for (r <- s.fixed; x <- r.result.toOption) {
+      val name = s"${r.kernel.name} ${r.mode.name} ${r.strategy} (${r.config.name})"
+      val f = s.of(r.config.name, r.kernel, r.mode)
+      // One bundle per cycle, HALT's included; the fields read are the DAG's, whatever the row.
+      assert(byReads(x.metrics).sum == x.compiled.cycles, name)
+      assert(readFields(x.metrics) == f.dag.nodes.map(_.fields).sum, name)
+      if (r.config.machine.readPorts == 4)
+        assert(x.compiled.allocated.schedule.heldByReadPorts == 0, name)
+      f.result.foreach { rec =>
+        if (rec.compiled.allocated.attempt == x.compiled.allocated.attempt) {
+          val (a, b) = (x.compiled.allocated.schedule, rec.compiled.allocated.schedule)
+          assert(a.heldByWritePort == b.heldByWritePort && a.heldByReadPorts == b.heldByReadPorts)
+          Seq(Seq("issue", "compute", "nop_rate"), Seq("writeback", "compute", "utilization"))
+            .foreach(p =>
+              assert(
+                p.foldLeft(x.metrics: ujson.Value)(_(_)) == p.foldLeft(rec.metrics: ujson.Value)(
+                  _(_)
+                ),
+                name
+              )
+            )
+          assert(
+            byReads(x.metrics) == byReads(rec.metrics) && rs3WithStore(x.metrics) == rs3WithStore(
+              rec.metrics
+            ),
+            name
+          )
+        }
+      }
+    }
+    assert(s.fixed.exists(_.result.exists(_.compiled.allocated.schedule.heldByReadPorts > 0)))
+  }
+
+  test("SIMD: the sentence on matmul3's third column states what Pack gives") {
+    val s = simd.get
+    val matmul3 = Benchmarks.all.find(_.name == "matmul3").get
+    val f = s.of("W-full", matmul3, BenchmarkRecords.Mode.Vliw)
+    val p = f.packing.get
+    val c = matmul3.outputs.head
+    val third = (0 until 3).map(i => f.prepared.layout.elem(c.name, 3 * i + 2))
+    val lanes = p.scalarLanes.map(_.addr).toSet
+    val text = SimdRecords.packingText(matmul3, f.prepared.layout, p)
+    assert(simdReport.contains(s"W-full の `matmul3` の詰め方は $text で"))
+    assert(
+      simdReport.contains(
+        s"3列目の語 c(0,2)、c(1,2)、c(2,2) は" +
+          (if (third.forall(lanes)) "どれもスカラーのレーンである" else "すべてがスカラーのレーンではない")
+      )
+    )
+    // Each scalar lane and its reason, and the pairs that cross a row, are in the text.
+    p.scalarLanes.foreach { l =>
+      assert(
+        text.contains(s"${SimdRecords.word(matmul3, f.prepared.layout, l.addr)}（${l.reason.name}）")
+      )
+    }
+    val crossing = p.pairs.count(q => (q.addr - f.prepared.layout.elem(c.name, 0)) % 3 == 2)
+    assert(text.contains(s"（行をまたぐ組 $crossing）"))
   }
 }
 

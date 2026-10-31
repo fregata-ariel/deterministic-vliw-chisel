@@ -1,0 +1,70 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "matmul3_vliw_w_rp4",
+  "description": "generated from the DSL kernel matmul3; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (critical-path, 16 registers, load reserve 0); W: 3 output pairs packed (3 VMUL, 6 VMAC, 3 LD.W, 3 ST.W, 9 broadcasts, 0 gathers), scalar lane c(2) [20] (rule 1, no adjacent output word, or it is already paired); scalar lane c(5) [23] (rule 1, no adjacent output word, or it is already paired); scalar lane c(8) [26] (rule 1, no adjacent output word, or it is already paired)",
+  "program": [
+    "@0:  nop             | ld r0, [0]",
+    "@1:  nop             | ld.w r2:r3, [9]",
+    "@2:  nop             | ld r1, [11]",
+    "@3:  vmul r4:r5, r0, r2:r3 | ld r6, [3]",
+    "@4:  mul r0, r0, r1  | ld r7, [6]",
+    "@5:  vmul r10:r11, r6, r2:r3 | ld r8, [1]",
+    "@6:  mul r6, r6, r1  | ld.w r12:r13, [12]",
+    "@7:  vmul r2:r3, r7, r2:r3 | ld r9, [14]",
+    "@8:  mul r7, r7, r1  | ld r1, [4]",
+    "@9:  vmac r4:r5, r8, r12:r13, r4:r5 | ld r14, [7]",
+    "@10: mac r8, r8, r9, r0 | ld r0, [2]",
+    "@11: vmac r10:r11, r1, r12:r13, r10:r11 | ld r15, [17]",
+    "@12: vmac r12:r13, r14, r12:r13, r2:r3 | ld.w r2:r3, [15]",
+    "@13: mac r6, r1, r9, r6 | ld r1, [5]",
+    "@14: mac r9, r14, r9, r7 | ld r7, [8]",
+    "@15: vmac r4:r5, r0, r2:r3, r4:r5 | nop",
+    "@16: mac r0, r0, r15, r8 | nop",
+    "@17: vmac r4:r5, r1, r2:r3, r10:r11 | st.w [18], r4:r5",
+    "@18: mac r6, r1, r15, r6 | st [20], r0",
+    "@19: vmac r0:r1, r7, r2:r3, r12:r13 | st.w [21], r4:r5",
+    "@20: mac r2, r7, r15, r9 | st [23], r6",
+    "@21: nop             | st.w [24], r0:r1",
+    "@22: nop             | st [26], r2",
+    "@23: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709,
+      "16": 181670012,
+      "17": 3271367910
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 24,
+    "memory": {
+      "18": 2795470868,
+      "19": 350164246,
+      "20": 3123205000,
+      "21": 3159017481,
+      "22": 3650974376,
+      "23": 2225410474,
+      "24": 4287209870,
+      "25": 3942679884,
+      "26": 333298860
+    }
+  },
+  "machine": "tests/machines/mvp2_rp4.json"
+}
