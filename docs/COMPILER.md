@@ -479,7 +479,7 @@ ADR-0023 の2つの粒度の fallback を、次のように結果に書く。
 | API | 用途 | 結果 |
 |---|---|---|
 | `KernelCompiler.compile` | 通常の利用 | `CompiledKernel.simd` が `Packed(packing)`（レーンの fallback を含む）か `Fallback(reason, packing)`。スカラーの DAG も収まらないときだけ入力の誤りで、両方の理由を書く |
-| `KernelCompiler.candidate` | 比較の実験（第6段） | `SimdCandidate.Packed`、`Infeasible`（試行ごとの失敗。スカラーの値に置き換えない）、`NothingToPack`（候補が無く、スカラーの命令列を理由と一緒に返す）。mvp-0・mvp-1 の machine では入力の誤り |
+| `KernelCompiler.candidate` | 比較の実験（第6段、[benchmarks/SIMD.md](../benchmarks/SIMD.md) の、方式ごとに cycles 最小の W の候補） | `SimdCandidate.Packed`、`Infeasible`（試行ごとの失敗。スカラーの値に置き換えない）、`NothingToPack`（候補が無く、スカラーの命令列を理由と一緒に返す）。mvp-0・mvp-1 の machine では入力の誤り |
 
 通常の利用は、詰めた命令列がスカラーの命令列より遅くても詰めた方を使う（ADR-0023: fallback は失敗のときだけ。テストは遅い数を情報として表示する）。`CompiledKernel.dag` は、詰めたときは詰めた DAG、fallback ではスカラーの DAG である（`Prepared.dag` はスカラーの DAG のまま）。`Prepared.dag` を1つの試行で割り当てて W の無い結果（`Simd.Scalar`）にする `KernelCompiler.finish(p, allocated)` は、mvp-0・mvp-1 の machine だけで使え、mvp-2 の machine では理由付きで拒否する。mvp-2 のスカラーの命令列は fallback か `NothingToPack` の命令列で、W の無い結果として記録しないためである（ADR-0023: 黙ってスカラーの値に置き換えない）。同じ理由で、戦略を固定した系列（`BenchmarkRecords.fixed`）も mvp-2 の machine を拒否する。
 
@@ -507,6 +507,7 @@ ADR-0023 の2つの粒度の fallback を、次のように結果に書く。
   - `fir4x8` の W-reg（37。見積り 35）: どちらも program-order、上限なしの試行で、差は詰めた DAG のノードの番号の付け方による（program-order は番号を優先度にする）。見積りは ST の組ごとにベクトルの木を後順でたどった順で（窓の2つの LD を、最初に読む直前に並べる）、コンパイラは上の「詰め込みの規則」の鍵の順（既定）で、組の両方のレーンの木の LD をすべて最初のベクトル演算の前に並べる。見積りの順に番号を付けた DAG を同じスケジューラにかけると 35 cycles になる。critical-path の試行は、どちらでも上限なしで23の値が同時に生き、上限付きでは行き詰まる
   - 番号の付け方を変えるのは既定の変更で、詰めたどのカーネルの program-order の cycles も動かすので、変えていない
   - 規則1を書かれたとおりに読むと（Q1 の (a)）、`matmul3` は W-full と `read_ports` 4 で集め6つ、W-reg で集め 12 と LD の複製 9 を要し（W-reg の LD 27、Memory の操作 36、スロットの下限 37）、W-full 31、W-reg 40、`read_ports` 4 で 28 cycles になり（見積りの行ごとの組と比べられない）、`mvp2_vlat` ではどの試行も収まらず、スカラーの fallback（39 cycles）になる。2段では `mvp2_vlat` でも詰める（34 cycles）
+- mvp-1 との比較（#110 の第6段）は [benchmarks/SIMD.md](../benchmarks/SIMD.md) にある。同じカーネル・入力・配置・試行で、mvp-1・W-reg・W-full・`mvp1_rp4`・`mvp2_rp4` の両方の系列を並べ、操作の数・レジスタの語の数・転送の語の数、資源ごとの下限と律速の資源、戦略を固定した系列の不成立の理由（W の行は、どれも同じ詰めた DAG の各試行）を書く。`matmul4` の値は SIMD.md だけにあり、この表には足さない
 
 ### CLI
 
@@ -658,7 +659,7 @@ ADR-0015 のままである。II = MII から1反復の長さまで試し、番�
 
 #### 結果（16 レジスタ）
 
-II / cycles。括弧の中は、II を MII より上げた理由である。mvp-1 と `mvp1_rp4`（mvp-1 で `read_ports` 4）の欄は、「Modulo Scheduling」の「結果（mvp-1、#77）」の値である。2倍にしたループの II はベクトルの1反復の間隔で、元の2反復を数える。［ ］の中は、その元の1反復当たりの II（II / 2）である。だから W-full の `saxpy8` の II 3 は元の1反復当たり 1.5 で、mvp-1 の II 3（元の1反復当たり 3）と同じ間隔ではなく、その半分の間隔である。
+II / cycles。括弧の中は、II を MII より上げた理由である。mvp-1 と `mvp1_rp4`（mvp-1 で `read_ports` 4）の欄は、「Modulo Scheduling」の「結果（mvp-1、#77）」の値である。2倍にしたループの II はベクトルの1反復の間隔で、元の2反復を数える。［ ］の中は、その元の1反復当たりの II（II / 2）である。だから W-full の `saxpy8` の II 3 は元の1反復当たり 1.5 で、mvp-1 の II 3（元の1反復当たり 3）と同じ間隔ではなく、その半分の間隔である。mvp-1 と比べるときは、この元の1反復当たりの値を使う。比較の記録（元の1反復当たりの II とその比、mvp-1 の MaxLive、`matmul4` の2つのループ、W-reg は測っていないこと）は [benchmarks/SIMD.md](../benchmarks/SIMD.md)「Modulo Scheduling」にある（#110 の第6段）。
 
 | ループ | 形 | W-full | `mvp2_rp4` | `mvp2_vlat` | `mvp2_vii` | mvp-1 | `mvp1_rp4` | list scheduling（W-full） |
 |---|---|---|---|---|---|---|---|---|
@@ -806,7 +807,7 @@ W-reg（`max_words_per_access` 1）の Modulo Scheduling は #110 では必須�
 | API | 用途 | 結果 |
 |---|---|---|
 | `ModuloCompiler.compile` | 通常の利用 | `ModuloCompiled.simd` が `LoopSimd.Scalar`（mvp-0・mvp-1）、`Vectorized(decision)`（2倍か、本体を詰めたもの）、`Fallback(reason, decision)`（W-reg では decision が None） |
-| `ModuloCompiler.candidate` | 比較の実験（第6段） | `LoopCandidate.Packed`、`Infeasible(decision, attempts)`、`NothingToPack(decision, scalar)`、`NotMeasured(reason)`（W-reg だけ）。mvp-0・mvp-1 の machine では入力の誤り |
+| `ModuloCompiler.candidate` | 比較の実験（第6段、[benchmarks/SIMD.md](../benchmarks/SIMD.md) の W のループ） | `LoopCandidate.Packed`、`Infeasible(decision, attempts)`、`NothingToPack(decision, scalar)`、`NotMeasured(reason)`（W-reg だけ）。mvp-0・mvp-1 の machine では入力の誤り |
 
 `NotMeasured` は、W-reg（#78 の質問8 の (c)）のループを「SIMD の候補が無い」としてスカラーの値で記録しないためのものである（ADR-0023: 黙ってスカラーの値に置き換えない）。`LoopDecision` は、2倍にしない理由（2倍なら空）、比べた MII（G と、作ったときは2倍にしたグラフ。3本目の読出しポートを除く）、本体の詰め込み（`LoopBody`。組、ほかの ST のスカラーのレーンとその理由、ベクトルの状態の数。2倍なら None）を持つ。`doubled` と `packed` は、どちらで `Vectorized` かを言う。通常の利用は、ベクトルの命令列がスカラーより遅くても使う（#110 第4段の Q4 と同じ）。`ModuloCompiler.describeW` は、テストと第6段の説明に使う行を返す。
 
