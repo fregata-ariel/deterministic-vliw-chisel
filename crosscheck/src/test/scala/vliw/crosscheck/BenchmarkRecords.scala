@@ -95,37 +95,50 @@ object BenchmarkRecords {
       s"不成立: cycle $cycle で整列した組が空かない（生きているレジスタ $live ≤ $registers）"
   }
 
-  /** The fewest-cycles series on `m`. `machinePath` goes into the test cases (None for the default
-    * machine), and `suffix` ends the record names.
+  /** The fewest-cycles series on `m` for `kernels`. `machinePath` goes into the test cases (None
+    * for the default machine), and `suffix` ends the record names.
     */
   def records(
       m: MachineDescription = machine,
       machinePath: Option[String] = None,
-      suffix: String = ""
+      suffix: String = "",
+      kernels: Seq[Kernel] = Benchmarks.all
   ): Seq[Record] =
-    for (k <- Benchmarks.all; mode <- Mode.all) yield {
-      val c = KernelCompiler.compile(k, m, singleIssue = mode.singleIssue).fold(sys.error, identity)
-      val name = s"${k.name}_${mode.name}$suffix"
-      val tc = KernelCompiler
-        .testCase(c, KernelCompiler.sampleInputs(k, Seed), machinePath, Some(name))
-        .fold(sys.error, identity)
-      val loaded =
-        TestCase.parse(ujson.write(tc)).fold(es => sys.error(es.mkString("\n")), identity)
-      val run =
-        ReferenceModel.run(m, c.words, loaded.inputs).fold(v => sys.error(v.toString), identity)
-      Record(k, mode, c, tc, Metrics.of(m, c.words, run, name), suffix)
-    }
+    for (k <- kernels; mode <- Mode.all)
+      yield record(
+        KernelCompiler.compile(k, m, singleIssue = mode.singleIssue).fold(sys.error, identity),
+        mode,
+        machinePath,
+        suffix
+      )
 
-  /** The fixed-strategy series: every strategy for every kernel, in both modes. ISA mvp-0 and mvp-1
-    * only: on mvp-2 the scalar DAG would stand for the SIMD candidate (ADR-0023), so it is refused.
+  /** The record of the compiled kernel `c` in `mode`: its test case, and its metrics from the run
+    * of the test case on the reference model.
     */
-  def fixed(m: MachineDescription = machine): Seq[Fixed] = {
+  def record(c: CompiledKernel, mode: Mode, machinePath: Option[String], suffix: String): Record = {
+    val (k, m) = (c.kernel, c.machine)
+    val name = s"${k.name}_${mode.name}$suffix"
+    val tc = KernelCompiler
+      .testCase(c, KernelCompiler.sampleInputs(k, Seed), machinePath, Some(name))
+      .fold(sys.error, identity)
+    val loaded =
+      TestCase.parse(ujson.write(tc)).fold(es => sys.error(es.mkString("\n")), identity)
+    val run =
+      ReferenceModel.run(m, c.words, loaded.inputs).fold(v => sys.error(v.toString), identity)
+    Record(k, mode, c, tc, Metrics.of(m, c.words, run, name), suffix)
+  }
+
+  /** The fixed-strategy series: every strategy for every kernel of `kernels`, in both modes. ISA
+    * mvp-0 and mvp-1 only: on mvp-2 the scalar DAG would stand for the SIMD candidate (ADR-0023),
+    * so it is refused (`SimdRecords` schedules the packed DAG instead).
+    */
+  def fixed(m: MachineDescription = machine, kernels: Seq[Kernel] = Benchmarks.all): Seq[Fixed] = {
     require(
       !m.hasVector,
       s"${m.machineId}: the fixed-strategy series is for ISA mvp-0 and mvp-1 (ADR-0023)"
     )
     for {
-      k <- Benchmarks.all
+      k <- kernels
       p = KernelCompiler.prepare(k, m).fold(sys.error, identity)
       s <- strategies(m)
       mode <- Mode.all
@@ -410,7 +423,7 @@ ${fixedPipelineSection(fx, m)}"""
   }
 
   /** Every file under benchmarks/ that this generates, with its content (with ModuloRecords,
-    * RegisterRecords and MacRecords).
+    * RegisterRecords and MacRecords), and with `simd` the files of SimdRecords (#110 stage 6).
     */
   def files(
       rs: Seq[Record] = records(),
@@ -419,13 +432,15 @@ ${fixedPipelineSection(fx, m)}"""
       ms: Option[Seq[ModuloRecords.Compared]] = None,
       regs: Option[Seq[RegisterRecords.Series]] = None,
       fx: Option[Seq[FixedPipelineRecord]] = None,
-      mac: Option[Seq[MacRecords.Series]] = None
+      mac: Option[Seq[MacRecords.Series]] = None,
+      simd: Option[SimdRecords.Series] = None
   ): Seq[(Path, String)] = {
     val loops = ms.getOrElse(ModuloRecords.records(m))
     ModuloRecords.files(loops, rs, fs, m) ++
       RegisterRecords.files(regs.getOrElse(RegisterRecords.series(rs, fs, m))) ++
       MacRecords.files(mac.getOrElse(MacRecords.series(rs, fs, loops, m))) ++
-      recordFiles(rs) :+ (Dir.resolve("RESULTS.md") -> results(
+      recordFiles(rs) ++ simd.fold(Seq.empty[(Path, String)])(SimdRecords.files) :+
+      (Dir.resolve("RESULTS.md") -> results(
         rs,
         fs,
         m,
@@ -433,8 +448,18 @@ ${fixedPipelineSection(fx, m)}"""
       ))
   }
 
+  /** Every file under benchmarks/: the records of mvp-0 and mvp-1, then SimdRecords' from the mvp-1
+    * series.
+    */
+  def all(): Seq[(Path, String)] = {
+    val (m, rs, fs) = (machine, records(), fixed())
+    val loops = ModuloRecords.records(m)
+    val mac = MacRecords.series(rs, fs, loops, m)
+    files(rs, fs, m, Some(loops), mac = Some(mac), simd = Some(SimdRecords.series(mac)))
+  }
+
   def main(args: Array[String]): Unit =
-    files().foreach { case (p, text) =>
+    all().foreach { case (p, text) =>
       Files.createDirectories(p.getParent)
       Files.write(p, text.getBytes(StandardCharsets.UTF_8))
       println(s"wrote $p")
