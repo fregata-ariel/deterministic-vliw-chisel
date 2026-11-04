@@ -1,0 +1,115 @@
+## 境界ごとのデータ経路 {.unnumbered .unlisted}
+
+HTMLではタブを切り替えて状態を追えます。PDF・DOCXでは全段階が同じ順序で出力されます。図と値は`tests/cases/isa_example.json`と手書きgolden traceのサイクル契約に基づきます。
+
+::: {.panel-tabset}
+
+### E0 発行 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycle-0
+%%| fig-cap: "cycle 0でLDを発行する"
+%%| fig-alt: "mem0の7をLDし、E2のr1への書込みを予約する。cycle0ではr1は未定義。"
+%%| fig-width: 5.8
+flowchart LR
+  accTitle: cycle 0でLDを発行する
+  accDescr: mem0の7をLDし、E2のr1への書込みを予約する。cycle0ではr1は未定義。
+  S["mem[0] = 7"] ld@--> M["MemorySlot: LD r1, [0]"]
+  M --> W["E2にr1=7を予約"]
+  M -.-> R["現在のr1は未定義"]
+  ld@{ animation: slow }
+```
+
+cycle 1はNOPです。LDの要求を受け付けるE1と、RFで結果が見えるE2を区別します。
+
+### E2 乗算 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycle-2
+%%| fig-cap: "E2のcommitを反映してからMULを発行する"
+%%| fig-alt: "E2でr1が7となり、r2の3とともにMULへ入り、E4にr3の21を予約する。"
+%%| fig-width: 5.8
+flowchart LR
+  accTitle: E2のcommitを反映してからMULを発行する
+  accDescr: E2でr1が7となり、r2の3とともにMULへ入り、E4にr3の21を予約する。
+  A["r1 = 7"] a@--> C["MUL r3, r1, r2"]
+  B["r2 = 3"] --> C
+  C --> W["E4にr3=21を予約"]
+  a@{ animation: slow }
+```
+
+r1はこの境界から使えます。r3はまだ未定義で、cycle 3はNOPです。
+
+### E4 加算 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycle-4
+%%| fig-cap: "E4でr3が確定しADDへ渡る"
+%%| fig-alt: "r3の21とr1の7をADDで読み、E5にr4の28を予約する。"
+%%| fig-width: 5.8
+flowchart LR
+  accTitle: E4でr3が確定しADDへ渡る
+  accDescr: r3の21とr1の7をADDで読み、E5にr4の28を予約する。
+  A["r3 = 21"] a@--> C["ADD r4, r3, r1"]
+  B["r1 = 7"] --> C
+  C --> W["E5にr4=28を予約"]
+  a@{ animation: slow }
+```
+
+E4のMULの結果はこのcycleのADDから使えます。r4はE5まで未定義です。
+
+### E5 保存 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycle-5
+%%| fig-cap: "STは発行時にr4を読みE6でメモリを更新する"
+%%| fig-alt: "E5に見えるr4の28をSTが読み、E6にmem1へ書く。"
+%%| fig-width: 5.8
+flowchart LR
+  accTitle: STは発行時にr4を読みE6でメモリを更新する
+  accDescr: E5に見えるr4の28をSTが読み、E6にmem1へ書く。
+  R["r4 = 28"] st@--> M["ST [1], r4"]
+  M --> W["E6にmem[1]=28"]
+  M -.-> O["mem[1]は未定義"]
+  st@{ animation: slow }
+```
+
+STのLは1です。E6でmem[1]が28になり、cycle 6には全操作が完了しているのでHALTを発行できます。
+
+### E7 終了 {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-cycle-7
+%%| fig-cap: "HALTの発行とdoneは1境界離れる"
+%%| fig-alt: "E6で全操作が完了しcycle6にHALTを発行する。E7でbusyが0、doneが1になる。"
+%%| fig-width: 5.8
+flowchart TD
+  accTitle: HALTの発行とdoneは1境界離れる
+  accDescr: E6で全操作が完了しcycle6にHALTを発行する。E7でbusyが0、doneが1になる。
+  W["E6: 全操作が完了"] --> H["cycle 6: HALT"]
+  H --> B["E7: busy=0"]
+  H --> D["E7: done=1・1cycleだけ"]
+```
+
+実行時間は7 cyclesです。doneの行を含めるtraceは8行あります。
+
+:::
+
+## 各境界から見える値 {.unnumbered .unlisted}
+
+::: {.table-responsive}
+
+| cycle | r1 | r2 | r3 | r4 | mem[1] | busy | done |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 未定義 | 3 | 未定義 | 未定義 | 未定義 | 1 | 0 |
+| 1 | 未定義 | 3 | 未定義 | 未定義 | 未定義 | 1 | 0 |
+| 2 | 7 | 3 | 未定義 | 未定義 | 未定義 | 1 | 0 |
+| 3 | 7 | 3 | 未定義 | 未定義 | 未定義 | 1 | 0 |
+| 4 | 7 | 3 | 21 | 未定義 | 未定義 | 1 | 0 |
+| 5 | 7 | 3 | 21 | 28 | 未定義 | 1 | 0 |
+| 6 | 7 | 3 | 21 | 28 | 28 | 1 | 0 |
+| 7 | 7 | 3 | 21 | 28 | 28 | 0 | 1 |
+
+:::
+
+未定義は0を意味しません。RFをresetで0にする実装ではないため、未初期化値を読まないことをL8で事前に検査します。

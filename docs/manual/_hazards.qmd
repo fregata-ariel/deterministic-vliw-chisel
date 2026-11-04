@@ -1,0 +1,74 @@
+::: {.panel-tabset}
+
+## L3 結果を早く読む {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-hazard-l3
+%%| fig-cap: "MULのL=2に対してcycle 1の読出しは早すぎる"
+%%| fig-alt: "cycle0のMULはE2でr3をcommitするため、cycle1のSTによるr3の読出しはL3違反。"
+%%| fig-width: 6
+flowchart TD
+  accTitle: MULのL=2に対してcycle 1の読出しは早すぎる
+  accDescr: cycle0のMULはE2でr3をcommitするため、cycle1のSTによるr3の読出しはL3違反。
+  M["cycle 0: MUL → r3"] --> W["E2: r3が確定"]
+  S["cycle 1: ST [0], r3"] --x X["書込み中のr3を読む・L3"]
+  W --> OK["STをcycle 2へ"]
+```
+
+元ケース: `tests/cases/raw_mul_next_cycle.json`。初期値が定義済みでも、書込み区間の途中で読むのは不正です。
+
+## L5 完了が衝突する {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-hazard-l5
+%%| fig-cap: "発行cycleが異なっても書戻し境界は衝突する"
+%%| fig-alt: "MUL0とADD1はともにE2のCompute書戻しポートを要求する。ADDをcycle2へ移すとE3へ分かれる。"
+%%| fig-width: 6
+flowchart TD
+  accTitle: 発行cycleが異なっても書戻し境界は衝突する
+  accDescr: MUL0とADD1はともにE2のCompute書戻しポートを要求する。ADDをcycle2へ移すとE3へ分かれる。
+  M["cycle 0: MUL・L=2"] --> P["E2: Compute WB × 1"]
+  A["cycle 1: ADD・L=1"] --x P
+  A -. "修正: cycle 2へ" .-> Q["E3: ADDをcommit"]
+```
+
+元ケース: `tests/cases/mul_then_add_port.json`。宛先レジスタが異なってもL5に違反します。ADDをcycle 2へ移し、cycle 1をNOPにすると解消します。
+
+## L6 HALTが早い {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-hazard-l6
+%%| fig-cap: "HALTは発行時点で未完了操作を残せない"
+%%| fig-alt: "LD0の完了はE2。cycle1のHALTは未完了LDを残す。HALTをcycle2へ移すとE3にdoneになる。"
+%%| fig-width: 6
+flowchart TD
+  accTitle: HALTは発行時点で未完了操作を残せない
+  accDescr: LD0の完了はE2。cycle1のHALTは未完了LDを残す。HALTをcycle2へ移すとE3にdoneになる。
+  L["cycle 0: LD・L=2"] --> W["E2: RFへcommit"]
+  H["cycle 1: HALT"] --x X["LDが未完了・L6"]
+  W --> OK["HALTをcycle 2へ"]
+```
+
+元ケース: `tests/cases/early_halt_ld.json`。done予定の境界にLDが終わればよいのではなく、HALTを発行する時点で終わっている必要があります。
+
+## L11 読出しが4つ {.unnumbered .unlisted}
+
+```{mermaid}
+%%| label: fig-hazard-l11
+%%| fig-cap: "mvp-1のMACとSTは3本目の読出しポートを共有する"
+%%| fig-alt: "MACのrs1とrs2はport0とport1。MACのrs3とSTのソースはどちらもport2を要求しL11で衝突する。"
+%%| fig-width: 6
+flowchart TD
+  accTitle: mvp-1のMACとSTは3本目の読出しポートを共有する
+  accDescr: MACのrs1とrs2はport0とport1。MACのrs3とSTのソースはどちらもport2を要求しL11で衝突する。
+  A["MAC rs1・rs2"] --> P["RF port 0・1"]
+  C["MAC rs3"] --> Q["RF port 2"]
+  S["同じbundleのSTソース"] --x Q
+  Q --> FIX["STを次のcycleへ"]
+```
+
+元ケース: `tests/cases/mac_store_read_ports.json`。MACの3読出しとSTの1読出しで4になります。既定のRTLは3Rです。`read_ports=4`の設定を参照モデルで扱えても、このsnapshotのRTLは対応していません。
+
+:::
+
+これらの図は不正な資源要求を示す教材です。RTLが待って修正する動作ではありません。操作を移したら、HALTの位置と他の制約も含めて独立verifierで再検査します。
