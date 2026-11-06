@@ -66,6 +66,8 @@ object LoopFusion {
           case (LoopNode.Mac(a, b, c), _)      => LoopNode.Mac(ref(a), ref(b), ref(c))
           case (LoopNode.Store(addr, v), _)    => LoopNode.Store(addr, ref(v))
           case (l: LoopNode.Load, _)           => l
+          // Fusion is decided on the scalar graph, before the loop vectorization (ADR-0023).
+          case (w, _) => sys.error(s"$w: a W node is never fused (LoopVector runs after fusion)")
         }
       }
       g.copy(

@@ -81,14 +81,12 @@ class KernelCompilerSpec extends AnyFunSuite {
   }
 
   test(
-    "ISA mvp-2 compiles by list scheduling (#110 stage 4); Modulo Scheduling refuses it until stage 5"
+    "ISA mvp-2 compiles by list scheduling (#110 stage 4); Modulo Scheduling doubles loops on W-full and runs W-reg's scalar loop with a reason (stage 5)"
   ) {
-    val expected = "ISA mvp-2 is not implemented in Modulo Scheduling yet (#110 stage 5); machine "
     Seq("config/machine-mvp2.json", "tests/machines/mvp2_mw1.json").foreach { path =>
       val mvp2 = MachineDescription
         .load(java.nio.file.Paths.get(path))
         .fold(es => fail(es.mkString("\n")), identity)
-      val reason = expected + mvp2.machineId
       val c = KernelCompiler.compile(Benchmarks.saxpy(8), mvp2).fold(e => fail(e), identity)
       assert(c.simd.isInstanceOf[Simd.Packed] && c.bundles.exists(WCompilerSpec.isW))
       assert(Verifier.verify(mvp2, c.words, KernelCompiler.declaration(c.layout)).isEmpty)
@@ -105,9 +103,23 @@ class KernelCompilerSpec extends AnyFunSuite {
       val p = KernelCompiler.prepare(Benchmarks.saxpy(8), mvp2).fold(e => fail(e), identity)
       val a = RegisterAllocator.scheduleAndAllocate(p.dag).fold(e => fail(e), identity)
       assert(KernelCompiler.finish(p, a).left.toOption.exists(_.contains("not code without W")))
+      // Modulo Scheduling (#110 stage 5): W-full doubles saxpy8; W-reg compiles the scalar loop
+      // with the reason #78 Q8 (c), and the comparisons do not measure it.
+      import vliw.compiler.modulo.{LoopCandidate, LoopFallback, LoopSimd, ModuloCompiler}
       val loop = vliw.compiler.loop.LoopBenchmarks.saxpy(8)
-      assert(vliw.compiler.modulo.ModuloCompiler.prepare(loop, mvp2).map(_ => ()) == Left(reason))
-      assert(vliw.compiler.modulo.ModuloCompiler.compile(loop, mvp2).map(_ => ()) == Left(reason))
+      val m = ModuloCompiler.compile(loop, mvp2).fold(e => fail(e), identity)
+      if (mvp2.hasWideMemory) {
+        assert(m.simd.isInstanceOf[LoopSimd.Vectorized] && m.bundles.exists(WCompilerSpec.isW))
+        assert(ModuloCompiler.candidate(loop, mvp2).exists(_.isInstanceOf[LoopCandidate.Packed]))
+      } else {
+        val reason = LoopFallback.NotImplemented("W-reg Modulo Scheduling (#78 Q8 (c))")
+        assert(m.simd == LoopSimd.Fallback(reason, None) && !m.bundles.exists(WCompilerSpec.isW))
+        assert(
+          ModuloCompiler.candidate(loop, mvp2) ==
+            Right(LoopCandidate.NotMeasured("W-reg Modulo Scheduling (#78 Q8 (c))"))
+        )
+      }
+      assert(Verifier.verify(mvp2, m.words, KernelCompiler.declaration(m.layout)).isEmpty)
     }
     // The comparisons' SIMD candidate exists only on mvp-2; mvp-0 and mvp-1 test cases have no W
     // clause.
@@ -117,6 +129,9 @@ class KernelCompilerSpec extends AnyFunSuite {
     for (m <- Seq(machine, mvp1)) {
       val no = KernelCompiler.candidate(Benchmarks.saxpy(8), m).left.toOption
       assert(no.exists(_.contains("without W")), m.machineId)
+      val loop = vliw.compiler.loop.LoopBenchmarks.saxpy(8)
+      val noLoop = vliw.compiler.modulo.ModuloCompiler.candidate(loop, m).left.toOption
+      assert(noLoop.exists(_.contains("without W")), m.machineId)
       val c = KernelCompiler.compile(Benchmarks.saxpy(8), m).fold(e => fail(e), identity)
       assert(c.simd == Simd.Scalar && KernelCompiler.describeW(c).isEmpty)
       val p = KernelCompiler.prepare(Benchmarks.saxpy(8), m).fold(e => fail(e), identity)

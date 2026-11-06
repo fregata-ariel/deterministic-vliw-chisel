@@ -115,16 +115,17 @@ object ModuloRecords {
   def label(k: LoopKernel): String = s"`${k.name}`（${k.index}）"
 
   /** The attempts before the chosen II, grouped by cause: (a) no reservation table, the order of
-    * placement, (b) registers, the instruction memory.
+    * placement, (b) registers, (b′) no aligned pair free (ISA mvp-2), the instruction memory.
     */
   def reasons(attempts: Seq[Attempt]): String = {
     // Consecutive IIs share a group when they fail the same way; for (a), on the same resources.
     def kind(o: Outcome) = o match {
-      case Outcome.NoMrt(r)       => (0, r)
-      case _: Outcome.NoTime      => (1, "")
-      case _: Outcome.TooManyLive => (2, "")
-      case _: Outcome.Overflow    => (3, "")
-      case Outcome.Fits           => (4, "")
+      case Outcome.NoMrt(r)         => (0, r)
+      case _: Outcome.NoTime        => (1, "")
+      case _: Outcome.TooManyLive   => (2, "")
+      case _: Outcome.NoAlignedPair => (5, "")
+      case _: Outcome.Overflow      => (3, "")
+      case Outcome.Fits             => (4, "")
     }
     val groups =
       attempts.filter(_.outcome != Outcome.Fits).foldLeft(Vector.empty[Vector[Attempt]]) {
@@ -149,6 +150,11 @@ object ModuloRecords {
               val live = g.map(_.outcome).collect { case Outcome.TooManyLive(l, _) => l }
               val r = g.head.outcome.asInstanceOf[Outcome.TooManyLive].registers
               s"$iis: (b) レジスタ（同時に生きる値 ${live.mkString("、")} > $r）"
+            case Outcome.NoAlignedPair(_, _, r) =>
+              val at = g.map(_.outcome).collect { case Outcome.NoAlignedPair(c, l, _) =>
+                s"cycle $c で生きる $l"
+              }
+              s"$iis: (b′) 整列した組（${at.mkString("、")} / $r）"
             case Outcome.Overflow(_, cap) =>
               val b = g.map(_.outcome).collect { case Outcome.Overflow(b, _) => b }
               s"$iis: 命令領域（${b.mkString("、")} bundle > $cap）"

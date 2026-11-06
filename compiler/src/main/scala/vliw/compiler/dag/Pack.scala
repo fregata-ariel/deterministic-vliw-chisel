@@ -108,11 +108,11 @@ object Pack {
 
   /** The candidate store pairs of rule 1, as the lower word w of `(w, w + 1)`, in the order they
     * are tried. The candidates are every w whose words w and w + 1 are both stored, over all output
-    * words. They are tried in two passes (#110 stage 4, Q1 (b): the recommended reading, awaiting
-    * the owner's answer): first the gather-free candidates (`gatherFree`) by address from the
-    * lowest, then every candidate by address from the lowest. A candidate is skipped when an
-    * earlier one paired one of its words, so within a pass the lower of two overlapping candidates
-    * wins, and a word whose lower pair is rejected can still pair with the next word (既定).
+    * words. They are tried in two passes (#110 stage 4, Q1 (b), which the owner adopted on
+    * 2026-11-06): first the gather-free candidates (`gatherFree`) by address from the lowest, then
+    * every candidate by address from the lowest. A candidate is skipped when an earlier one paired
+    * one of its words, so within a pass the lower of two overlapping candidates wins, and a word
+    * whose lower pair is rejected can still pair with the next word (既定).
     *
     * Rule 1 as written (one pass, Q1 (a)) is `byAddress` alone; nothing else changes.
     */

@@ -2,8 +2,8 @@ package vliw.compiler.modulo
 
 import scala.collection.mutable
 
-import vliw.compiler.loop.{Instance, LoopGraph, Place}
-import vliw.compiler.regalloc.{Allocation, RegisterAllocator}
+import vliw.compiler.loop.{Instance, LoopGraph, LoopNode, Place, VRef}
+import vliw.compiler.regalloc.{Allocation, NoFit, RegisterAllocator}
 import vliw.compiler.schedule.Schedule
 import vliw.isa.Slot
 
@@ -33,9 +33,19 @@ object Outcome {
     }
   }
 
-  /** (b) The schedule keeps more values live at once than there are registers. */
+  /** (b) The schedule keeps more values live at once than there are registers (a pair and a gather
+    * count 2, ISA mvp-2).
+    */
   final case class TooManyLive(live: Int, registers: Int) extends Outcome {
     override def toString: String = s"$live values live at once > $registers registers"
+  }
+
+  /** (b′) ISA mvp-2: the registers live at `cycle` number `live`, no more than the machine has, but
+    * no aligned pair is free for the pair or gather that starts there (fragmentation, ADR-0023).
+    */
+  final case class NoAlignedPair(cycle: Int, live: Int, registers: Int) extends Outcome {
+    override def toString: String =
+      s"no aligned register pair free at cycle $cycle ($live of $registers registers live)"
   }
 
   /** The unrolled program does not fit the instruction memory. */
@@ -108,7 +118,8 @@ object ModuloScheduler {
   }
 
   /** Resource ids of the reservation tables: the slots, the ports, one unit per mnemonic, then the
-    * third read port (`Mii.readPortUsers`; only MAC and ST on a machine with three read ports).
+    * third read port (`Mii.readPortUsers`: MAC and ST, and on ISA mvp-2 VMAC and ST.W, on a machine
+    * with three read ports).
     */
   private final class Resources(g: LoopGraph) {
     private val mnemonics = g.machine.operations.keys.toVector.sorted
@@ -118,6 +129,14 @@ object ModuloScheduler {
     private def unitId(m: String) = 4 + mnemonics.indexOf(m)
     private val readPortId = 4 + mnemonics.size
     private val readers = Mii.readPortUsers(g.machine)
+
+    /** Whether the third read port couples the two slot classes of the operations `left`: some
+      * compute-class and some memory-class user of the port are left (docs/COMPILER.md, "資源"). With
+      * {MAC, ST} (ISA mvp-1) this is "a MAC and a ST are left"; on ISA mvp-2 a kind may be absent
+      * (a doubled loop has VMAC and ST.W only) or all placed while another is left.
+      */
+    def coupled(left: Seq[String]): Boolean =
+      Slot.all.forall(c => left.exists(m => readers(m) && op(m).slot == c))
 
     /** The (resource, cycle) pairs that an issue of `m` at `c` takes. */
     def uses(m: String, c: Int): Seq[(Int, Int)] =
@@ -133,11 +152,11 @@ object ModuloScheduler {
       }
 
     /** Whether the remaining operations `left` of slot class `s` still get rows (`RowFit`), with
-      * the rows already `taken`. A MAC or a ST may not issue at a row whose third read port is
-      * taken. While both a MAC and a ST are left, the port couples the two slot classes: the
-      * remaining operations of both are decided together (`RowFit.fitsTogether`), after each class
-      * alone, which is quicker to rule them out. Without `useReadPort`, the third read port is left
-      * out.
+      * the rows already `taken`. A user of the third read port (MAC, ST; VMAC, ST.W) may not issue
+      * at a row whose third read port is taken. While users of both slot classes are left
+      * ([[coupled]]), the port couples the two classes: the remaining operations of both are
+      * decided together (`RowFit.fitsTogether`), after each class alone, which is quicker to rule
+      * them out. Without `useReadPort`, the third read port is left out.
       */
     def fit(
         ii: Int,
@@ -164,7 +183,7 @@ object ModuloScheduler {
           blocked = ks.map { case (m, _) => if (reads(m)) mask(readPortId) else 0L }
         )
       }
-      if (reads.isEmpty || !reads.forall(left.contains)) alone(s)
+      if (reads.isEmpty || !coupled(left)) alone(s)
       else if (Slot.all.exists(alone(_).contains(false))) Some(false)
       else {
         val classes = Slot.all.toVector.map { c =>
@@ -231,12 +250,13 @@ object ModuloScheduler {
             .minOption
             .getOrElse(Int.MaxValue)
           val rest = each.drop(i + 1).map(g.nodes(_).mnemonic)
-          // A MAC or a ST takes the third read port of its row. While a MAC and a ST are left,
-          // `fit` decides both slot classes together; once only one of them is left, the remaining
-          // nodes of the other class are checked too, since they may no longer issue at that row.
+          // A MAC or a ST (VMAC, ST.W) takes the third read port of its row. While users of both
+          // slot classes are left, `fit` decides both classes together; once only one class has
+          // users left, the remaining nodes of the other class are checked too, since they may no
+          // longer issue at that row.
           val readers = Mii.readPortUsers(g.machine)
           val classes =
-            if (readers(m) && !readers.forall(rest.contains)) Slot.all else Seq(slot(g, n))
+            if (readers(m) && !res.coupled(rest)) Slot.all else Seq(slot(g, n))
           (earliest to latest.min(earliest + ii - 1))
             .find { c =>
               val need = res.uses(m, c).map(row)
@@ -349,30 +369,11 @@ object ModuloScheduler {
     val iiMax = span(g, one)
     assert(mii.mii <= iiMax, s"MII ${mii.mii} > the span of one iteration $iiMax")
     val attempts = Vector.newBuilder[Attempt]
-    val capacity = g.machine.instructionMemoryBundles
-    def attempt(ii: Int): Either[Outcome, ModuloSchedule] = {
-      val placed: Either[Outcome, Map[Int, Int]] = table(g, ii) match {
-        case Left(no)      => Left(no)
-        case Right(exists) =>
-          // The look-ahead only changes a placement that fails without it, so it runs only then.
-          placer(g, ii, false).left.flatMap(_ => placer(g, ii, true)) match {
-            case Left(_) if ii == iiMax => Right(one)
-            case Left(no)               => Left(no.copy(tableExists = exists))
-            case Right(times)           => Right(times)
-          }
+    def attempt(ii: Int): Either[Outcome, ModuloSchedule] =
+      placement(g, ii, iiMax, one, placer).flatMap { times =>
+        val (_, start, fits) = program(g, ii, times)
+        fits.map(a => ModuloSchedule(g, mii, iiMax, ii, Vector.empty, times, start, a))
       }
-      placed.flatMap { times =>
-        val (issue, start, halt) = expand(g, ii, times)
-        val s = Schedule(g.expanded.dag, issue, halt)
-        if (halt + 1 > capacity) Left(Outcome.Overflow(halt + 1, capacity))
-        else
-          RegisterAllocator
-            .allocate(s)
-            .left
-            .map(_ => Outcome.TooManyLive(RegisterAllocator.maxLive(s), g.machine.registerCount))
-            .map(a => ModuloSchedule(g, mii, iiMax, ii, Vector.empty, times, start, a))
-      }
-    }
     (mii.mii to iiMax).iterator
       .map { ii =>
         val result = attempt(ii)
@@ -382,4 +383,150 @@ object ModuloScheduler {
       .collectFirst { case Right(done) => done.copy(attempts = attempts.result()) }
       .toRight(NoSchedule(mii, iiMax, attempts.result()))
   }
+
+  /** The times of the Each nodes at `ii`, or why there are none: no table (a), or the order of
+    * placement. At `iiMax` (the span of `one`, the one-iteration schedule), a failed placement
+    * gives `one`.
+    */
+  private def placement(
+      g: LoopGraph,
+      ii: Int,
+      iiMax: Int,
+      one: Map[Int, Int],
+      placer: (LoopGraph, Int, Boolean) => Either[Outcome.NoTime, Map[Int, Int]]
+  ): Either[Outcome, Map[Int, Int]] = table(g, ii) match {
+    case Left(no)      => Left(no)
+    case Right(exists) =>
+      // The look-ahead only changes a placement that fails without it, so it runs only then.
+      placer(g, ii, false).left.flatMap(_ => placer(g, ii, true)) match {
+        case Left(_) if ii == iiMax => Right(one)
+        case Left(no)               => Left(no.copy(tableExists = exists))
+        case Right(times)           => Right(times)
+      }
+  }
+
+  /** The program of the placement `times` at `ii`: the unrolled schedule, the start of iteration 0,
+    * and its registers, or why it does not fit: the instruction memory, too many registers live at
+    * once (b), or no aligned pair free (b′, ISA mvp-2; `RegisterAllocator.assign`).
+    */
+  private def program(
+      g: LoopGraph,
+      ii: Int,
+      times: Map[Int, Int]
+  ): (Schedule, Int, Either[Outcome, Allocation]) = {
+    val (issue, start, halt) = expand(g, ii, times)
+    val s = Schedule(g.expanded.dag, issue, halt)
+    val capacity = g.machine.instructionMemoryBundles
+    val fits =
+      if (halt + 1 > capacity) Left(Outcome.Overflow(halt + 1, capacity))
+      else
+        RegisterAllocator.assign(s).left.map {
+          case NoFit.NoAlignedPair(cycle, live, registers) =>
+            Outcome.NoAlignedPair(cycle, live, registers)
+          case _ => Outcome.TooManyLive(RegisterAllocator.maxLive(s), g.machine.registerCount)
+        }
+    (s, start, fits)
+  }
+
+  /** Every II from MII to the span of one iteration (ADR-0015's sweep, #131): the outcome, and for
+    * a placement the cycles of its program, MaxLive and MinAvg at that II, whether or not the
+    * registers fit.
+    */
+  def sweep(g: LoopGraph): Vector[Sweep] = {
+    val one = oneIteration(g)
+    val iiMax = span(g, one)
+    (Mii.of(g).mii to iiMax).toVector.map { ii =>
+      placement(g, ii, iiMax, one, place) match {
+        case Left(no)     => Sweep(ii, no, None, None, None)
+        case Right(times) =>
+          val (s, _, fits) = program(g, ii, times)
+          val live = RegisterAllocator.maxLive(s)
+          Sweep(
+            ii,
+            fits.fold(identity, _ => Outcome.Fits),
+            Some(s.cycles),
+            Some(live),
+            Some(minAvg(g, ii, times))
+          )
+      }
+    }
+  }
+
+  /** The register groups of the Each values of `g`, as `dag.Dag.groups` counts them on the unrolled
+    * loop: a gather (its two lane nodes, weight 2), a pair node (weight 2), or a scalar node not in
+    * a gather (weight 1). Stores have no value.
+    */
+  private[modulo] def groups(g: LoopGraph): Vector[(Vector[Int], Int)] = {
+    val each = g.ids(Place.Each)
+    val gathers = each
+      .flatMap(n => LoopNode.fields(g.nodes(n)))
+      .collect { case VRef.Gather(lo, hi) => Vector(lo.node, hi.node) }
+      .distinct
+    val lanes = gathers.flatten
+    require(lanes.distinct.size == lanes.size, s"a node is a lane of two gathers: $gathers")
+    require(lanes.forall(g.places(_) == Place.Each), s"a gather of values before the loop")
+    val singles = each.filter(n => !LoopNode.isStore(g.nodes(n)) && !lanes.contains(n))
+    gathers.map(_ -> 2) ++ singles.map(n =>
+      Vector(n) -> (if (LoopNode.isPair(g.nodes(n))) 2 else 1)
+    )
+  }
+
+  /** MinAvg of the Each times `t` at `ii` (docs/COMPILER.md, "記録の定義"; Rau's MinAvg): ⌈Σ weight ×
+    * lifetime / II⌉ over the groups of [[groups]], plus the weights of the Before values that Each
+    * nodes read with back 0 (invariants, held through the loop). A group lives from the issue of
+    * its first definer (a gather: its first lane) to its last Each reader, `t(reader) + back × II`,
+    * or for its definer's latency without one. After readers are left out: MinAvg describes the
+    * steady state, not the program.
+    */
+  def minAvg(g: LoopGraph, ii: Int, t: Map[Int, Int]): Int = {
+    val each = g.ids(Place.Each)
+    val readers =
+      each
+        .flatMap(c => g.nodes(c).operands.map(r => r.node -> (t(c) + r.back * ii)))
+        .groupMap(_._1)(_._2)
+    val life = groups(g).map { case (definers, weight) =>
+      val first = definers.minBy(n => (t(n), n))
+      val end = definers.flatMap(readers.getOrElse(_, Vector.empty)).maxOption
+      weight * end.fold(g.latency(first))(_ - t(first))
+    }.sum
+    val invariants = each
+      .flatMap(g.nodes(_).operands)
+      .collect { case r if g.places(r.node) == Place.Before && r.back == 0 => r.node }
+      .distinct
+    (life + ii - 1) / ii + invariants.map(n => if (LoopNode.isPair(g.nodes(n))) 2 else 1).sum
+  }
+
+  /** The earliest times of the Each nodes at `ii` under every dependence of `g.edges` (longest
+    * paths with weights `cycles − II × iterations`), ignoring the resources. `ii` is at least the
+    * RecMII, so the paths are finite.
+    */
+  def asap(g: LoopGraph, ii: Int): Map[Int, Int] = {
+    val each = g.ids(Place.Each)
+    val t = mutable.Map.from(each.map(_ -> 0))
+    def relax(): Boolean = g.edges.foldLeft(false) { (changed, e) =>
+      val w = t(e.from) + e.cycles - ii * e.iterations
+      if (w > t(e.to)) { t(e.to) = w; true }
+      else changed
+    }
+    val rounds = Iterator.continually(relax()).take(each.size + 1).takeWhile(identity).size
+    require(rounds <= each.size, s"II $ii is below the RecMII")
+    t.toMap
+  }
+
+  /** MinAvg at the MII with the ASAP times: the bound of the #78 estimate (docs/COMPILER.md). */
+  def minAvgAtMii(g: LoopGraph): Int = {
+    val mii = Mii.of(g).mii
+    minAvg(g, mii, asap(g, mii))
+  }
 }
+
+/** One II of [[ModuloScheduler.sweep]]: its outcome, and for a placement the cycles, MaxLive and
+  * MinAvg of its program at that II.
+  */
+final case class Sweep(
+    ii: Int,
+    outcome: Outcome,
+    cycles: Option[Int],
+    maxLive: Option[Int],
+    minAvg: Option[Int]
+)

@@ -32,10 +32,13 @@ object Mii {
   /** The operations that use the third read port of `m`: MAC and ST on a machine with MAC and three
     * read ports, where a bundle with both would read four registers (L11); none otherwise. ADD, SUB
     * and MUL read two registers, MAC three, ST one and LD none, so no other bundle reads more than
-    * three.
+    * three. ISA mvp-2 (ADR-0023) adds VMAC (3 fields) and ST.W (1 field): VADD, VSUB and VMUL read
+    * 2 fields and LD.W none, and a lane ST is a ST.
     */
   def readPortUsers(m: MachineDescription): Set[String] =
-    if (m.hasMac && m.readPorts < 4) Set("MAC", "ST") else Set.empty
+    if (m.hasMac && m.readPorts < 4)
+      Set("MAC", "ST") ++ (if (m.hasVector) Set("VMAC", "ST.W") else Set.empty)
+    else Set.empty
 
   /** Each resource has one use per cycle: the compute and memory slots, the unit of each operation
     * (an issue holds it for the operation's II, L9), the two write-back ports (L5), and on a

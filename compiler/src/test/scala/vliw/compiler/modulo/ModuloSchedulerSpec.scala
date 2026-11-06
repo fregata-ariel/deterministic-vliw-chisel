@@ -248,8 +248,10 @@ class ModuloSchedulerSpec extends AnyFunSuite {
       .filter(op(_).writeback.isDefined)
       .groupBy(i => (op(i).writeback, issue(i) + op(i).latency))
       .foreach { case (k, is) => assert(is.size == 1, s"two commits at $k") }
-    // L11: the registers each bundle reads (ADD/SUB/MUL 2, MAC 3, ST 1, LD 0) fit the read ports.
-    val reads = Map("ADD" -> 2, "SUB" -> 2, "MUL" -> 2, "MAC" -> 3, "ST" -> 1, "LD" -> 0)
+    // L11 (form F): the fields each bundle reads (ADD/SUB/MUL 2, MAC 3, ST 1, LD 0; ISA mvp-2:
+    // VADD/VSUB/VMUL 2, VMAC 3, ST.W and a lane ST 1, LD.W 0) fit the read ports.
+    val reads = Map("ADD" -> 2, "SUB" -> 2, "MUL" -> 2, "MAC" -> 3, "ST" -> 1, "LD" -> 0) ++
+      Map("VADD" -> 2, "VSUB" -> 2, "VMUL" -> 2, "VMAC" -> 3, "ST.W" -> 1, "LD.W" -> 0)
     dag.nodes.indices.groupBy(issue).foreach { case (c, is) =>
       assert(is.map(i => reads(dag.nodes(i).mnemonic)).sum <= m.readPorts, s"reads at $c")
     }
@@ -270,6 +272,68 @@ class ModuloSchedulerSpec extends AnyFunSuite {
     for ((label, m, _) <- expected) checkSchedule(compile(loop(label), m).result)
     checkSchedule(compile(LoopBenchmarks.saxpy(8), regs3).result)
     for ((label, m, _, _, _) <- mvp1Expected) checkSchedule(compile(loop(label), m).result)
+  }
+
+  test(
+    "ISA mvp-2: the W schedules pass the check; on three read ports no bundle has a MAC or VMAC with a ST or ST.W"
+  ) {
+    def w(name: String) = machineFile(name)
+    val mvp2 = MachineDescription
+      .load(MachineDescription.Mvp2Path)
+      .fold(es => fail(es.mkString("\n")), identity)
+    val machines = Seq(mvp2, w("mvp2_rp4.json"), w("mvp2_vlat.json"), w("mvp2_vii.json"))
+    def coupled(b: Bundle) =
+      (b.compute.isInstanceOf[ComputeOp.Mac] || b.compute.isInstanceOf[ComputeOp.VMac]) &&
+        (b.memory.isInstanceOf[MemoryOp.St] || b.memory.isInstanceOf[MemoryOp.StW])
+    var together = 0
+    for (
+      m <- machines; k <- LoopBenchmarks.all ++ Seq(LoopBenchmarks.fir(Seq(1L, 2L, 3L, 4L), 16))
+    ) {
+      val c = compile(k, m)
+      checkSchedule(c.result)
+      if (m.readPorts == 3) assert(!c.bundles.exists(coupled), s"${k.name} on ${m.machineId}")
+      else together += c.bundles.count(coupled)
+    }
+    assert(together > 0) // read_ports 4 puts VMAC (or MAC) and ST.W (or ST) together
+  }
+
+  test("ISA mvp-2: no aligned pair free is (b'), told apart from too many registers live") {
+    // W-full with 4 registers, one iteration placed by hand. A at r0 (cycle 0), C at r1 (best
+    // fit, cycle 1), B at r2 (cycle 2); C's last reader at 3 frees r1, so the LD.W at 4 finds r0
+    // and r2 taken, with r1 and r3 free.
+    val v = ujson.read(
+      MachineDescription
+        .load(MachineDescription.Mvp2Path)
+        .fold(es => fail(es.mkString("\n")), identity)
+        .canonicalJson
+    )
+    v("register_file")("count") = 4
+    val four = MachineDescription.parse(ujson.write(v)).fold(es => fail(es.mkString), identity)
+    val g = LoopGraph(
+      four,
+      1,
+      Vector.fill(8)(Place.Each),
+      Vector(
+        LoopNode.Load(Address(0, 1)),
+        LoopNode.Load(Address(1, 1)),
+        LoopNode.Load(Address(2, 1)),
+        LoopNode.Store(Address(10, 1), Ref(1)),
+        LoopNode.LoadW(Address(4, 2)),
+        LoopNode.Store(Address(11, 1), Ref(2)),
+        LoopNode.VCompute(Op.Mul, VRef.Broadcast(Ref(0)), VRef.Pair(Ref(4))),
+        LoopNode.StoreW(Address(12, 2), VRef.Pair(Ref(6)))
+      ),
+      Vector.empty
+    )
+    val times = Map(0 -> 0, 1 -> 1, 2 -> 2, 3 -> 3, 4 -> 4, 5 -> 5, 6 -> 6, 7 -> 8)
+    val placer = (_: LoopGraph, _: Int, _: Boolean) => Right(times)
+    val no = ModuloScheduler.search(g, placer).swap.getOrElse(fail("scheduled"))
+    // A, B and the pair are 4 registers at cycle 4, no more than the machine has: (b′), not (b).
+    assert(no.attempts.map(_.ii) == (7 to 9) && no.mii.mii == 7)
+    assert(no.attempts.forall(_.outcome == Outcome.NoAlignedPair(4, 4, 4)), no.message)
+    assert(
+      no.message.contains("II 7: no aligned register pair free at cycle 4 (4 of 4 registers live)")
+    )
   }
 
   /** The issued operations as (bundle, slot, place, mnemonic, iteration). */

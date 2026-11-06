@@ -10,6 +10,8 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import vliw.compiler.{CompiledKernel, FallbackReason, KernelCompiler, Simd, Verifier}
 import vliw.compiler.dsl.{Benchmarks, Interpreter, Kernel, RandomKernels, Values}
+import vliw.compiler.loop.{LoopBenchmarks, LoopKernel, RandomLoops}
+import vliw.compiler.modulo.{LoopSimd, ModuloCompiled, ModuloCompiler}
 import vliw.hw.{AssertionSpec, CaseBuildSpec, CaseSpec}
 import vliw.hw.{Core, CoreDriver, CoreParams, CoreRun, VliwChiselSim}
 import vliw.isa._
@@ -34,7 +36,8 @@ import RtlPrograms.canonical
   *     for programs that break only L8;
   *   - programs compiled for the machine (#110 stage 4: the benchmarks, odd sizes and random
   *     kernels, packed or fallen back) against the model, the DSL reference implementation and the
-  *     scheduler's cycles;
+  *     scheduler's cycles; and (#110 stage 5a) modulo-scheduled loops, doubled or scalar, also
+  *     against the trace check of their II (`ModuloTrace`);
   *   - last, in the three builds with cases, one case whose assertion must really fire, so that the
   *     bound assertions of the build are checked too. The generated variant runs only the random
   *     programs, in stop mode: no assertion fires there. With the builds of `hw/CaseSpec` and
@@ -550,6 +553,61 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
   private lazy val vlatCompiled = compiledFor(vlat, 20, small = false)
   private lazy val variantCompiled = compiledFor(variant, 20, small = false)
 
+  // Modulo-scheduled loops (#110 stage 5a) in the same builds: on W-full the six loops (saxpy8
+  // and fir4x8 doubled), saxpy(7) and the first 20 random vectorizable loops with a program; on
+  // W-reg the six as scalar loops (#78 Q8 (c)); on vlat the six; on the variant saxpy8 (doubled,
+  // II 5), fir4x8 (its scalar loop: no W II), product8 and dot8 (matmul3 has no program there).
+
+  private def loopsFor(m: MachineDescription, ks: Seq[LoopKernel]): Vector[ModuloCompiled] =
+    ks.map(k =>
+      ModuloCompiler.compile(k, m).fold(e => fail(s"${k.name} on ${m.machineId}: $e"), identity)
+    ).toVector
+
+  private lazy val fullLoops = loopsFor(full, LoopBenchmarks.all :+ LoopBenchmarks.saxpy(7)) ++
+    RandomLoops
+      .vectorizable(110, 30)
+      .flatMap(ModuloCompiler.compile(_, full).toOption)
+      .take(20)
+  private lazy val mw1Loops = loopsFor(mw1, LoopBenchmarks.all)
+  private lazy val vlatLoops = loopsFor(vlat, LoopBenchmarks.all)
+  private lazy val variantLoops = loopsFor(
+    variant,
+    Seq(
+      LoopBenchmarks.saxpy(8),
+      LoopBenchmarks.fir(Seq(1L, 2L, 3L, 4L), 8),
+      LoopBenchmarks.product(8),
+      LoopBenchmarks.dot(8)
+    )
+  )
+
+  /** Runs the loops on the core: as the model (trace, cycles, registers, memory), the DSL reference
+    * implementation, the scheduler's cycles, and `ModuloTrace` on the core's trace. Returns how
+    * many were doubled.
+    */
+  private def runLoops(dut: Core, m: MachineDescription, loops: Vector[ModuloCompiled]): Int = {
+    val rng = new Random(1105L + m.registerCount)
+    loops.foreach { c =>
+      val in = RandomKernels.values(c.kernel.unroll, rng)
+      val label =
+        s"${c.kernel.name} (${c.kernel.index}, Modulo)\n${Disassembler.program(c.bundles)}"
+      val r = matchesModel(dut, m, c.words, c.layout.inputs(in).fold(e => fail(e), identity), label)
+      assert(r.cycles == c.cycles, label)
+      val out = c.layout.outputs(a => r.memory(a).toLong)
+      assert(out == Interpreter.run(c.kernel.unroll, in).fold(e => fail(e), identity), label)
+      val ii = Option.when(c.graph.trips > 1)(c.ii)
+      assert(ModuloTrace.check(c.graph, c.result.map, r.trace, c.ii) == Right(ii), label)
+    }
+    val doubled = loops.count(_.simd.isInstanceOf[LoopSimd.Vectorized])
+    info(
+      s"${loops.size} modulo-scheduled loops, $doubled doubled; " +
+        loops
+          .take(6)
+          .map(c => s"${c.kernel.name} (${c.kernel.index}) ${c.ii} / ${c.cycles}")
+          .mkString(", ")
+    )
+    doubled
+  }
+
   // The minimum counts are about half of those measured when they were set (#110 stage 3); the
   // seeds are fixed, so the counts change only with the generators or the machines.
 
@@ -557,6 +615,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
     "W-full (machine-mvp2) on the RTL: cases, ISA.md's words, random W programs, mvp-1 programs; the L11 assertion fires; compiled kernels"
   ) {
     val compiled = fullCompiled
+    val loops = fullLoops
     build(full) { dut =>
       assert(runCases(dut, full) == ((8, 13, 2)))
       decodes(dut)
@@ -610,6 +669,8 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
       val kinds = runCompiled(dut, full, compiled)
       // Measured: 27 packed (14 with a lane fallback) and 3 NothingToPack of 30 random kernels.
       assert(kinds("packed") >= 13 && kinds("lane fallback") >= 7 && kinds("NothingToPack") >= 1)
+      // saxpy8, fir4x8 and the doubled random loops (measured: 2 + 8 of 27 loops).
+      assert(runLoops(dut, full, loops) >= 8)
     }
   }
 
@@ -617,6 +678,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
     "W-reg (mvp2_mw1) on the RTL: cases and random W programs; LD.W's opcode fires L1; compiled kernels"
   ) {
     val compiled = mw1Compiled
+    val loops = mw1Loops
     build(mw1) { dut =>
       assert(runCases(dut, mw1) == ((1, 0, 0)))
       randomPrograms(
@@ -649,6 +711,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
         )
       )
       val kinds = runCompiled(dut, mw1, compiled)
+      assert(runLoops(dut, mw1, loops) == 0) // W-reg: the scalar loops (#78 Q8 (c))
       // Measured: 10 packed (all with a lane fallback) and 20 NothingToPack (RootDiffers, mostly).
       assert(kinds("packed") >= 5 && kinds("lane fallback") >= 5 && kinds("NothingToPack") >= 10)
     }
@@ -658,6 +721,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
     "latency variant (mvp2_vlat) on the RTL: cases and random W programs; the VMUL and MUL port clash fires L5; compiled kernels"
   ) {
     val compiled = vlatCompiled
+    val loops = vlatLoops
     build(vlat) { dut =>
       assert(runCases(dut, vlat) == ((1, 1, 0)))
       randomPrograms(
@@ -696,6 +760,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
         )
       )
       val kinds = runCompiled(dut, vlat, compiled)
+      assert(runLoops(dut, vlat, loops) == 2) // saxpy8 and fir4x8
       assert(kinds("packed") >= 9) // measured: 18 of 20
     }
   }
@@ -705,6 +770,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
   ) {
     assert(CoreParams.check(variant).isRight)
     val compiled = variantCompiled
+    val loops = variantLoops
     simulate(new Core(CoreParams(variant))) { dut =>
       randomPrograms(
         dut,
@@ -742,6 +808,7 @@ class RtlMvp2Spec extends AnyFunSuite with VliwChiselSim {
         )
       )
       val kinds = runCompiled(dut, variant, compiled)
+      assert(runLoops(dut, variant, loops) == 1) // saxpy8; fir4x8 falls back (no W II)
       // 8 registers. Measured: 15 packed and 3 kernel fallbacks (NoAttemptFits) of 20.
       assert(kinds("packed") >= 7 && kinds("NoAttemptFits") >= 1)
     }
