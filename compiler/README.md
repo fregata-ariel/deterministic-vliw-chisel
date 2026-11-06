@@ -22,6 +22,6 @@ Phase 0〜2のソフトウェア実装先。sbtプロジェクト `compiler`、�
 
 ## 実装（Phase 4、#110）
 
-- `dag.Pack`: ISA mvp-2（W）で、融合した DAG の値を組に詰める（ADR-0023 の固定の SLP の規則）。LD.W・ST.W（W-full）、集め（W-reg）、ブロードキャスト、組にできない出力の語のスカラーのレーンと理由。[docs/COMPILER.md](../docs/COMPILER.md)「ISA mvp-2（W）」
+- `dag.Pack`: ISA mvp-2（W）で、融合した DAG の値を組に詰める（ADR-0023 の固定の SLP の規則）。ST の組は2段で作る（集めの要らない組を先に。#110 第4段の Q1 の推奨で、オーナーの答えを待っている）。LD.W・ST.W（W-full）、集め（W-reg）、ブロードキャスト、組にできない出力の語のスカラーのレーンと理由。[docs/COMPILER.md](../docs/COMPILER.md)「ISA mvp-2（W）」
 - `schedule`・`regalloc`: 生きているレジスタを重みで数える（組と集めは2）。組には整列した組を、スカラーには best fit で割り当て、`NoAlignedPair` と `TooManyLive` を分ける。LD.W の rematerialization。VADD・VSUB・VMUL・VMAC・LD.W・ST.W の命令を作る
 - `KernelCompiler`: 通常の利用（`compile`）は、詰めた DAG がどの試行でも収まらないときと、組が1つもできないとき、スカラーのカーネルに戻し、`CompiledKernel.simd` に理由を書く。比較（`candidate`）は、SIMD の候補を理由付きの不成立として返し、スカラーの値に置き換えない。Modulo Scheduling（`ModuloCompiler`）は第5段まで mvp-2 を拒否する
