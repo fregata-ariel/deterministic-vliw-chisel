@@ -572,7 +572,7 @@ object SimdRecords {
   /** The sentence on rule 1, from [[rule1]]. */
   def rule1Text(s: Series): String = {
     def text(twoPasses: Boolean) =
-      if (twoPasses) "2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない）"
+      if (twoPasses) "2段の規則（#110 第4段の Q1 の (b)。オーナーが 2026-11-06 に採った）"
       else "書かれたとおりの1段の規則（#110 第4段の Q1 の (a)）"
     val (list, loop) = rule1(s)
     val which =
@@ -1470,7 +1470,7 @@ ${loopRows.mkString("\n")}
          else s"。${m4Others.map(_.name).mkString("、")} では、どちらかのループに命令列がある")
     s"""## Modulo Scheduling
 
-`LoopBenchmarks.all` の6つのループと、`matmul4` の2つのループ（`matmulRows(4)`、`matmulAcc(4)`。#110 第6段の Q1。オーナーが異を唱えなければ既定とする推奨で、決定ではない）を、${s.configs.size}つの構成で。配置と入力は list scheduling と同じである（`BenchmarkSpec` が確かめる）。戦略は1つで、II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。ここでの II はループの II で、`metrics` の `ii` に、トレースで確かめた値（`crosscheck/ModuloTrace`）を記録する。`vliw-metrics/3` の `ii` は、スケジュールしたループの反復の開始間隔で、2倍にしたループではベクトルの1反復（元の2反復）の間隔である（[docs/METRICS.md](../docs/METRICS.md)）。比べるときは、元の1反復当たりの II（2倍にしたループでは `ii` / 2、本体を詰めたループとスカラーのループでは `ii`）を使い、`ii` だけを比べない。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」で、値を書かない（`LoopCandidate.NotMeasured`）。
+`LoopBenchmarks.all` の6つのループと、`matmul4` の2つのループ（`matmulRows(4)`、`matmulAcc(4)`。#110 第6段の Q1。オーナーが 2026-11-06 に採った）を、${s.configs.size}つの構成で。配置と入力は list scheduling と同じである（`BenchmarkSpec` が確かめる）。戦略は1つで、II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。ここでの II はループの II で、`metrics` の `ii` に、トレースで確かめた値（`crosscheck/ModuloTrace`）を記録する。`vliw-metrics/3` の `ii` は、スケジュールしたループの反復の開始間隔で、2倍にしたループではベクトルの1反復（元の2反復）の間隔である（[docs/METRICS.md](../docs/METRICS.md)）。比べるときは、元の1反復当たりの II（2倍にしたループでは `ii` / 2、本体を詰めたループとスカラーのループでは `ii`）を使い、`ii` だけを比べない。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」で、値を書かない（`LoopCandidate.NotMeasured`）。
 
 ### ループのベクトル化の判定（W-full と `mvp2_rp4`）
 
@@ -1764,7 +1764,7 @@ ${loopRows.mkString("\n")}"""
       else
         wregInfeasible.mkString(
           "、"
-        )}（集めのレーンの LD は複製しない。#110 第4段の Q5 の既定）。集め全体の複製を足さずに不成立と記録するのは #110 第6段の Q2 で、オーナーが異を唱えなければ既定とする推奨で、決定ではない。W-reg の Modulo Scheduling は測っていない（#78 の質問8 の (c)）
+        )}（集めのレーンの LD は複製しない。#110 第4段の Q5 の既定）。集め全体の複製を足さずに不成立と記録するのは #110 第6段の Q2 で、オーナーが 2026-11-06 に採った。集め全体の複製は、今後の改善候補として残す（[ADR-0023](../docs/DECISIONS.md) の第6段の補足）。W-reg の Modulo Scheduling は測っていない（#78 の質問8 の (c)）
 - 2つ目の乗算器と RF の配線の費用: 測っていない（#57）。上の「構成ごとに足すもの」は書いた値である
 - DMA（#111）との bank のサイクル: Scratchpad の bank ごとの語を「スロットとポート」に記録した。DMA との共有は測っていない（#111）
 - 命令領域（#81）: 記録した命令列の bundle は、W の構成では最大 ${wLongest._1}（`${wLongest._2}`）、基準（mvp-1 と `mvp1_rp4`）では最大 ${baseLongest._1}（`${baseLongest._2}`）である（命令領域 $capacity bundle）

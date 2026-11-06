@@ -32,7 +32,7 @@
 | 配置・入力 | `MemoryLayout.fixedOrder`（ループは `LoopLowering.layout`）と `KernelCompiler.sampleInputs(kernel, 1)`。期待値は DSL の参照実装。どの構成でも、配置・入力・融合したスカラーの DAG は mvp-1 と同じである（`BenchmarkSpec` が確かめる） |
 | レジスタ | どの構成も 16 本。戦略を固定した系列の行（20 の試行）は、どの構成でも同じである |
 | コンパイラの試行 | 優先度 ×（上限なし、上限 16 で load reserve 0〜8）× 方式。rematerialization は行き詰まる試行だけ（[ADR-0016](../docs/DECISIONS.md)。W-full では LD.W も複製する。集めのレーンの LD は複製しない、#110 第4段の Q5） |
-| W の詰め込み | 固定の規則で、戦略の次元にしない（[ADR-0023](../docs/DECISIONS.md)）。W の行は、どれも同じ詰めた DAG（`Prepared.packing`）をスケジュールする。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない）で、list scheduling とループで同じである（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る） |
+| W の詰め込み | 固定の規則で、戦略の次元にしない（[ADR-0023](../docs/DECISIONS.md)）。W の行は、どれも同じ詰めた DAG（`Prepared.packing`）をスケジュールする。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーが 2026-11-06 に採った）で、list scheduling とループで同じである（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る） |
 | ループ | 戦略は1つ。II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。融合は `FusionChoice`、W-full のベクトル化（2倍か本体の詰め込み）は固定の規則（ADR-0023） |
 | 比較での fallback | W の候補をスカラーの値に置き換えない（#78 の質問10、ADR-0023）。詰めた DAG のすべての試行が失敗した候補は理由付きの「不成立」、詰めるものの無いカーネルとループ（`NothingToPack`）はスカラーの命令列を理由と一緒に測る。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」とする |
 | 記録の形式 | 基準は `vliw-metrics/2`、W は `vliw-metrics/3`（[docs/METRICS.md](../docs/METRICS.md)）。W では、操作の数、レジスタの語の数、転送の語の数を分ける（#78 の質問9）。`/2` では、どの操作も1語を動かすので、3つは一致する |
@@ -867,7 +867,7 @@ W-full と `mvp2_rp4` は `read_ports` だけが違い、同じカーネル・�
 
 ## Modulo Scheduling
 
-`LoopBenchmarks.all` の6つのループと、`matmul4` の2つのループ（`matmulRows(4)`、`matmulAcc(4)`。#110 第6段の Q1。オーナーが異を唱えなければ既定とする推奨で、決定ではない）を、5つの構成で。配置と入力は list scheduling と同じである（`BenchmarkSpec` が確かめる）。戦略は1つで、II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。ここでの II はループの II で、`metrics` の `ii` に、トレースで確かめた値（`crosscheck/ModuloTrace`）を記録する。`vliw-metrics/3` の `ii` は、スケジュールしたループの反復の開始間隔で、2倍にしたループではベクトルの1反復（元の2反復）の間隔である（[docs/METRICS.md](../docs/METRICS.md)）。比べるときは、元の1反復当たりの II（2倍にしたループでは `ii` / 2、本体を詰めたループとスカラーのループでは `ii`）を使い、`ii` だけを比べない。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」で、値を書かない（`LoopCandidate.NotMeasured`）。
+`LoopBenchmarks.all` の6つのループと、`matmul4` の2つのループ（`matmulRows(4)`、`matmulAcc(4)`。#110 第6段の Q1。オーナーが 2026-11-06 に採った）を、5つの構成で。配置と入力は list scheduling と同じである（`BenchmarkSpec` が確かめる）。戦略は1つで、II = MII から順に試し、最初に命令列ができた II を使う（ADR-0015）。ここでの II はループの II で、`metrics` の `ii` に、トレースで確かめた値（`crosscheck/ModuloTrace`）を記録する。`vliw-metrics/3` の `ii` は、スケジュールしたループの反復の開始間隔で、2倍にしたループではベクトルの1反復（元の2反復）の間隔である（[docs/METRICS.md](../docs/METRICS.md)）。比べるときは、元の1反復当たりの II（2倍にしたループでは `ii` / 2、本体を詰めたループとスカラーのループでは `ii`）を使い、`ii` だけを比べない。W-reg の Modulo Scheduling は「測っていない（#78 の質問8 の (c)）」で、値を書かない（`LoopCandidate.NotMeasured`）。
 
 ### ループのベクトル化の判定（W-full と `mvp2_rp4`）
 
@@ -1056,11 +1056,11 @@ list scheduling、方式ごとに cycles 最小（vliw）。見積りの括弧�
 ## ADR-0022「引き受ける危険」の確認
 
 - 16本のレジスタは8組しかない・割り当てが断片化する: 戦略を固定した系列で `NoAlignedPair` の行は、W-reg は `matmul3`（vliw）1。W-full は `matmul4`（vliw）1、`matmul4`（single）2。mvp2_rp4 は `matmul4`（vliw）2、`matmul4`（single）2である（不成立の行の数と理由は上の各表）。記録した W のループ（W-full と mvp2_rp4 で 16）には、II を (b′) で上げたものも、(b′) で不成立の II も無い（ほかのループについては [ADR-0023](../docs/DECISIONS.md) の第5段の後半の補足）
-- W-reg では集めが要る: W-reg の不成立の行（vliw / single）は `saxpy8` 0 / 1、`fir4x8` 11 / 11、`matmul3` 8 / 7、`matmul4` 20 / 20。方式ごとに cycles 最小で不成立なのは `matmul4`（vliw。TooManyLive 2、Stuck 18）、`matmul4`（single。TooManyLive 2、Stuck 18）（集めのレーンの LD は複製しない。#110 第4段の Q5 の既定）。集め全体の複製を足さずに不成立と記録するのは #110 第6段の Q2 で、オーナーが異を唱えなければ既定とする推奨で、決定ではない。W-reg の Modulo Scheduling は測っていない（#78 の質問8 の (c)）
+- W-reg では集めが要る: W-reg の不成立の行（vliw / single）は `saxpy8` 0 / 1、`fir4x8` 11 / 11、`matmul3` 8 / 7、`matmul4` 20 / 20。方式ごとに cycles 最小で不成立なのは `matmul4`（vliw。TooManyLive 2、Stuck 18）、`matmul4`（single。TooManyLive 2、Stuck 18）（集めのレーンの LD は複製しない。#110 第4段の Q5 の既定）。集め全体の複製を足さずに不成立と記録するのは #110 第6段の Q2 で、オーナーが 2026-11-06 に採った。集め全体の複製は、今後の改善候補として残す（[ADR-0023](../docs/DECISIONS.md) の第6段の補足）。W-reg の Modulo Scheduling は測っていない（#78 の質問8 の (c)）
 - 2つ目の乗算器と RF の配線の費用: 測っていない（#57）。上の「構成ごとに足すもの」は書いた値である
 - DMA（#111）との bank のサイクル: Scratchpad の bank ごとの語を「スロットとポート」に記録した。DMA との共有は測っていない（#111）
 - 命令領域（#81）: 記録した命令列の bundle は、W の構成では最大 82（`matmul4_single_w`）、基準（mvp-1 と `mvp1_rp4`）では最大 128（`matmul4_single_mac`）である（命令領域 256 bundle）
-- `matmul3` の3列目はスカラーのまま残る: W-full の `matmul3` の詰め方は 組 3（行をまたぐ組 0）、スカラーのレーン 3: c(0,2)（NoNeighbour）、c(1,2)（NoNeighbour）、c(2,2)（NoNeighbour）、ブロードキャスト 9、集め 0 で、3列目の語 c(0,2)、c(1,2)、c(2,2) はどれもスカラーのレーンである（危険のとおり）。`matmul4` は 組 8（行をまたぐ組 0）、スカラーのレーン 0、ブロードキャスト 16、集め 0 である（この文の詰め方は `Pack` の結果から作る）。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーの答えを待つ推奨で、決定ではない）で、list scheduling とループで同じである（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る）
+- `matmul3` の3列目はスカラーのまま残る: W-full の `matmul3` の詰め方は 組 3（行をまたぐ組 0）、スカラーのレーン 3: c(0,2)（NoNeighbour）、c(1,2)（NoNeighbour）、c(2,2)（NoNeighbour）、ブロードキャスト 9、集め 0 で、3列目の語 c(0,2)、c(1,2)、c(2,2) はどれもスカラーのレーンである（危険のとおり）。`matmul4` は 組 8（行をまたぐ組 0）、スカラーのレーン 0、ブロードキャスト 16、集め 0 である（この文の詰め方は `Pack` の結果から作る）。規則1は2段の規則（#110 第4段の Q1 の (b)。オーナーが 2026-11-06 に採った）で、list scheduling とループで同じである（`Pack.storePairs` と `LoopPack.storePairs` が `matmul3` とその（m）の候補を試す順から作る）
 - `dot8`・`product8` は速くならない: `product8`（i）（W-full）19 cycles、mvp-1 19 cycles、`product8`（i）（mvp2_rp4）19 cycles、mvp1_rp4 19 cycles、`dot8`（i）（W-full）21 cycles、mvp-1 21 cycles、`dot8`（i）（mvp2_rp4）21 cycles、mvp1_rp4 21 cycles（`NothingToPack`。スカラーの命令列で、mvp-1 と同じ cycles）
 
 ## 測っていないもの
