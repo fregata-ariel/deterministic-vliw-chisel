@@ -371,7 +371,7 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
 
 ## ISA mvp-2（W）
 
-ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段）。Modulo Scheduling（`ModuloCompiler`）は、LD.W のある machine でループを2倍にベクトル化するか、2倍にしないループの1反復の本体を詰め、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段。下の「ループのベクトル化と Modulo Scheduling（W-full）」）。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の4つの補足（第4段の前半と後半、第5段の前半と後半）に一覧がある）。#110 第4段の Q1（規則1の2段の規則、(b)）と第5段の Q1〜Q4 は、オーナーが 2026-11-06 に決めた（ADR-0023 の第5段の前半と後半の補足）。
+ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段）。Modulo Scheduling（`ModuloCompiler`）は、LD.W のある machine でループを2倍にベクトル化するか、2倍にしないループの1反復の本体を詰め、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段。下の「ループのベクトル化と Modulo Scheduling（W-full）」）。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の4つの補足（第4段の前半と後半、第5段の前半と後半）に一覧がある）。#110 第4段の Q1（規則1の2段の規則、(b)）と第5段の Q1〜Q4 は、オーナーが 2026-11-06 に決めた（ADR-0023 の第5段の前半と後半の補足）。第6段の Q1〜Q3 も、オーナーが 2026-11-06 に決めた（ADR-0023 の第6段の補足。残る既定が #110 第4段の Q2〜Q10 であることも、そこに書いた）。
 
 段の順は `Lowering → Dag.build → Fusion.fuse → Pack → ListScheduler → rematerialization（行き詰まる試行だけ）→ 組を考えた割り当て → Allocation.bundles → verifier` である。`KernelCompiler.prepare` は `Prepared.dag` を融合したスカラーの DAG のまま残し、mvp-2 の machine では `Prepared.packing` に `Pack.pack(dag)` を入れる（mvp-0・mvp-1 では None）。融合を先に行うので、詰めた MAC の組がそのまま VMAC になる。詰め込みは戦略の次元ではなく、どの試行も同じ詰めた DAG をスケジュールする。
 
