@@ -1,0 +1,105 @@
+{
+  "metrics": "vliw-metrics/3",
+  "isa": "mvp-2",
+  "machine": {
+    "id": "vliw2-i32-sp2-mac-w2-rp4",
+    "revision": 1,
+    "hash": "sha256:db0c16d2f3bb568ec27b6418c8fb1dc8e2301ed40ffa0fe516b618fb65580c73"
+  },
+  "program": {
+    "name": "fir4x8_i_modulo_w_rp4",
+    "hash": "sha256:fb0e8777e08c95f44174b2288ebb3bdf338a57e9ab55123bd31952db8ce47850",
+    "bundles": 28
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 28,
+  "issue": {
+    "compute": {
+      "operations": 16,
+      "nop": 11,
+      "nop_rate": 0.392857
+    },
+    "memory": {
+      "operations": 18,
+      "nop": 10,
+      "nop_rate": 0.357143
+    },
+    "by_operation": {
+      "ADD": 0,
+      "SUB": 0,
+      "MUL": 0,
+      "MAC": 0,
+      "VADD": 0,
+      "VSUB": 0,
+      "VMUL": 4,
+      "VMAC": 12,
+      "LD": 4,
+      "ST": 0,
+      "LD.W": 10,
+      "ST.W": 4,
+      "HALT": 1
+    },
+    "register_reads": {
+      "read_ports": 4,
+      "reads": 48,
+      "registers": 80,
+      "banks": [
+        {
+          "bank": 0,
+          "registers": 40
+        },
+        {
+          "bank": 1,
+          "registers": 40
+        }
+      ],
+      "bundles_by_reads": {
+        "0": 10,
+        "1": 2,
+        "2": 4,
+        "3": 10,
+        "4": 2
+      }
+    },
+    "rs3_with_store": 2
+  },
+  "writeback": {
+    "compute": {
+      "commits": 16,
+      "registers": 32,
+      "utilization": 0.571429
+    },
+    "memory": {
+      "commits": 14,
+      "registers": 24,
+      "utilization": 0.5
+    }
+  },
+  "scratchpad": {
+    "read_operations": 14,
+    "write_operations": 4,
+    "reads": 24,
+    "writes": 8,
+    "accesses_per_cycle": 1.142857,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 12,
+        "writes": 4,
+        "accesses_per_cycle": 0.571429
+      },
+      {
+        "bank": 1,
+        "reads": 12,
+        "writes": 4,
+        "accesses_per_cycle": 0.571429
+      }
+    ]
+  },
+  "ii": 4,
+  "rtl": null
+}

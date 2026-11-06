@@ -1,0 +1,105 @@
+{
+  "metrics": "vliw-metrics/3",
+  "isa": "mvp-2",
+  "machine": {
+    "id": "vliw2-i32-sp2-mac-w2-rp4",
+    "revision": 1,
+    "hash": "sha256:db0c16d2f3bb568ec27b6418c8fb1dc8e2301ed40ffa0fe516b618fb65580c73"
+  },
+  "program": {
+    "name": "saxpy8_vliw_w_rp4",
+    "hash": "sha256:056e5ec64bd74d29a428353cf82a2d26947d2eece55d1b164a6fea14c5f3ab99",
+    "bundles": 14
+  },
+  "generator": {
+    "model": "vliw.sim.ReferenceModel",
+    "scala": "2.13.18",
+    "java": "21.0.12.1"
+  },
+  "cycles": 14,
+  "issue": {
+    "compute": {
+      "operations": 4,
+      "nop": 9,
+      "nop_rate": 0.642857
+    },
+    "memory": {
+      "operations": 13,
+      "nop": 1,
+      "nop_rate": 0.071429
+    },
+    "by_operation": {
+      "ADD": 0,
+      "SUB": 0,
+      "MUL": 0,
+      "MAC": 0,
+      "VADD": 0,
+      "VSUB": 0,
+      "VMUL": 0,
+      "VMAC": 4,
+      "LD": 1,
+      "ST": 0,
+      "LD.W": 8,
+      "ST.W": 4,
+      "HALT": 1
+    },
+    "register_reads": {
+      "read_ports": 4,
+      "reads": 16,
+      "registers": 28,
+      "banks": [
+        {
+          "bank": 0,
+          "registers": 16
+        },
+        {
+          "bank": 1,
+          "registers": 12
+        }
+      ],
+      "bundles_by_reads": {
+        "0": 7,
+        "1": 3,
+        "2": 0,
+        "3": 3,
+        "4": 1
+      }
+    },
+    "rs3_with_store": 1
+  },
+  "writeback": {
+    "compute": {
+      "commits": 4,
+      "registers": 8,
+      "utilization": 0.285714
+    },
+    "memory": {
+      "commits": 9,
+      "registers": 17,
+      "utilization": 0.642857
+    }
+  },
+  "scratchpad": {
+    "read_operations": 9,
+    "write_operations": 4,
+    "reads": 17,
+    "writes": 8,
+    "accesses_per_cycle": 1.785714,
+    "banks": [
+      {
+        "bank": 0,
+        "reads": 9,
+        "writes": 4,
+        "accesses_per_cycle": 0.928571
+      },
+      {
+        "bank": 1,
+        "reads": 8,
+        "writes": 4,
+        "accesses_per_cycle": 0.857143
+      }
+    ]
+  },
+  "ii": null,
+  "rtl": null
+}

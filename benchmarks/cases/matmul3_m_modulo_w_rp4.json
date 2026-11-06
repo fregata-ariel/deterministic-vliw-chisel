@@ -1,0 +1,70 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "matmul3_m_modulo_w_rp4",
+  "description": "generated from the loop of matmul3 over m by Modulo Scheduling at II 6; expected outputs from the DSL reference implementation, cycles predicted by the scheduler; matmul3 (m): W: not doubled: AssociationOrder; body: 3 pairs (after 18, 21, 24), 3 scalar lanes (NoNeighbour), 3 vector states; 2 iterations of II 6, per iteration 4 LD, 1 LD.W, 3 MAC, 3 VMAC, 3 broadcasts, 0 gathers; MinAvg 11 at MII, 14 at II; MaxLive 15",
+  "program": [
+    "@0:  nop             | ld r0, [0]",
+    "@1:  nop             | ld r1, [11]",
+    "@2:  nop             | ld r2, [3]",
+    "@3:  mul r3, r0, r1  | ld r4, [6]",
+    "@4:  mul r5, r2, r1  | ld.w r6:r7, [9]",
+    "@5:  mul r1, r4, r1  | nop",
+    "@6:  vmul r8:r9, r0, r6:r7 | ld r0, [1]",
+    "@7:  vmul r10:r11, r2, r6:r7 | ld r2, [14]",
+    "@8:  vmul r6:r7, r4, r6:r7 | ld r4, [4]",
+    "@9:  mac r3, r0, r2, r3 | ld r12, [7]",
+    "@10: mac r5, r4, r2, r5 | ld.w r14:r15, [12]",
+    "@11: mac r1, r12, r2, r1 | nop",
+    "@12: vmac r8:r9, r0, r14:r15, r8:r9 | ld r0, [2]",
+    "@13: vmac r10:r11, r4, r14:r15, r10:r11 | ld r2, [17]",
+    "@14: vmac r6:r7, r12, r14:r15, r6:r7 | ld r4, [5]",
+    "@15: mac r3, r0, r2, r3 | ld r12, [8]",
+    "@16: mac r5, r4, r2, r5 | ld.w r14:r15, [15]",
+    "@17: mac r1, r12, r2, r1 | st [20], r3",
+    "@18: vmac r2:r3, r0, r14:r15, r8:r9 | st [23], r5",
+    "@19: vmac r0:r1, r4, r14:r15, r10:r11 | st [26], r1",
+    "@20: vmac r2:r3, r12, r14:r15, r6:r7 | st.w [18], r2:r3",
+    "@21: nop             | st.w [21], r0:r1",
+    "@22: nop             | st.w [24], r2:r3",
+    "@23: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709,
+      "16": 181670012,
+      "17": 3271367910
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 24,
+    "memory": {
+      "18": 2795470868,
+      "19": 350164246,
+      "20": 3123205000,
+      "21": 3159017481,
+      "22": 3650974376,
+      "23": 2225410474,
+      "24": 4287209870,
+      "25": 3942679884,
+      "26": 333298860
+    }
+  },
+  "machine": "tests/machines/mvp2_rp4.json"
+}

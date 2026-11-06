@@ -129,7 +129,7 @@ ISA mvp-2（W。[ISA.md](ISA.md)「mvp-2: W」）の記録の形式である（#
 | **レジスタの語**の数 | `writeback.<port>.registers`、`issue.register_reads.registers`、`issue.register_reads.banks` |
 | **転送の語**の数 | `scratchpad.reads` / `writes`、`scratchpad.banks[].reads` / `writes`、`scratchpad.accesses_per_cycle` |
 
-`vliw-metrics/2` のキーのうち、下の表に無いもの（`program`、`generator`、`cycles`、`ii`、`rtl`、`nop`・`nop_rate`）は、意味が変わらない。キーの集合は形式の版だけで決まり、machine では変わらない。そのため、W-reg の記録にも LD.W・ST.W のキーがあり、値は0になる。
+`vliw-metrics/2` のキーのうち、下の表に無いもの（`program`、`generator`、`cycles`、`rtl`、`nop`・`nop_rate`）は、意味が変わらない。`ii` は下の表で定める。キーの集合は形式の版だけで決まり、machine では変わらない。そのため、W-reg の記録にも LD.W・ST.W のキーがあり、値は0になる。
 
 | キー | 内容 |
 |---|---|
@@ -150,8 +150,11 @@ ISA mvp-2（W。[ISA.md](ISA.md)「mvp-2: W」）の記録の形式である（#
 | `scratchpad.reads` / `writes` | 読んだ / 書いた**語**の数（LD.W・ST.W は2と数える） |
 | `scratchpad.accesses_per_cycle` | (reads + writes) / cycles。語の数で数える |
 | `scratchpad.banks[]` | Scratchpad の bank ごとの、読んだ語と書いた語の数と `accesses_per_cycle` |
+| `ii` | スケジュールしたループの反復の開始間隔（トレースで確かめた値。`/1` と同じく、展開済みのカーネルと `sim/run --metrics` では `null`）。2倍にしたループでは、ベクトルの1反復（元の2反復）の間隔である。本体を詰めたループとスカラーのループでは、元の1反復の間隔で、`/1`・`/2` と同じである |
 
 `vliw-metrics/1` と `/2` では、どの操作も1つのレジスタか1語しか動かさないので、操作の数と語の数は一致する。そのため、古い記録のキーの意味は、そのまま `/3` の語の数にも操作の数にも読める。
+
+`ii` は、ISA mvp-2 で2倍にしたループ（ADR-0023）ができて、元の1反復の間隔とは限らなくなった。それでも `/3` のままにする。2倍にしたループは `/3` の記録にしか無く、`/1`・`/2` から `/3` へ版が変わることがこの違いを示すからである。また、この定義を書く前（#110 の第6段の前）には `/3` の記録をコミットしていない（`/3` の例は、下の直線の命令列 `w_metrics_example` だけで、`ii` は `null`）ので、別の意味の `ii` を持つ `/3` の記録は無い。「[版の扱い](#版の扱い)」の「意味を変えるときは版を上げる」には当たらない。比べるときは、元の1反復当たりの II（2倍にしたループでは `ii` / 2）を使う（[benchmarks/SIMD.md](../benchmarks/SIMD.md) はこれを `ii` の横に書く）。元の1反復当たりの値の欄は足していない（足すなら版を上げる）。
 
 例（`config/machine-mvp2.json`。入力は M[0]=3、M[17]=5、M[18]=0xFFFFFFFF。手で計算した値で、`sim/MetricsSpec` で固定している。同じ命令列はテストケース `w_metrics_example` にもある）:
 

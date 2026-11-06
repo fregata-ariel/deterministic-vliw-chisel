@@ -1,0 +1,62 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "saxpy8_single_w_rp4",
+  "description": "generated from the DSL kernel saxpy8; expected outputs from the DSL reference implementation, cycles predicted by the scheduler (critical-path, 16 registers, load reserve 0, single issue); W: 4 output pairs packed (4 VMAC, 8 LD.W, 4 ST.W, 1 broadcast, 0 gathers), no scalar lanes",
+  "program": [
+    "@0:  nop             | ld r0, [16]",
+    "@1:  nop             | ld.w r2:r3, [0]",
+    "@2:  nop             | ld.w r4:r5, [8]",
+    "@3:  nop             | ld.w r6:r7, [2]",
+    "@4:  nop             | ld.w r8:r9, [10]",
+    "@5:  nop             | ld.w r10:r11, [4]",
+    "@6:  nop             | ld.w r12:r13, [12]",
+    "@7:  nop             | ld.w r14:r15, [6]",
+    "@8:  vmac r2:r3, r0, r2:r3, r4:r5 | nop",
+    "@9:  nop             | ld.w r4:r5, [14]",
+    "@10: vmac r6:r7, r0, r6:r7, r8:r9 | nop",
+    "@11: vmac r8:r9, r0, r10:r11, r12:r13 | nop",
+    "@12: vmac r0:r1, r0, r14:r15, r4:r5 | nop",
+    "@13: nop             | st.w [17], r2:r3",
+    "@14: nop             | st.w [19], r6:r7",
+    "@15: nop             | st.w [21], r8:r9",
+    "@16: nop             | st.w [23], r0:r1",
+    "@17: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709,
+      "16": 181670012
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 18,
+    "memory": {
+      "17": 994936220,
+      "18": 1123534067,
+      "19": 1518996696,
+      "20": 289481026,
+      "21": 3067446782,
+      "22": 2351676203,
+      "23": 2780962004,
+      "24": 2173543421
+    }
+  },
+  "machine": "tests/machines/mvp2_rp4.json"
+}

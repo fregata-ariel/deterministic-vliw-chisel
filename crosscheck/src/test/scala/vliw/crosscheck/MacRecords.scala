@@ -89,13 +89,13 @@ object MacRecords {
       case _: ComputeOp.Mac                                                                    => 3
       case ComputeOp.Nop | ComputeOp.Halt                                                      => 0
       case w @ (_: ComputeOp.VAdd | _: ComputeOp.VSub | _: ComputeOp.VMul | _: ComputeOp.VMac) =>
-        sys.error(s"$w: the records of ISA mvp-2 come with #110 stage 6")
+        sys.error(s"$w: ISA mvp-2; use the vliw-metrics/3 fields (SimdRecords)")
     }
     val memory = b.memory match {
       case _: MemoryOp.St                          => 1
       case _: MemoryOp.Ld | MemoryOp.Nop           => 0
       case w @ (_: MemoryOp.LdW | _: MemoryOp.StW) =>
-        sys.error(s"$w: the records of ISA mvp-2 come with #110 stage 6")
+        sys.error(s"$w: ISA mvp-2; use the vliw-metrics/3 fields (SimdRecords)")
     }
     compute + memory
   }

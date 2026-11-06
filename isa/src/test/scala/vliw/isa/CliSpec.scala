@@ -44,7 +44,7 @@ class CliSpec extends AnyFunSuite {
   test("machine, asm and disasm handle ISA mvp-2 with --machine config/machine-mvp2.json") {
     val shown =
       Cli.run(List("machine", "config/machine-mvp2.json")).fold(e => fail(e.mkString), s => s)
-    assert(shown.contains("machine: vliw2-i32-sp2-mac-w2 revision 1 (proposed)"))
+    assert(shown.contains("machine: vliw2-i32-sp2-mac-w2 revision 1 (frozen)"))
     assert(shown.contains("isa:     mvp-2"))
     val mvp2 = "config/machine-mvp2.json"
     val src = file("w.asm", "vmac r4:r5, r2, r6:r7, r8:r9 | ld.w r10:r11, [17]\nhalt\n").toString

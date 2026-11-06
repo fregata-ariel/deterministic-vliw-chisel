@@ -44,16 +44,23 @@ object ModuloRecords {
       m: MachineDescription,
       machinePath: Option[String] = None,
       suffix: String = ""
-  ): Compared = {
-    val c = ModuloCompiler.compile(k, m).fold(sys.error, identity)
+  ): Compared =
+    recordOf(ModuloCompiler.compile(k, m).fold(sys.error, identity), machinePath, suffix)
+
+  /** The record of the modulo-scheduled loop `c`. On ISA mvp-2 the description of the test case
+    * also gives the W outcome (`ModuloCompiler.describeW`; nothing is added on mvp-0 and mvp-1).
+    */
+  def recordOf(c: ModuloCompiled, machinePath: Option[String], suffix: String): Compared = {
+    val (k, m) = (c.kernel, c.machine)
     val name = s"${k.name}_${k.index}_modulo$suffix"
+    val w = Option(ModuloCompiler.describeW(c)).filter(_.nonEmpty).fold("")(d => s"; $d")
     val tc = KernelCompiler
       .testCaseOf(
         k.unroll,
         c.layout,
         c.bundles,
         c.cycles,
-        s"generated from the loop of ${k.name} over ${k.index} by Modulo Scheduling at II ${c.ii}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler",
+        s"generated from the loop of ${k.name} over ${k.index} by Modulo Scheduling at II ${c.ii}; expected outputs from the DSL reference implementation, cycles predicted by the scheduler$w",
         KernelCompiler.sampleInputs(k.unroll, Seed),
         machinePath,
         name

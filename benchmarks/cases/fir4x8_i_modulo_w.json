@@ -1,0 +1,71 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "fir4x8_i_modulo_w",
+  "description": "generated from the loop of fir4x8 over i by Modulo Scheduling at II 5; expected outputs from the DSL reference implementation, cycles predicted by the scheduler; fir4x8 (i): W: doubled (MII 4 vs 2 × 4), 4 iterations of II 5 (2.5 per original iteration), per iteration 2 LD.W, 1 VMUL, 3 VMAC, 1 ST.W, 4 broadcasts, 0 gathers; MinAvg 13 at MII, 12 at II; MaxLive 14",
+  "program": [
+    "@0:  nop             | ld r0, [12]",
+    "@1:  nop             | ld r1, [11]",
+    "@2:  nop             | ld.w r2:r3, [0]",
+    "@3:  nop             | ld.w r4:r5, [1]",
+    "@4:  vmul r6:r7, r1, r2:r3 | ld.w r2:r3, [3]",
+    "@5:  nop             | ld.w r8:r9, [2]",
+    "@6:  vmac r6:r7, r0, r4:r5, r6:r7 | ld r4, [13]",
+    "@7:  nop             | nop",
+    "@8:  vmac r6:r7, r4, r8:r9, r6:r7 | ld r5, [14]",
+    "@9:  vmul r10:r11, r1, r8:r9 | ld.w r8:r9, [5]",
+    "@10: vmac r6:r7, r5, r2:r3, r6:r7 | ld.w r12:r13, [4]",
+    "@11: vmac r2:r3, r0, r2:r3, r10:r11 | nop",
+    "@12: nop             | st.w [15], r6:r7",
+    "@13: vmac r2:r3, r4, r12:r13, r2:r3 | nop",
+    "@14: vmul r10:r11, r1, r12:r13 | ld.w r6:r7, [7]",
+    "@15: vmac r2:r3, r5, r8:r9, r2:r3 | ld.w r12:r13, [6]",
+    "@16: vmac r8:r9, r0, r8:r9, r10:r11 | nop",
+    "@17: nop             | st.w [17], r2:r3",
+    "@18: vmac r2:r3, r4, r12:r13, r8:r9 | nop",
+    "@19: vmul r10:r11, r1, r12:r13 | ld.w r8:r9, [9]",
+    "@20: vmac r2:r3, r5, r6:r7, r2:r3 | ld.w r12:r13, [8]",
+    "@21: vmac r0:r1, r0, r6:r7, r10:r11 | nop",
+    "@22: nop             | st.w [19], r2:r3",
+    "@23: vmac r0:r1, r4, r12:r13, r0:r1 | nop",
+    "@24: nop             | nop",
+    "@25: vmac r0:r1, r5, r8:r9, r0:r1 | nop",
+    "@26: nop             | nop",
+    "@27: nop             | st.w [21], r0:r1",
+    "@28: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 1,
+      "12": 2,
+      "13": 3,
+      "14": 4
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 29,
+    "memory": {
+      "15": 2832650816,
+      "16": 1286217385,
+      "17": 417185322,
+      "18": 759639259,
+      "19": 3054732950,
+      "20": 3341103018,
+      "21": 4075596070,
+      "22": 2117792237
+    }
+  },
+  "machine": "config/machine-mvp2.json"
+}

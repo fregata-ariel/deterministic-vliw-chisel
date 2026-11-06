@@ -1,0 +1,61 @@
+{
+  "format": "vliw-testcase/1",
+  "name": "saxpy8_i_modulo_w_rp4",
+  "description": "generated from the loop of saxpy8 over i by Modulo Scheduling at II 3; expected outputs from the DSL reference implementation, cycles predicted by the scheduler; saxpy8 (i): W: doubled (MII 3 vs 2 × 3), 4 iterations of II 3 (1.5 per original iteration), per iteration 2 LD.W, 1 VMAC, 1 ST.W, 1 broadcast, 0 gathers; MinAvg 5 at MII, 6 at II; MaxLive 7",
+  "program": [
+    "@0:  nop             | ld r0, [16]",
+    "@1:  nop             | ld.w r2:r3, [0]",
+    "@2:  nop             | ld.w r4:r5, [8]",
+    "@3:  nop             | nop",
+    "@4:  vmac r2:r3, r0, r2:r3, r4:r5 | ld.w r4:r5, [2]",
+    "@5:  nop             | ld.w r6:r7, [10]",
+    "@6:  nop             | st.w [17], r2:r3",
+    "@7:  vmac r2:r3, r0, r4:r5, r6:r7 | ld.w r4:r5, [4]",
+    "@8:  nop             | ld.w r6:r7, [12]",
+    "@9:  nop             | st.w [19], r2:r3",
+    "@10: vmac r2:r3, r0, r4:r5, r6:r7 | ld.w r4:r5, [6]",
+    "@11: nop             | ld.w r6:r7, [14]",
+    "@12: nop             | st.w [21], r2:r3",
+    "@13: vmac r0:r1, r0, r4:r5, r6:r7 | nop",
+    "@14: nop             | nop",
+    "@15: nop             | st.w [23], r0:r1",
+    "@16: halt            | nop"
+  ],
+  "inputs": {
+    "registers": {},
+    "memory": {
+      "0": 431529176,
+      "1": 1749940626,
+      "2": 155629808,
+      "3": 2829813213,
+      "4": 3052603496,
+      "5": 655996946,
+      "6": 685382526,
+      "7": 2379722468,
+      "8": 3912502524,
+      "9": 2092024379,
+      "10": 3925440664,
+      "11": 684358198,
+      "12": 1584853918,
+      "13": 3712840307,
+      "14": 2316102604,
+      "15": 2505485709,
+      "16": 181670012
+    }
+  },
+  "expect": {
+    "verdict": "legal",
+    "cycles": 17,
+    "memory": {
+      "17": 994936220,
+      "18": 1123534067,
+      "19": 1518996696,
+      "20": 289481026,
+      "21": 3067446782,
+      "22": 2351676203,
+      "23": 2780962004,
+      "24": 2173543421
+    }
+  },
+  "machine": "tests/machines/mvp2_rp4.json"
+}
