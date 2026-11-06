@@ -76,8 +76,7 @@ object LoopFallback {
     def describe: String = s"NotImplemented: $what"
   }
 
-  /** W-reg (no LD.W): #78's question 8 (c) (ADR-0023 既定; #110 第5段の Q1.
-    * オーナーが異を唱えなければ既定とする推奨で、決定ではない).
+  /** W-reg (no LD.W): #78's question 8 (c) (ADR-0023 既定; #110 第5段の Q1 (a): オーナーが 2026-11-06 に採った).
     */
   val WReg: String = "W-reg Modulo Scheduling (#78 Q8 (c))"
 

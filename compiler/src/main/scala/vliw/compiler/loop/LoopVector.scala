@@ -6,7 +6,7 @@ import vliw.compiler.dsl.Op
 
 /** Why a loop is not doubled (ADR-0023; docs/COMPILER.md "ループのベクトル化と Modulo Scheduling（W-full）").
   * The decision is information, not a fallback. The names of ADR-0023 are its 既定; `SameValue` is
-  * #110's (#110 第5段の Q2. オーナーが異を唱えなければ既定とする推奨で、決定ではない).
+  * #110's (#110 第5段の Q2: オーナーが 2026-11-06 に第5段の制限として採った).
   */
 sealed abstract class NotDoubled(val name: String) extends Product with Serializable {
   def describe: String = name
@@ -28,7 +28,8 @@ object NotDoubled {
   case object LoopState extends NotDoubled("LoopState")
 
   /** Rule 2: a value before the loop is read at `position`, not at a multiplication's rs1 (#110
-    * 第5段の Q2. オーナーが異を唱えなければ既定とする推奨で、決定ではない).
+    * 第5段の Q2: オーナーが 2026-11-06 に第5段の制限として採った). Duplicating such a value into both lanes is an
+    * optimization left as a separate task.
     */
   final case class SameValue(position: String) extends NotDoubled("SameValue") {
     override def describe: String = s"SameValue($position)"
@@ -179,8 +180,9 @@ object LoopVector {
     *     + s + 2s k'. With s = 1 and LD.W (W-full), and both words unwritten, that is LD.W at
     *     `Address(b', 2)` (b' may be odd), shared again by ADR-0014's rule on stride 2. Otherwise
     *     it is a gather of two LDs at `Address(b', 2s)` and `Address(b' + s, 2s)`, with LDs of its
-    *     own: gathers are not shared across iterations (an exception to ADR-0014; #110 第5段の Q3.
-    *     オーナーが異を唱えなければ既定とする推奨で、決定ではない).
+    *     own: gathers are not shared across iterations (an exception to ADR-0014; #110 第5段の Q3:
+    *     オーナーが 2026-11-06 に第5段の範囲として採った). Rule 6 shares pairs of value nodes within an iteration;
+    *     passing a whole gather across iterations is later work.
     *   - Values before the loop: a broadcast at a multiplication's rs1 (rule 2).
     *   - Each operation becomes VADD, VSUB, VMUL or VMAC (value-numbered, rule 6).
     *   - Stores (rule 5): with s = 1 and ST.W, ST.W at `Address(b, 2)`; otherwise two lane STs at
