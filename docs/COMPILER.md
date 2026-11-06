@@ -713,7 +713,7 @@ II 4 の配置の MinAvg がもう 18 > 16 なので、そのスケジュール�
   - 7: V がどの II にも収まらない（`NoIiFits`）。通常の利用はスカラーのループ G に戻る
   - 1: V も G もどの II にも収まらず、命令列が無い（入力の誤り）
   - 1: V は収まるが、G がどの II にも収まらない。基準（スカラーのループ）が無いので比べない
-  - 121: G と比べた。元の1反復当たりの II は 114 で良く、6 で同じ、1 で悪い。cycles は 111 で少なく、6 で同じ、4 で多い（通常の利用は、遅くてもベクトルの命令列を使う。#110 の Q4 と同じ）
+  - 121: G と比べた。元の1反復当たりの II は 114 で良く、6 で同じ、1 で悪い。cycles は 111 で少なく、6 で同じ、4 で多い（通常の利用は、遅くてもベクトルの命令列を使う。#110 第4段の Q4 と同じ）
 - `mvp2_vlat` では、2倍にしてスカラーのループより cycles の多いものが 20、元の1反復当たりの II の悪いものが 3 である
 
 今までの `RandomLoops.kernels(76, 300)`（状態のあるものが多い）は、W-full で2倍 3、`MiiIncrease` 3 で、2倍にしない 297 のうち `NotImplemented` が 196、`NothingToPack` が 101 である。2倍にした3つの出力は DSL と一致し、ほかの 293 の命令列は mvp-1 と同じで、4つは W-full でも mvp-1 でもどの II にも収まらない。状態のある 220 は、上の簡約の定義で `AssociationOrder` 28、`LoopState` 192 になる（x のオペランドだけを見る試作の定義では 116 と 104 だった）。`OddTripCount` は 140、`SameValue` は 263 である。
@@ -746,7 +746,7 @@ W-reg（`max_words_per_access` 1）の Modulo Scheduling は #110 では必須�
 | `ModuloCompiler.compile` | 通常の利用 | `ModuloCompiled.simd` が `LoopSimd.Scalar`（mvp-0・mvp-1）、`Vectorized(decision)`（2倍）、`Fallback(reason, decision)`（W-reg では decision が None） |
 | `ModuloCompiler.candidate` | 比較の実験（第6段） | `LoopCandidate.Packed`、`Infeasible(decision, attempts)`、`NothingToPack(decision, scalar)`、`NotMeasured(reason)`（W-reg と、5a では規則1の候補のあるループ）。mvp-0・mvp-1 の machine では入力の誤り |
 
-`NotMeasured` は、5a が詰められないループを「SIMD の候補が無い」としてスカラーの値で記録しないためのものである（ADR-0023: 黙ってスカラーの値に置き換えない）。`LoopDecision` は、2倍にしない理由（2倍なら空）、比べた MII（G と、作ったときは V。3本目の読出しポートを除く）、規則1の候補があるかを持つ。通常の利用は、ベクトルの命令列がスカラーより遅くても使う（#110 の Q4 と同じ）。`ModuloCompiler.describeW` は、テストと第6段の説明に使う行を返す。
+`NotMeasured` は、5a が詰められないループを「SIMD の候補が無い」としてスカラーの値で記録しないためのものである（ADR-0023: 黙ってスカラーの値に置き換えない）。`LoopDecision` は、2倍にしない理由（2倍なら空）、比べた MII（G と、作ったときは V。3本目の読出しポートを除く）、規則1の候補があるかを持つ。通常の利用は、ベクトルの命令列がスカラーより遅くても使う（#110 第4段の Q4 と同じ）。`ModuloCompiler.describeW` は、テストと第6段の説明に使う行を返す。
 
 ```
 saxpy8 (i): W: doubled (MII 3 vs 2 × 3), 4 iterations of II 3 (1.5 per original iteration), per iteration 2 LD.W, 1 VMAC, 1 ST.W, 1 broadcast, 0 gathers; MinAvg 5 at MII, 6 at II; MaxLive 7
