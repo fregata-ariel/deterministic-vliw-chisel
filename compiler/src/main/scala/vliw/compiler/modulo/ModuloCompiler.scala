@@ -203,7 +203,8 @@ object ModuloCompiler {
     * is not doubled, for any reason (`MiiIncrease` too), is packed by `LoopPack` (ADR-0023's
     * "1反復の本体を同じ SLP の規則で詰めてコンパイルする"). With a store pair, the packed graph is scheduled; without
     * one, G runs with `NothingToPack`. The doubling and the body packing are never combined, and
-    * body packing has no MII test (#110 第5段の Q4: オーナーが異を唱えなければ既定とする推奨で、決定ではない). On W-reg, G with
+    * body packing has no MII test (#110 第5段の Q4: オーナーが 2026-11-06 に採った; the MII test stays for MAC
+    * fusion (ADR-0019) and for the doubling decision (`MiiIncrease`)). On W-reg, G with
     * `NotImplemented` (#78 Q8 (c)).
     */
   def prepare(k: LoopKernel, machine: MachineDescription): Either[String, Prepared] =

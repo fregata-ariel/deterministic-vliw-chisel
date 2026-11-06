@@ -117,10 +117,10 @@ object LoopPack {
       .sortBy(c => (c.addr.base, c.addr.stride, c.st0, c.st1))
   }
 
-  /** The candidates in the order they are tried, as `dag.Pack.storePairs` (#110 第4段の Q1 (b): the
-    * recommended reading, awaiting the owner's answer): first the gather-free ones (`gatherFree`)
-    * by address, then every candidate by address. A candidate is skipped when an earlier pair holds
-    * one of its stores.
+  /** The candidates in the order they are tried, as `dag.Pack.storePairs` (#110 第4段の Q1 (b), which
+    * the owner adopted on 2026-11-06): first the gather-free ones (`gatherFree`) by address, then
+    * every candidate by address. A candidate is skipped when an earlier pair holds one of its
+    * stores.
     *
     * Rule 1 as written (one pass, Q1 (a)) is `byAddress` alone; nothing else changes.
     */
@@ -453,12 +453,13 @@ private final class LoopPacker(
     * iteration's gather of those values, one gather with the body's gather of the same refs (as
     * `Pack` gathers them once on the unrolled loop, whichever pair is walked first). A LD lane
     * whose words no iteration writes is a fresh LD of its read without ADR-0014's sharing: gathers
-    * are not shared across iterations (#110 第5段の Q3: オーナーが異を唱えなければ既定とする推奨で、決定ではない), and a LD before
-    * the loop gathered in the body is loaded in every iteration (rule 4's LD copy in a loop, an
-    * exception to ADR-0014's invariants held in registers). Any other lane is the node itself,
-    * homed as that gather's lane: it must have back 0, be in the gather's place, and have no other
-    * home. A computed value before the loop next to a value of the iteration is the loop-only case
-    * of rule 4: it would be a lane of every iteration's gather.
+    * are not shared across iterations (#110 第5段の Q3: オーナーが 2026-11-06 に第5段の範囲として採った; sharing one
+    * iteration's pair of refs between the body and after the loop is rule 6, not that exception),
+    * and a LD before the loop gathered in the body is loaded in every iteration (rule 4's LD copy
+    * in a loop, an exception to ADR-0014's invariants held in registers). Any other lane is the
+    * node itself, homed as that gather's lane: it must have back 0, be in the gather's place, and
+    * have no other home. A computed value before the loop next to a value of the iteration is the
+    * loop-only case of rule 4: it would be a lane of every iteration's gather.
     */
   private def gather(s: State, r0: Ref, r1: Ref, reader: Place): Result[(State, PSrc)] = {
     val at =
