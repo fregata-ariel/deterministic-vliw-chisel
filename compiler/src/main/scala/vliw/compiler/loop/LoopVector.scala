@@ -41,8 +41,9 @@ object NotDoubled {
 
 /** Loop vectorization by 2 (ISA mvp-2, ADR-0023; docs/COMPILER.md "ループのベクトル化と Modulo
   * Scheduling（W-full）"), on the fused scalar loop graph G (after `LoopFusion`, ADR-0019). Iteration
-  * k' of the doubled graph runs iterations 2k' (lane 0) and 2k' + 1 (lane 1) of G. Body packing of
-  * the loops that are not doubled is #110 stage 5b.
+  * k' of the doubled graph runs iterations 2k' (lane 0) and 2k' + 1 (lane 1) of G. The body of a
+  * loop that is not doubled is packed by `LoopPack` (#110 stage 5b), which reads G as the doubling
+  * does ([[unshared]], [[chains]]); the two are never combined.
   */
 object LoopVector {
   import NotDoubled._
@@ -147,19 +148,40 @@ object LoopVector {
       .distinct
   }
 
-  /** Whether G has a rule-1 candidate: two body stores at `Address(b, s)` and `Address(b + 1, s)`
-    * with the same stride (adjacent in every iteration), or two stores after the loop at w and w + 1.
-    * A body store never pairs with a final. Without one no pair can form, so the loop has nothing
-    * to pack (ADR-0023's `NothingToPack`); #110 stage 5a decides only this, and stage 5b packs the
-    * body.
+  /** The read of the operand `r` of G when it is a LD: its place, and its address in the iteration
+    * that reads it with ADR-0014's sharing undone. A LD at `Address(b, s)` in the body read `back`
+    * iterations later reads `Address(b − s × back, s)`; a LD before the loop reads its word
+    * (`Address(w, 0)`). None for any other node.
     */
-  def ruleOneCandidate(g: LoopGraph): Boolean = {
-    val stores = g.nodes.indices.collect {
-      case n if g.places(n) != Place.Before && g.nodes(n).isInstanceOf[LoopNode.Store] =>
-        (g.places(n), g.nodes(n).asInstanceOf[LoopNode.Store].addr)
-    }.toSet
-    stores.exists { case (p, a) => stores.contains((p, Address(a.base + 1, a.stride))) }
+  def unshared(g: LoopGraph, r: Ref): Option[(Place, Address)] = g.nodes(r.node) match {
+    case LoopNode.Load(a) if g.places(r.node) == Place.Each =>
+      Some((Place.Each, Address(a.base - a.stride * r.back, a.stride)))
+    case LoopNode.Load(a) => Some((g.places(r.node), a))
+    case _                => None
   }
+
+  /** ADR-0014's rule for reads with a nonzero stride in a loop of `trips` iterations: reads with
+    * the same stride s and base modulo |s| form chains, split where no word is shared (bases |s| ×
+    * trips or more apart). In each chain the read that reads each word first leads (the highest
+    * base for s > 0, the lowest for s < 0), and the read at b uses the leader's value `back` =
+    * (leader − b) / s iterations later. Returns each read's leader and back.
+    */
+  private[loop] def chains(reads: Seq[Address], trips: Int): Map[Address, (Address, Int)] =
+    reads.distinct.toVector
+      .groupBy(a => (a.stride, Math.floorMod(a.base, Math.abs(a.stride))))
+      .values
+      .flatMap { group =>
+        val sorted = group.sortBy(_.base)
+        val split = sorted.tail.foldLeft(Vector(Vector(sorted.head))) { (cs, a) =>
+          if (a.base - cs.last.last.base >= Math.abs(a.stride) * trips) cs :+ Vector(a)
+          else cs.init :+ (cs.last :+ a)
+        }
+        split.flatMap { chain =>
+          val leader = if (chain.head.stride > 0) chain.last else chain.head
+          chain.map(a => a -> (leader, (leader.base - a.base) / a.stride))
+        }
+      }
+      .toMap
 
   /** The words the loop writes, in every iteration. */
   private def written(g: LoopGraph): Set[Int] = g.nodes.indices.flatMap { n =>
@@ -229,7 +251,7 @@ object LoopVector {
     def word(r: Ref): Option[Address] = g.nodes(r.node) match {
       case LoopNode.Load(a) if g.places(r.node) == Place.Each =>
         require((0 until g.trips).forall(k => !words(a.at(k))), s"the loop reads a word it writes")
-        Some(Address(a.base - a.stride * r.back, a.stride))
+        unshared(g, r).map(_._2)
       case _ => None
     }
     def unwritten(a: Address) = (0 until trips).forall(k => !words(a.at(k)) && !words(a.at(k) + 1))
@@ -238,25 +260,12 @@ object LoopVector {
       Option
         .when(wide && read.stride == 1 && unwritten(Address(read.base, 2)))(Address(read.base, 2))
 
-    // The LD.W reads, shared by ADR-0014's rule on stride 2: by (stride, base mod stride), chains
-    // split where no word is shared, the highest base leads and the others read it `back` later.
+    // The LD.W reads, shared by ADR-0014's rule on stride 2 ([[chains]]): by (stride, base mod
+    // stride), chains split where no word is shared, the highest base leads and the others read it
+    // `back` later.
     val wideReads = mutable.LinkedHashSet.empty[Address]
     for (n <- each; r <- g.nodes(n).operands; read <- word(r); w <- wideRead(read)) wideReads += w
-    val chains: Map[Address, (Address, Int)] = wideReads.toVector
-      .groupBy(a => (a.stride, Math.floorMod(a.base, a.stride)))
-      .values
-      .flatMap { group =>
-        val sorted = group.sortBy(_.base)
-        val split = sorted.tail.foldLeft(Vector(Vector(sorted.head))) { (cs, a) =>
-          if (a.base - cs.last.last.base >= a.stride * trips) cs :+ Vector(a)
-          else cs.init :+ (cs.last :+ a)
-        }
-        split.flatMap { chain =>
-          val leader = chain.last
-          chain.map(a => a -> (leader, (leader.base - a.base) / a.stride))
-        }
-      }
-      .toMap
+    val chains = LoopVector.chains(wideReads.toVector, trips)
     def loadW(a: Address): Ref = {
       val (leader, back) = chains(a)
       val l = shared(Place.Each, LoopNode.LoadW(leader))

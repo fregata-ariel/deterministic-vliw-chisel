@@ -1,6 +1,7 @@
 package vliw.compiler.modulo
 
 import vliw.compiler.KernelCompiler
+import vliw.compiler.dag.LaneReason
 import vliw.compiler.dsl.MemoryLayout
 import vliw.compiler.loop._
 import vliw.compiler.regalloc.RegisterAllocator
@@ -32,21 +33,32 @@ object FusionChoice {
 /** The loop vectorization decision on a machine with LD.W (ADR-0023; docs/COMPILER.md "ループのベクトル化と
   * Modulo Scheduling（W-full）"): information, never a fallback. `notDoubled` is every reason not to
   * double (empty when doubled); the MIIs compared leave out the third read port (`scalarMII` of G,
-  * `doubledMII` of the doubled graph when it was built); `candidate` says whether G has a rule-1
-  * candidate (#110 stage 5a decides `NothingToPack` by it).
+  * `doubledMII` of the doubled graph when it was built); `body` is the body packing of a loop that
+  * is not doubled (`LoopPack`: its pairs, and each other store's lane reason; None when doubled,
+  * and from [[ModuloCompiler.decide]], which decides the doubling only).
   */
 final case class LoopDecision(
     notDoubled: Vector[NotDoubled],
     scalarMII: Int,
     doubledMII: Option[Int],
-    candidate: Boolean
+    body: Option[LoopBody]
 ) {
   def doubled: Boolean = notDoubled.isEmpty
 
+  /** Not doubled, and its body packs at least one store pair. */
+  def packed: Boolean = body.exists(!_.nothingToPack)
+
   private def miis = doubledMII.fold("")(d => s" (MII $d vs 2 × $scalarMII)")
+
+  /** The body is described when a pair packs or a rule rejected a store (not for a loop whose
+    * stores all have no neighbour).
+    */
+  private def bodyText = body
+    .filter(b => !b.nothingToPack || b.scalarLanes.exists(_.reason != LaneReason.NoNeighbour))
+    .fold("")(b => s"; ${b.describe}")
   def describe: String =
     if (doubled) s"doubled$miis"
-    else s"not doubled: ${notDoubled.map(_.describe).mkString(", ")}$miis"
+    else s"not doubled: ${notDoubled.map(_.describe).mkString(", ")}$miis$bodyText"
 }
 
 /** Why a loop runs as its scalar loop G (ADR-0023's loop fallback). G's code is the mvp-1 code on a
@@ -58,7 +70,9 @@ sealed trait LoopFallback extends Product with Serializable {
 }
 object LoopFallback {
 
-  /** Not doubled, and nothing to pack in the body: in #110 stage 5a, no rule-1 candidate. */
+  /** Not doubled, and no store pair of the body packs (`LoopPack`): no rule-1 candidate, or every
+    * candidate rejected.
+    */
   case object NothingToPack extends LoopFallback {
     def describe: String = "NothingToPack"
   }
@@ -69,9 +83,7 @@ object LoopFallback {
       "NoIiFits: " + attempts.map(a => s"II ${a.ii}: ${a.outcome}").mkString("; ")
   }
 
-  /** A part of the W path that is not implemented: W-reg ([[WReg]]) or, in #110 stage 5a only, the
-    * body packing of a loop that is not doubled but has a rule-1 candidate ([[BodyPacking]]).
-    */
+  /** A part of the W path that is not implemented: W-reg ([[WReg]]). */
   final case class NotImplemented(what: String) extends LoopFallback {
     def describe: String = s"NotImplemented: $what"
   }
@@ -79,9 +91,6 @@ object LoopFallback {
   /** W-reg (no LD.W): #78's question 8 (c) (ADR-0023 既定; #110 第5段の Q1 (a): オーナーが 2026-11-06 に採った).
     */
   val WReg: String = "W-reg Modulo Scheduling (#78 Q8 (c))"
-
-  /** #110 stage 5a has no body packer. */
-  val BodyPacking: String = "body packing: #110 stage 5b"
 }
 
 /** What a modulo-scheduled loop does with W (ISA mvp-2, ADR-0023). */
@@ -91,7 +100,9 @@ object LoopSimd {
   /** An mvp-0 or mvp-1 machine: no W. */
   case object Scalar extends LoopSimd
 
-  /** The doubled graph was compiled. */
+  /** The W graph was compiled: the doubled graph (`decision.doubled`), or the packed body
+    * (`decision.packed`).
+    */
   final case class Vectorized(decision: LoopDecision) extends LoopSimd
 
   /** The scalar loop G was compiled instead, for `reason`; the code uses no W operation. The
@@ -115,7 +126,7 @@ object LoopCandidate {
   final case class NothingToPack(decision: LoopDecision, scalar: ModuloCompiled)
       extends LoopCandidate
 
-  /** Not measured, for `reason`: W-reg, and in #110 stage 5a the loops with a rule-1 candidate. */
+  /** Not measured, for `reason`: W-reg (#78 Q8 (c)). */
   final case class NotMeasured(reason: String) extends LoopCandidate
 }
 
@@ -154,7 +165,8 @@ object ModuloCompiler {
   /** The input of the II search: the layout of `kernel`, the fused scalar loop graph G (`scalar`,
     * fused into MAC when `fusion` says so; None on a machine without MAC), and the graph to
     * schedule first (`graph`): on a machine with LD.W, the doubled graph when the loop doubles
-    * (`simd` is `Vectorized`), otherwise G with the reason it runs as G.
+    * (`simd` is `Vectorized` and `doubled`), or the packed graph of its body when a store pair
+    * packs (`Vectorized` and `packed`), otherwise G with the reason it runs as G.
     */
   final case class Prepared(
       kernel: LoopKernel,
@@ -165,31 +177,35 @@ object ModuloCompiler {
       simd: LoopSimd
   )
 
-  /** The loop vectorization decision of G (docs/COMPILER.md): the reasons decided on G; without
-    * one, the doubled graph, kept when its MII without the third read port is at most twice G's.
+  /** The doubling decision of G (docs/COMPILER.md): the reasons decided on G; without one, the
+    * doubled graph, kept when its MII without the third read port is at most twice G's. The body of
+    * a loop that is not doubled is packed by [[prepare]], so `body` is None here.
     */
   def decide(g: LoopGraph): (LoopDecision, Option[LoopGraph]) = {
     val scalarMII = Mii.of(g).withoutReadPort.mii
-    val candidate = LoopVector.ruleOneCandidate(g)
     LoopVector.reasons(g) match {
       case Vector() =>
         val v = LoopVector.double(g)
         val doubledMII = Mii.of(v).withoutReadPort.mii
         if (doubledMII <= 2 * scalarMII)
-          (LoopDecision(Vector.empty, scalarMII, Some(doubledMII), candidate), Some(v))
+          (LoopDecision(Vector.empty, scalarMII, Some(doubledMII), None), Some(v))
         else
           (
-            LoopDecision(Vector(NotDoubled.MiiIncrease), scalarMII, Some(doubledMII), candidate),
+            LoopDecision(Vector(NotDoubled.MiiIncrease), scalarMII, Some(doubledMII), None),
             None
           )
-      case reasons => (LoopDecision(reasons, scalarMII, None, candidate), None)
+      case reasons => (LoopDecision(reasons, scalarMII, None, None), None)
     }
   }
 
   /** Layout and lowering as `loop.LoopLowering`, then the loop graph, fused by `FusionChoice` (G).
-    * On ISA mvp-2 with LD.W, the loop vectorization decision ([[decide]]); a loop that is not
-    * doubled runs as G with `NothingToPack` (no rule-1 candidate) or `NotImplemented` (body
-    * packing, #110 stage 5b). On W-reg, G with `NotImplemented` (#78 Q8 (c)).
+    * On ISA mvp-2 with LD.W, the loop vectorization decision ([[decide]]); the body of a loop that
+    * is not doubled, for any reason (`MiiIncrease` too), is packed by `LoopPack` (ADR-0023's
+    * "1反復の本体を同じ SLP の規則で詰めてコンパイルする"). With a store pair, the packed graph is scheduled; without
+    * one, G runs with `NothingToPack`. The doubling and the body packing are never combined, and
+    * body packing has no MII test (#110 第5段の Q4: オーナーが 2026-11-06 に採った; the MII test stays for MAC
+    * fusion (ADR-0019) and for the doubling decision (`MiiIncrease`)). On W-reg, G with
+    * `NotImplemented` (#78 Q8 (c)).
     */
   def prepare(k: LoopKernel, machine: MachineDescription): Either[String, Prepared] =
     LoopLowering.layout(k, machine).map { layout =>
@@ -202,16 +218,18 @@ object ModuloCompiler {
         decide(g) match {
           case (d, Some(v)) => Prepared(k, layout, v, fusion, g, LoopSimd.Vectorized(d))
           case (d, None)    =>
-            val reason =
-              if (d.candidate) LoopFallback.NotImplemented(LoopFallback.BodyPacking)
-              else LoopFallback.NothingToPack
-            scalar(LoopSimd.Fallback(reason, Some(d)))
+            val packing = LoopPack.pack(g)
+            val packed = d.copy(body = Some(packing.body))
+            if (packing.body.nothingToPack)
+              scalar(LoopSimd.Fallback(LoopFallback.NothingToPack, Some(packed)))
+            else Prepared(k, layout, packing.graph, fusion, g, LoopSimd.Vectorized(packed))
         }
     }
 
   /** [[prepare]], then the II search; the program passes the final verifier check
-    * (`KernelCompiler.checked`) or it is a compiler error. A doubled loop that fits no II falls
-    * back to G (`NoIiFits`); when G fits no II either, the error gives both.
+    * (`KernelCompiler.checked`) or it is a compiler error. A doubled or packed loop that fits no II
+    * falls back to G (`NoIiFits`; a doubled loop does not try body packing, and a packed one tries
+    * nothing else); when G fits no II either, the error gives both.
     */
   def compile(k: LoopKernel, machine: MachineDescription): Either[String, ModuloCompiled] =
     prepare(k, machine).flatMap { p =>
@@ -220,10 +238,11 @@ object ModuloCompiler {
           ModuloScheduler.schedule(p.graph) match {
             case Right(s) => finish(p, s, p.simd)
             case Left(no) =>
+              val what = if (d.doubled) "doubled" else "packed"
               scalar(p, LoopSimd.Fallback(LoopFallback.NoIiFits(no.attempts), Some(d))).left.map {
                 e =>
                   if (e.startsWith("compiler error")) e
-                  else s"$e; the doubled loop fits no II either (${no.message})"
+                  else s"$e; the $what loop fits no II either (${no.message})"
               }
           }
         case other => scalar(p, other)
@@ -231,10 +250,10 @@ object ModuloCompiler {
     }
 
   /** The SIMD candidate of `k` on the ISA mvp-2 machine `machine`, for the comparisons (ADR-0023):
-    * the doubled graph compiled, or infeasible with every II's outcome, or no candidate when there
-    * is nothing to pack (then the scalar loop), or not measured (W-reg, and in #110 stage 5a a loop
-    * with a rule-1 candidate that is not doubled). Left on a machine without W, when the scalar
-    * loop of a loop with nothing to pack fits no II, and on a compiler error.
+    * the doubled or packed graph compiled, or infeasible with every II's outcome, or no candidate
+    * when there is nothing to pack (then the scalar loop), or not measured (W-reg). Left on a
+    * machine without W, when the scalar loop of a loop with nothing to pack fits no II, and on a
+    * compiler error.
     */
   def candidate(k: LoopKernel, machine: MachineDescription): Either[String, LoopCandidate] =
     if (!machine.hasVector)
@@ -279,7 +298,10 @@ object ModuloCompiler {
       .map(ModuloCompiled(p.kernel, machine, p.layout, result, bundles, _, p.fusion, simd))
   }
 
-  /** The W outcome of `c` for messages and test cases (ISA mvp-2; "" on mvp-0 and mvp-1). */
+  /** The W outcome of `c` for messages and test cases (ISA mvp-2; "" on mvp-0 and mvp-1). The II
+    * per original iteration is given for a doubled loop only: one iteration of a packed loop is one
+    * original iteration.
+    */
   def describeW(c: ModuloCompiled): String = {
     val name = s"${c.kernel.name} (${c.kernel.index})"
     c.simd match {
@@ -290,15 +312,20 @@ object ModuloCompiler {
         def count(p: LoopNode => Boolean) = each.count(n => p(g.nodes(n)))
         val lanes = count(_.isInstanceOf[LoopNode.StoreLane])
         def mnemonic(m: String) = count(_.mnemonic == m) - (if (m == "ST") lanes else 0)
-        val ops = Seq("LD", "LD.W", "VADD", "VSUB", "VMUL", "VMAC", "ST.W", "ST")
+        val ops = Seq("LD", "LD.W", "ADD", "SUB", "MUL", "MAC")
+          .++(Seq("VADD", "VSUB", "VMUL", "VMAC", "ST.W", "ST"))
           .filter(mnemonic(_) > 0)
           .map(m => s"${mnemonic(m)} $m") ++ Option.when(lanes > 0)(s"$lanes lane ST")
         val fields = each.flatMap(n => LoopNode.fields(g.nodes(n)))
         val broadcasts = fields.count(_.isInstanceOf[VRef.Broadcast])
         val gathers = fields.collect { case x: VRef.Gather => x }.distinct.size
-        val perIteration = if (c.ii % 2 == 0) s"${c.ii / 2}" else s"${c.ii / 2}.5"
-        s"$name: W: ${d.describe}, ${g.trips} iterations of II ${c.ii} ($perIteration per " +
-          s"original iteration), per iteration ${ops.mkString(", ")}, $broadcasts broadcast" +
+        val perIteration =
+          if (!d.doubled) ""
+          else if (c.ii % 2 == 0) s" (${c.ii / 2} per original iteration)"
+          else s" (${c.ii / 2}.5 per original iteration)"
+        val shape = if (d.doubled) s"${d.describe}," else s"${d.describe};"
+        s"$name: W: $shape ${g.trips} iterations of II ${c.ii}$perIteration, " +
+          s"per iteration ${ops.mkString(", ")}, $broadcasts broadcast" +
           s"${if (broadcasts == 1) "" else "s"}, $gathers gather${if (gathers == 1) "" else "s"}; " +
           s"MinAvg ${c.minAvgAtMii} at MII, ${c.minAvgAtIi} at II; MaxLive ${c.maxLive}"
       case LoopSimd.Fallback(r, d) =>

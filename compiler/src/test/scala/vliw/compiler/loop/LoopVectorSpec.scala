@@ -16,8 +16,8 @@ import vliw.isa.MachineDescription
 import NotDoubled._
 
 /** The loop vectorization by 2 (ISA mvp-2, #110 stage 5a; docs/COMPILER.md "ループのベクトル化と Modulo
-  * Scheduling（W-full）"): the doubled graphs, their values against the loop's, the reasons not to
-  * double, and the rule-1 candidate.
+  * Scheduling（W-full）"): the doubled graphs, their values against the loop's, and the reasons not
+  * to double. The rule-1 candidates are body packing's (`LoopPackSpec`).
   */
 class LoopVectorSpec extends AnyFunSuite {
   private def load(path: String*) = MachineDescription
@@ -322,24 +322,6 @@ class LoopVectorSpec extends AnyFunSuite {
     assert(
       LoopVector.reasons(scalar(LoopBenchmarks.matmulRows(3), full)._1) == Vector(OddTripCount)
     )
-  }
-
-  test("the rule-1 candidate: adjacent body stores with one stride, or adjacent finals") {
-    def candidate(k: LoopKernel) = LoopVector.ruleOneCandidate(scalar(k, full)._1)
-    Seq(LoopBenchmarks.saxpy(7), fir(7), LoopBenchmarks.product(8), LoopBenchmarks.dot(8))
-      .foreach(k => assert(!candidate(k), k.name))
-    // matmul3 (i): c(3i), c(3i+1), c(3i+2) with stride 3; (m): the finals c(0) to c(8).
-    assert(candidate(LoopBenchmarks.matmulRows(3)) && candidate(LoopBenchmarks.matmulAcc(3)))
-    // A body store next to a final is no candidate; two body stores with other strides neither.
-    assert(!candidate(LoopKernel("bf", "i", 1) { b =>
-      val x = b.input("x", 1); val o = b.output("o", 2)
-      val s = b.state("s", b.const(0)); b.body { i => s := s.value + x(i); o(i) = x(i) }
-      o(1) = s
-    }))
-    assert(!candidate(LoopKernel("st", "i", 2) { b =>
-      val x = b.input("x", 2); val o = b.output("o", 4)
-      b.body { i => o(i) = x(i); o(i * -1 + 3) = x(i) }
-    }))
   }
 
   test("MinAvg counts a gather 2 from its first lane to its last reader") {

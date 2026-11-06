@@ -371,7 +371,7 @@ sbt "compiler/run compile fir4x8 --machine tests/machines/slow_units.json --out 
 
 ## ISA mvp-2（W）
 
-ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段）。Modulo Scheduling（`ModuloCompiler`）は、LD.W のある machine でループを2倍にベクトル化し、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段の前半。下の「ループのベクトル化と Modulo Scheduling（W-full）」）。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の3つの補足（第4段の前半と後半、第5段の前半）に一覧がある）。#110 第4段の Q1（規則1の2段の規則、(b)）と第5段の Q1〜Q3 は、オーナーが 2026-11-06 に決めた（ADR-0023 の第5段の前半の補足）。
+ISA mvp-2 の machine（[ISA.md](ISA.md)「mvp-2: W」）では、`KernelCompiler` は融合した DAG の値を W の組に詰め（`dag.Pack`）、詰めた DAG を list scheduling し、組を考えて割り当てる（[ADR-0023](DECISIONS.md)、#110 の第4段）。Modulo Scheduling（`ModuloCompiler`）は、LD.W のある machine でループを2倍にベクトル化するか、2倍にしないループの1反復の本体を詰め、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段。下の「ループのベクトル化と Modulo Scheduling（W-full）」）。「既定」と書いた点は、ADR-0023 にもオーナーの判断にも無く、#110 が決めた既定である（ADR-0023 の 2026-10-30 の4つの補足（第4段の前半と後半、第5段の前半と後半）に一覧がある）。#110 第4段の Q1（規則1の2段の規則、(b)）と第5段の Q1〜Q4 は、オーナーが 2026-11-06 に決めた（ADR-0023 の第5段の前半と後半の補足）。
 
 段の順は `Lowering → Dag.build → Fusion.fuse → Pack → ListScheduler → rematerialization（行き詰まる試行だけ）→ 組を考えた割り当て → Allocation.bundles → verifier` である。`KernelCompiler.prepare` は `Prepared.dag` を融合したスカラーの DAG のまま残し、mvp-2 の machine では `Prepared.packing` に `Pack.pack(dag)` を入れる（mvp-0・mvp-1 では None）。融合を先に行うので、詰めた MAC の組がそのまま VMAC になる。詰め込みは戦略の次元ではなく、どの試行も同じ詰めた DAG をスケジュールする。
 
@@ -538,7 +538,7 @@ fallback は `W: scalar fallback, (NothingToPack: …)` か `W: scalar fallback,
 
 ### ループのベクトル化と Modulo Scheduling（W-full）
 
-#110 の第5段の前半（5a）で、Modulo Scheduling（`ModuloCompiler`）は、LD.W のある mvp-2 の machine（W-full、`mvp2_rp4`、`mvp2_vlat`、`mvp2_vii` とその変種）でループを2倍にベクトル化する（[ADR-0023](DECISIONS.md)）。2倍にしないループの1反復の本体を SLP の規則で詰めること（本体の詰め込み）は第5段の後半（5b）で、5a には無い。実装は `loop.LoopVector` と `vliw.compiler.modulo`。#110 第5段の Q1〜Q3 は、オーナーが 2026-11-06 に推奨のとおり採った（Q2 は第5段の制限として、Q3 は境界を書いて第5段の範囲として。下の各項と、ADR-0023 の 2026-10-30 の補足（第5段の前半））。
+#110 の第5段で、Modulo Scheduling（`ModuloCompiler`）は、LD.W のある mvp-2 の machine（W-full、`mvp2_rp4`、`mvp2_vlat`、`mvp2_vii` とその変種）でループをベクトル化する（[ADR-0023](DECISIONS.md)）。前半（5a）で、ループを2倍にベクトル化する。後半（5b）で、2倍にしないループの1反復の本体を `dag.Pack` と同じ SLP の規則で詰める（本体の詰め込み）。実装は `loop.LoopVector`、`loop.LoopPack` と `vliw.compiler.modulo`。本体の詰め込みの規則1は、#138 の `Pack.storePairs` と同じ2段の規則で、#110 第4段の Q1 の (b) に従う（オーナーが 2026-11-06 に採った）。(a)（書かれたとおりの1段の規則）なら、変わるのは `LoopPack.storePairs` の1か所だけで、`matmul3`（m）は行をまたいで組になり、スカラーのループに戻る（下の「Q1 の (a) なら」）。#110 第5段の Q1〜Q4 は、オーナーが 2026-11-06 に推奨のとおり採った（Q2 は第5段の制限として、Q3 は境界を書いて第5段の範囲として。下の各項と、ADR-0023 の 2026-10-30 の補足（第5段の前半と後半））。
 
 #### 判定の順
 
@@ -546,8 +546,8 @@ fallback は `W: scalar fallback, (NothingToPack: …)` か `W: scalar fallback,
 
 1. 配置、lowering、`LoopGraph.of`、`FusionChoice.of`（ADR-0019）。融合の判定はスカラーのグラフで `Mii.withoutReadPort` によって行うので、mvp-1 と同じ判定になる。この結果を G（融合したスカラーのループのグラフ）と呼ぶ
 2. G で2倍にしない理由を調べる（`LoopVector.reasons`。下の「2倍にしない理由」）。無ければ2倍にしたグラフ V を作り（`LoopVector.double`）、3本目の読出しポートを除いた MII が `MII(V) ≤ 2 × MII(G)` なら2倍にする。そうでなければ理由は `MiiIncrease` である
-3. 2倍にしないループは G をスケジュールする。G に規則1の候補（同じ歩幅の `Address(b, s)` と `Address(b+1, s)` にある本体の2つの ST か、w と w+1 にあるループの後の2つの ST。本体の ST とループの後の ST は組にしない）が無ければ、組は1つもできないので `NothingToPack`（ADR-0023 の「SLP の規則で組が1つもできない」）とする。候補があれば、5a には本体の詰め込みが無いので `NotImplemented`（`body packing: #110 stage 5b`）とし、比較の API は `NotMeasured` を返す。5b では、候補がすべて組にならないループが `NothingToPack` になる
-4. V の II を探す（「Modulo Scheduling」）。どの II にも収まらなければ G に戻す（`NoIiFits`）
+3. 2倍にしないループ（`MiiIncrease` も含む）は、1反復の本体を詰める（`LoopPack.pack`。下の「本体の詰め込み（`LoopPack`）」）。組が1つでもできれば、詰めたグラフを V とする（`Vectorized`）。組が1つもできなければ（規則1の候補が無いか、候補がすべて組にならない）、G をスケジュールし、`NothingToPack`（ADR-0023 の「SLP の規則で組が1つもできない」）とする。2倍と本体の詰め込みは組み合わせない。本体の詰め込みには MII の条件を付けない（#110 第5段の Q4。オーナーが 2026-11-06 に採った）。MII が上がらないことを求める条件は、手順1の MAC の融合（ADR-0019）と手順2の2倍の判定（`MiiIncrease`）にだけある
+4. V（2倍にしたグラフか、本体を詰めたグラフ）の II を探す（「Modulo Scheduling」）。どの II にも収まらなければ G に戻す（`NoIiFits`）。2倍にしたループは本体の詰め込みを試さず、本体を詰めたループもほかを試さない
 5. G の命令列は mvp-1 の命令列と同じである（同じ G で、スカラーの演算のレイテンシーが mvp-1 と同じ。`mvp2_vii` は ST の L が 2 なので、cycles が1多い）
 
 W-reg（LD.W が無い）は下の「W-reg」による。
@@ -594,6 +594,35 @@ LD と LD.W の合計は、list scheduling の W-full の詰めた DAG と同じ
 
 ベンチマークのループでは、`matmul3`（m）が `AssociationOrder`、`product8`・`dot8` が `OddTripCount` と `AssociationOrder`、`matmul3`（i）が `OddTripCount` で、2倍にするのは `saxpy8` と `fir4x8` である（`dot9` は8反復で、`AssociationOrder` だけ）。
 
+#### 本体の詰め込み（`LoopPack`）
+
+`loop.LoopPack` は、`dag.Pack`（「ISA mvp-2（W）」の「詰め込みの規則（`dag.Pack`）」）の状態機械を G に移したものである。規則、2段の候補、2つの木を並べてたどる順、置き場（規則4）の確かめ方、最初に拒んだ理由をそのレーンの理由にすることは `Pack` と同じで、ループにあって DAG に無いもの（LD の共有、ループの前と後の値、状態）の扱いだけを足した。レーンの理由は `Pack` の6つの名前（`NoNeighbour`・`RootDiffers`・`SameValue`・`NeededElsewhere`・`Cycle`・`StoredTwice`）を使い、新しい名前は足さない（`LaneReason` は `dag/Pack.scala` の中で sealed で、第5段は `Pack.scala` を変えない）。`RootDiffers` は起きない（W-reg はその前で G に戻す。#110 第5段の Q1）。
+
+- **候補（規則1）**: 同じ場所にある G の2つの ST で、本体の ST なら同じ歩幅の `Address(b, s)` と `Address(b+1, s)`（どの反復でも隣り合う）、ループの後の ST なら w と w+1。本体の ST とループの後の ST は組にしない。(base, 歩幅, ST の番号) の順に並べる（`LoopPack.byAddress`。小さい番地が先）
+- **2段（#138 の `Pack.storePairs` と同じ。#110 第4段の Q1 の (b)。オーナーが 2026-11-06 に採った）**: 1段目に集めの要らない候補（`LoopPack.gatherFree`）を番地の順に、2段目にすべての候補を番地の順に試す（`LoopPack.storePairs`）。前の組がその ST を持つ候補は飛ばす。1段目の条件は `Pack.gatherFree` を G に当てはめたもので、どちらの ST もその語のただ1つの ST で、2つの値が違い、同じ場所の同じ演算を back 0 で読む。2つの木を並べてたどると（両方のレーンで等しい被乗数は rs1 に移す）、同じ場所の同じ演算、乗算の rs1 の同じ値、下の LD.W になる2つの LD、または初期値の組も集めの要らない2つの状態の値（下のベクトルの状態。循環は集めの要らないものと数える）にだけ着く。状態の値の ST（back 1）は2段目だけで試す（反復0では初期値を ST するので、初期値によっては語の複写になる）。1段目は G の形だけで決まる（ADR-0012）
+- **読出し（規則3）**: LD は、ADR-0014 の共有を外した読出し（`LoopVector.unshared`。2倍と同じ）で比べる。同じ場所・同じ歩幅で、レーン1の base がレーン0 の base + 1、どの反復でもどちらの語も書かれないなら、LD.W にする。本体の `LD.W Address(b, s)` は、ADR-0014 の規則を歩幅 s にそのまま当てはめて共有し直す（`LoopVector.chains`。2倍と同じ関数で、鍵は (s, b mod |s|)、鎖の先頭は s > 0 なら base の最も大きいもの、s < 0 なら最も小さいもの、back = (先頭 − b) / s、k < back の値は Before の `LD.W Address(b + s·k, 0)`）。ループの前の2つの LD は `LD.W Address(w, 0)` になる
+- **ブロードキャストと `SameValue`（規則2）**: 両方のレーンで同じ値は、乗算の rs1 ならブロードキャストにし（ベクトルのレーンにした値なら `NeededElsewhere`）、ほかの位置なら `SameValue(位置)` とする。位置の名前は `Pack` と同じ
+- **演算（規則6）**: 同じ場所の同じ演算（back 0）はベクトルの演算にし、(レーン0のノード、レーン1のノード) の組で共有する。ほかの置き場を持つレーンは `NeededElsewhere`。欄はそのノードの場所でたどる（ループの前のベクトルの演算もある。不変の値の組、状態の初期値の組）
+- **集め（規則4）**: ほかの葉の組は集める。どの反復でも書かれない語の LD のレーンは、その読出し（共有を外したもの）の新しい LD にし、集めごとに値の番号を付け、反復をまたいで共有しない（#110 第5段の Q3。2倍と同じ）。2つのレーンがどちらもループの前の値なら、集めもループの前に置き、どの反復もそれを back 0 で読む（不変の組。`ModuloScheduler.groups` は Each の組に数えず、MinAvg は2つの不変の値と数える）。これが無いと、ループの前の値を ST する組（例えば `w(2i) = c0 − c1`）で `Pack` と同じにならない。ループの前の LD を本体の値と集めるときは、その語を本体で毎反復 LD する。これは規則4の LD の複製をループに当てはめたもので、ADR-0014 の「ループ不変の値は、ループの前に1回だけ LD し、全反復でレジスタに保持する」の例外である（数は下の「乱数のループ」）。計算した値のレーンは、そのノード自身を集めのレーンにする（置き場は1つ）。ループの後の集め（違う演算の2つの状態の終値を ST する組）は、本体のノードをレーンにし、その最後の反復の値を集める（ループの後のノードは本体のノードの最後の反復の値を読む。`Pack` が展開したループで2つの最後の値を集めるのと同じで、W-full では集めた根の ST.W になる。#110 第4段の Q2）。だから、ループの後の集めは本体に置き、同じ2つの値の本体の集めと共有する（規則6）。これは1つの反復（最後の反復）の同じ2つの値の組を規則6で共有するもので、集めのレーンの LD を反復をまたいで共有しない例外（#110 第5段の Q3）とは別である。Q3 の例外は、ある反復の集めが読む語を後の反復の集めが再び読むときの共有で、規則6は反復をまたぐ値の組の共有を定めていない（「2倍のベクトル化」の Q3 の項の境界）。同じ2つの値を本体でも ST する組とループの後の組は、どちらを先に試しても両方が組になり、1つの集めを読む（`Pack` が展開したループで、最後の反復の組とループの後の組を1つの集めにするのと同じ）。back が 0 でない値（状態の値）と、本体の値と並ぶ計算したループの前の値（同じ演算でも場所が違えば集める）は、`NeededElsewhere` とする。後者はループだけにある規則4の場合で、展開したループではすべての反復の集めのレーンになり、置き場が1つにならない。1反復を詰める `Pack` なら集める（下の「1反復の照合」）
+- **ベクトルの状態**: 2つの状態の値 `Ref(n0, 1)` と `Ref(n1, 1)` は、n0 と n1 が別々の状態の次の値で、同じ演算で、(n0, n1) がこの候補のたどりで作るベクトルのノード（新しいもの、たどっている途中のもの、前に受け入れたもの）なら、ベクトルの状態になる。そのベクトルのノードは自分自身を back 1 で読み（その循環の RecMII は、循環のベクトルの演算のレイテンシーの和である。`matmul3`（m）では VMAC だけで、W-full で 2、`mvp2_vlat` で 3）、反復0の値は初期値の組である。初期値の組 (init(s0), init(s1)) は、ループの前で1回だけたどる。ループ IR は状態の反復0の値を1つのノードで持つ（`Ref.initial`）ので、初期値の組は**ループの前の1つの組のノード**（LD.W か、ベクトルの演算）でなければならない。`matmul3`（m）では `VMUL`（a(3i) のブロードキャスト、LD.W b(0..1)）である
+- **初期値の組の制限**: 等しい初期値と、集めになる初期値の組は詰めない。これは SLP の規則ではなく、ループ IR の制限である。`LaneReason` に名前を足せないので、`SameValue("the initial value of a state")` と `NeededElsewhere`（レーン0の初期値のノード）の名前を借り、`LoopLane.initialPair` で印を付けて、本当の規則2・4の拒否と分けて数える（記録では `SameValue (initial pair)`・`NeededElsewhere (initial pair)`）。`Pack` が展開したループを詰めるなら、等しい初期値は乗算の rs1 ではブロードキャストになり、離れた初期値の組は集めになる
+- **状態のほかの組**: 状態の値と状態でない値の組、back の違う組、違う演算、入れ替わった状態（s0 の次の値が s1 を、s1 の次の値が s0 を読む）は組にせず、`NeededElsewhere` とする（状態の値は自分のスカラーのレジスタに残る）。詰めたグラフの `states` は残るスカラーの状態だけで、ベクトルの状態を持たない（`states` を読むのは `LoopFusion` だけで、W のグラフは融合しない）
+- **置き場（規則4）**: 候補ごとに、ベクトルのレーンにした計算したノードのそれぞれについて、G のすべての読む側（オペランドとして任意の back で読むもの、`Ref.initial` で読むもの、ループの後の ST）が、受け入れたベクトルのノードの同じレーンで、そのノードをこの組からだけ読むもの（back 0 なら `Pair`、back 1 なら `State`、`Ref.initial` で読むなら初期値の組がこの組の `State`）か、そのレーンの組の ST であることを確かめる。まだたどっていない読む側はスカラーと数える（決定的で保守的。`Pack` と同じ）。だから、状態の値を本体で ST し、その状態をループの後でも ST するループは、どちらの組も詰めない。集めの置き場は確かめない（`Pack` と同じ）
+- **`Cycle`・`StoredTwice`**: 詰めたグラフの1反復（ベクトル・組の ST・スカラーのノードの back 0 のオペランドと、G の1反復の中のメモリの順序の辺）が循環するなら `Cycle`。反復をまたぐ依存は循環にならない。組の語をほかの ST も書くか、同じ ST が2回書くなら `StoredTwice`。どちらも `LoopKernel` からは生じない（入力は読むだけで、出力の各要素に1回書く）ので、手作りの `Loop` でテストする
+- **ノードの順（既定）**: G の根（すべての ST と、スカラーの状態の次の値）から G の順に後順でたどり、欄は順にたどる（`LoopVector.double`・`LoopGraph.build` と同じ）。LD と ST を置く前に、G の1反復の中のメモリの順序でその前にあるものを置き、語ごとの順序を G と同じに保つ（`Pack` が Kahn の順でメモリの辺を守るのと同じ目的。`LoopKernel` には無いので、手作りの `Loop` の ST → LD の辺で確かめる。組の木が状態の値を読み、その次の値が組の語を LD するものも含む）。組の ST は、レーン0の ST の位置に ST.W（本体は `StoreW(Address(b, s))`、ループの後は `StoreW(Address(w, 0))`）を置く。まだ作っていない、back > 0 で読むノード（状態の次の値と、ベクトルの状態）は仮の番号で読み、それを最初に読んだ根の後に作る（仮の番号は最後に埋める）。だから根のたどりは、back 0 のオペランドと G の1反復の中のメモリの順序（`Cycle` で確かめる辺）だけをたどって作りかけのノードに戻らず、ST.W はその順序で後にあるどのノードよりも前に置かれる。ベクトルのノードは鍵ごとに1つである（規則6）。back > 0 で読む LD（G の ADR-0014 の鎖）は、`LoopGraph.build` と同じく最初に読む位置に作る
+- **MII の条件は無い（#110 第5段の Q4。オーナーが 2026-11-06 に採った）**: MII が上がらないことを求める条件（MII の条件）は、MAC の融合（ADR-0019。`FusionChoice` は、融合すると MII が上がるループを融合しない）と、2倍にするかの判定（`MiiIncrease`）に残し、本体の詰め込み（ループの本体に当てはめる SLP の規則）には当てはめない。ADR-0023 の「ベクトル化したループは、元の1反復当たりの MII が上がらないときだけ採る」は2倍のループについての文と読み、本体の詰め込みは SLP の規則（MII の条件が無い。#110 第4段の Q4）に従う。詰めたグラフの MII（3本目の読出しポートを除く）が G より上がっても、詰めたグラフを使う。W-full で上がるのは `RandomLoops.kernels(76, 300)` の 2、`RandomLoops.vectorizable(110, 300)` の 2、`RandomLoops.packable(5, 300)` の 3 である
+
+| ループ | Before | Each | After |
+|---|---|---|---|
+| `matmul3`（i） | LD 3（b(m,2)）、LD.W 3（b(m,0..1)） | LD 3（a(3i+m)。ベクトル演算にはブロードキャスト、スカラーのレーンはそのまま読む）、MUL 1、MAC 2、VMUL 1、VMAC 2、ST 1、ST.W 1（`Address(18, 3)`） | - |
+| `matmul3`（m） | LD 4、LD.W 1（b(0,0..1)）、MUL 3、VMUL 3（ベクトルの状態の初期値の組） | LD 4、LD.W 1（`Address(12, 3)`。b(m+1, 0..1)）、MAC 3、VMAC 3 | ST 3、ST.W 3（18、21、24） |
+
+どちらも、組は行の (c(i,0), c(i,1)) で、c(i,2) はスカラーのレーン（`NoNeighbour`）である。展開した命令列の LD と LD.W は、どちらも LD 12・LD.W 3 で、list scheduling の W-full の詰めた DAG（#78 の行の組）と同じである。2段目は `matmul3` に何も足さない。
+
+##### Q1 の (a) なら
+
+オーナーは (b) を採った（2026-11-06）ので、この項は採らなかった規則の記録である。書かれたとおりの1段の規則（#110 第4段の Q1 の (a)）なら、`LoopPack.storePairs` を `byAddress` だけにする（1か所）。ほかは変わらない。`matmul3`（i）は、1段目の候補が番地の最も小さい候補でもあるので変わらない。`matmul3`（m）は (18,19)、(20,21)、(22,23)、(24,25) を組にし、c(2,2) がスカラーのレーンになる。行をまたぐのは (c(0,2), c(1,0)) だけで、a(m) と a(m+3)、b(3m+2) と b(3m) を集める（(c(1,1), c(1,2)) は奇数の base の LD.W の組である）。MII は G の 9 に対して 10 に上がり、W-full ではどの W の II にも収まらないので、スカラーのループ（9 / 40）に戻る。そのときは、ADR-0022 の「`matmul3` の3列目はスカラーのまま残る」に、第4段の後半の補足が予告する日付付きの補足が要る。`RandomLoops.packable(5, 300)` では、(a) と (b) の詰め方が違うのは2倍にしない 18 のループである。W-full で両方の詰めたグラフがスケジュールできる 8 のうち、(b) の cycles が少ないものが 7、多いものが 1 で、(a) だけがスケジュールできるものが 1、どちらもスケジュールできないものが 9 である（`LoopPackSpec`）。
+
 #### 資源
 
 ADR-0023 のとおり、資源は1サイクルに1回の使用のままで、新しい種類は無い。
@@ -606,13 +635,13 @@ ADR-0023 のとおり、資源は1サイクルに1回の使用のままで、新
 | 演算器（L9） | mnemonic ごと。VMAC は MAC の演算器を使わない。レーンの ST は ST の演算器を使う |
 | 3本目の読出しポート（L11、形 F） | `Mii.readPortUsers` = {MAC、VMAC、ST、ST.W}（`read_ports` 3。ADR-0023）。欄の数は VMAC 3、VADD・VSUB・VMUL 2、ST・ST.W・レーンの ST 1、LD・LD.W 0 なので、3つを超えるのは3つの欄の Compute の演算と1つの欄の Memory の演算の組だけである。ブロードキャストと集めの欄は1と数える |
 
-**2つのスロットの種類を一緒に判定する条件を直した**（`ModuloScheduler` の `coupled`）。今までの条件は「ポートを使う演算の種類がすべて残っている」で、MAC・VMAC・ST・ST.W の4つの種類のどれかが無いか、置き終わると成り立たない。2倍にしたループは VMAC と ST.W だけなので、初めから成り立たない。直した条件は「Compute と Memory のそれぞれに、ポートを使う演算が残っている」で、mvp-1（{MAC、ST}）では同じ条件である（mvp-0・mvp-1 のどの記録も変わらない）。直さないと、W-full と `mvp2_vlat` の `fir4x8` の II 4 は、本当の理由（レジスタ）ではなく `NoTime`（ノード 11）になる（II と cycles は変わらない）。また、mvp-2 の machine ではポートを使う演算に VMAC と ST.W が入るので、スカラーのループ（W-reg と、2倍にしないループ）でも今までの条件は成り立たず、命令列が mvp-1 と違ってしまう（mutant `modulo-read-port-coupling-all` は、この2つで見つかる）。`RowFit.Class` は種類ごとに読出しの印を持つので、VMAC を MAC と、ST.W を ST と同じに扱う（ADR-0023 の既定）。
+**2つのスロットの種類を一緒に判定する条件を直した**（`ModuloScheduler` の `coupled`）。今までの条件は「ポートを使う演算の種類がすべて残っている」で、MAC・VMAC・ST・ST.W の4つの種類のどれかが無いか、置き終わると成り立たない。2倍にしたループは VMAC と ST.W だけなので、初めから成り立たない。直した条件は「Compute と Memory のそれぞれに、ポートを使う演算が残っている」で、mvp-1（{MAC、ST}）では同じ条件である（mvp-0・mvp-1 のどの記録も変わらない）。直さないと、W-full と `mvp2_vlat` の `fir4x8` の II 4 は、本当の理由（レジスタ）ではなく `NoTime`（ノード 11）になる（II と cycles は変わらない）。また、mvp-2 の machine ではポートを使う演算に VMAC と ST.W が入るので、スカラーのループ（W-reg のループと、G に戻したループ。組の無い `NothingToPack` と、W の II の無い `NoIiFits`）でも今までの条件は成り立たず、命令列が mvp-1 と違ってしまう（mutant `modulo-read-port-coupling-all` は、この2つで見つかる）。`RowFit.Class` は種類ごとに読出しの印を持つので、VMAC を MAC と、ST.W を ST と同じに扱う（ADR-0023 の既定）。
 
-MII は V の1反復（元の2反復）で計算し、記録には元の1反復当たりの値（2で割る）も書く。RecMII は変わらない（2倍にしたループには状態が無いので 0）。
+MII は V の1反復で計算する。2倍にしたループの1反復は元の2反復なので、記録には元の1反復当たりの値（2で割る）も書く。2倍にしたループの RecMII は変わらない（状態が無いので 0）。本体を詰めたループの1反復は元の1反復で、ベクトルの状態の循環の RecMII は、その循環のベクトルの演算のレイテンシーの和である（`matmul3`（m）では VMAC の 2。`mvp2_vlat` では 3）。
 
 #### II の探索と割り当て
 
-ADR-0015 のままである。II = MII から1反復の長さまで試し、番号の順に先読み付きで置き、Before はできるだけ遅く、After はできるだけ早く置き、反復ごとに別の仮想レジスタにして直線に展開する。rematerialization はしない（ADR-0016）。割り当ては `RegisterAllocator.assign`（重みで数え、組には整列した組、スカラーには best fit）で、II ごとの結果に `NoAlignedPair`（(b′)）を足した（「Modulo Scheduling」の「II の探索と結果」）。V がどの II にも収まらなければ、本体の詰め込みは試さず G に戻す。
+ADR-0015 のままである。II = MII から1反復の長さまで試し、番号の順に先読み付きで置き、Before はできるだけ遅く、After はできるだけ早く置き、反復ごとに別の仮想レジスタにして直線に展開する。rematerialization はしない（ADR-0016）。割り当ては `RegisterAllocator.assign`（重みで数え、組には整列した組、スカラーには best fit）で、II ごとの結果に `NoAlignedPair`（(b′)）を足した（「Modulo Scheduling」の「II の探索と結果」）。V がどの II にも収まらなければ G に戻す（2倍にしたループは本体の詰め込みを試さない）。
 
 #### 記録の定義（#131。既定）
 
@@ -621,9 +650,9 @@ ADR-0015 のままである。II = MII から1反復の長さまで試し、番�
 - **MinAvg（MII、ASAP）**: II = MII で、`LoopGraph.edges` のすべての依存の下での Each のノードの最も早い時刻（重み `cycles − II × iterations` の最長路。資源は無視する）を使う。MinAvg = ⌈Σ 重み × 寿命 / II⌉ + Each のノードが back 0 で読む Before の値の重み（ループの間ずっと生きる不変の値）。寿命は、値（集めは先のレーン）の発行から最後の Each の読む側（`t(読む側) + back × II − t(定義)`）まで、読む側が無ければそのレイテンシーである。ループの後の読む側は数えない（定常状態の値）。#78 の見積りと同じ定義である（`ModuloScheduler.minAvgAtMii`）
 - **MinAvg（II）**: 同じ式に、見つけたスケジュールの時刻と II を使う。そのスケジュールの Rau の MinAvg である（`ModuloScheduler.minAvg`）
 - 集めの重み: 試作は集めの各レーンを、それぞれの発行から1と数えた。下の乱数の300のうち、2倍にして集めのある 77（W-full）で、MII の ASAP の値はどれも変わらず、見つけた II の値は 24 で変わる（W-reg の数では、集めのある 102 のうち 21）
-- **MaxLive**: 展開した命令列で同時に生きるレジスタの最大（`RegisterAllocator.maxLive`。プロローグとエピローグを含む）。オーナーの「同時に生きる値」である。MinAvg は定常状態の下限で、命令列の下限ではない（ループの後の読む側を数えず、反復が少ないと定常状態に達しないので、MaxLive < MinAvg もあり得る。5a の記録には無い）
+- **MaxLive**: 展開した命令列で同時に生きるレジスタの最大（`RegisterAllocator.maxLive`。プロローグとエピローグを含む）。オーナーの「同時に生きる値」である。MinAvg は定常状態の下限で、命令列の下限ではない（ループの後の読む側を数えず、反復が少ないと定常状態に達しないので、MaxLive < MinAvg もあり得る。第5段の記録には無い）
 - **割り当ての結果と II を上げた理由**: `ModuloSchedule.attempts`（II ごとの `Outcome`）
-- **全 II の結果**（ADR-0015 の 2026-10-17 の補足、#131 の目的3）: `ModuloScheduler.sweep` が、MII から1反復の長さまでの各 II の結果、cycles、MaxLive、その II の MinAvg を返す。16 本のレジスタでレジスタが II を上げたループ（W-full と `mvp2_vlat` の `fir4x8`）について記録する
+- **全 II の結果**（ADR-0015 の 2026-10-17 の補足、#131 の目的3）: `ModuloScheduler.sweep` が、MII から1反復の長さまでの各 II の結果、cycles、MaxLive、その II の MinAvg を返す。16 本のレジスタでレジスタが II を上げたループ（W-full と `mvp2_vlat` の `fir4x8`、`mvp2_vlat` の `matmul3` の2つのループ）について記録する
 
 `ModuloCompiled` は `minAvgAtMii`、`minAvgAtIi`、`maxLive` を持つ。
 
@@ -631,36 +660,38 @@ ADR-0015 のままである。II = MII から1反復の長さまで試し、番�
 
 II / cycles。括弧の中は、II を MII より上げた理由である。mvp-1 と `mvp1_rp4`（mvp-1 で `read_ports` 4）の欄は、「Modulo Scheduling」の「結果（mvp-1、#77）」の値である。2倍にしたループの II はベクトルの1反復の間隔で、元の2反復を数える。［ ］の中は、その元の1反復当たりの II（II / 2）である。だから W-full の `saxpy8` の II 3 は元の1反復当たり 1.5 で、mvp-1 の II 3（元の1反復当たり 3）と同じ間隔ではなく、その半分の間隔である。
 
-| ループ | 形（5a） | W-full | `mvp2_rp4` | `mvp2_vlat` | `mvp2_vii` | mvp-1 | `mvp1_rp4` | list scheduling（W-full） |
+| ループ | 形 | W-full | `mvp2_rp4` | `mvp2_vlat` | `mvp2_vii` | mvp-1 | `mvp1_rp4` | list scheduling（W-full） |
 |---|---|---|---|---|---|---|---|---|
 | `saxpy8`（i） | 2倍 | 3［元の1反復 1.5］ / 17 | 3［元の1反復 1.5］ / 17 | 3［元の1反復 1.5］ / 20 | 4［元の1反復 2］ / 22 | 3 / 29 | 3 / 29 | 15 |
 | `fir4x8`（i） | 2倍 | 5［元の1反復 2.5］ / 29（II 4: (b) 18） | 4［元の1反復 2］ / 28 | 5［元の1反復 2.5］ / 34（II 4: (b) 20） | 6［元の1反復 3］ / 35 | 4 / 46 | 4 / 43 | 25 |
-| `matmul3`（i） | スカラー（`NotImplemented`） | 9 / 38 | 9 / 45 | 9 / 38 | 9 / 39 | 9 / 38 | 9 / 45 | 28 |
-| `matmul3`（m） | スカラー（`NotImplemented`） | 9 / 40 | 9 / 34 | 9 / 40 | 9 / 41 | 9 / 40 | 9 / 34 | 28 |
+| `matmul3`（i） | 本体の詰め込み | 6 / 28 | 6 / 28 | 9 / 37（II 6: (a)、II 7: (b) 20、II 8: (b) 17） | 6 / 31 | 9 / 38 | 9 / 45 | 28 |
+| `matmul3`（m） | 本体の詰め込み | 6 / 28 | 6 / 24 | 8 / 31（II 6: (a)、II 7: (b) 18） | 6 / 29 | 9 / 40 | 9 / 34 | 28 |
 | `product8`（i） | スカラー（`NothingToPack`） | 2 / 19 | 2 / 19 | 2 / 19 | 2 / 20 | 2 / 19 | 2 / 19 | - |
 | `dot8`（i） | スカラー（`NothingToPack`） | 2 / 21 | 2 / 21 | 2 / 21 | 2 / 22 | 2 / 21 | 2 / 21 | - |
 
 - MII（V の1反復。括弧の中は元の1反復当たり）は、W-full の `saxpy8` が 3（Memory スロット。1.5）、`fir4x8` が 4（Compute スロット、Compute の書戻しポート、3本目の読出しポート。2）で、#78 の見積り（1.5、2）と同じである。`mvp2_vii`（ベクトル演算と LD.W・ST.W の演算器の II 2）では演算器が律速で、`saxpy8` は LD.W の演算器の 4、`fir4x8` は VMAC の演算器の 6 である
-- `matmul3` の2つのループは、5a ではスカラーのループで、mvp-1 と同じ命令列である（`mvp2_rp4` は `mvp1_rp4` と同じ。`mvp2_vii` は ST の L が 2 なので、`product8`・`dot8` と同じく1サイクル遅い）。本体を詰めた行は 5b で替わる
+- `matmul3` の2つのループは本体を詰める（上の「本体の詰め込み」）。MII はどの machine でも 6（W-full と `mvp2_vlat`・`mvp2_vii` は Compute スロット、Compute の書戻しポート、3本目の読出しポートで、`mvp2_vii` の（m）は VMAC の演算器も。`mvp2_rp4` は3本目の読出しポートを除く2つ）で、#78 の見積り（1単位当たり 6。本体を詰めたループの1反復が1単位）と同じである。（m）の RecMII は 2（`mvp2_vlat` は 3）。W-full の cycles は list scheduling と同じ 28 で、mvp-1 の 38 と 40 より少ない
+- `mvp2_vlat` では、16 本のレジスタが本体を詰めた II を上げる。II 6 は表が無く（(a)。スロットと書戻しポート、L5）、（i）は II 7・8 で 20・17、（m）は II 7 で 18 が同時に生きる。上げても遅くならない（下の全 II の結果。II 7 なら 39 と 32 cycles）。`fir4x8` の `mvp2_vlat`（2 cycles 遅くなる）とは違う
+- `product8`・`dot8` はスカラーのループで、mvp-1 と同じ命令列である（`mvp2_rp4` は `mvp1_rp4` と同じ。`mvp2_vii` は ST の L が 2 なので1サイクル遅い）
 - `saxpy(n)`（W-full）は n = 8、16、32、64 で 17、29、53、101 cycles（II 3［元の1反復 1.5］。1.5n + 5。mvp-1 は II 3 で 3n + 5）
 - この反復の回数では、2倍にしたループは list scheduling より速くない（17 対 15、29 対 25）。ADR-0015 のプロローグとエピローグの効果で、反復の数は半分になる
 - 奇数の長さはスカラーのループで、`saxpy(7)` は 26、`fir4x7` は 42 cycles（`OddTripCount` と `NothingToPack`）。`fir4x(16)` は 49、`fir4x(32)` は 89 cycles（II 5［元の1反復 2.5］。LD.W の鎖が定常状態を通る）
 
 W-full の記録:
 
-| ループ | 形（5a） | MII（元の1反復） | II | II を上げた理由 | cycles | MinAvg（MII、ASAP） | MinAvg（II） | MaxLive | 割り当て |
+| ループ | 形 | MII（元の1反復） | II | II を上げた理由 | cycles | MinAvg（MII、ASAP） | MinAvg（II） | MaxLive | 割り当て |
 |---|---|---|---|---|---|---|---|---|---|
 | `saxpy8`（i） | 2倍 | 3（1.5） | 3［元の1反復 1.5］ | - | 17 | 5 | 6 | 7 | 成功 |
 | `fir4x8`（i） | 2倍 | 4（2） | 5［元の1反復 2.5］ | II 4: (b) 18 > 16 | 29 | 13 | 12 | 14 | II 4 は `TooManyLive` 18、II 5 で成功 |
-| `matmul3`（i） | スカラー（`NotImplemented`） | 9 | 9 | - | 38 | 13 | 14 | 14 | 成功 |
-| `matmul3`（m） | スカラー（`NotImplemented`） | 9 | 9 | - | 40 | 11 | 14 | 14 | 成功 |
+| `matmul3`（i） | 本体の詰め込み | 6（6） | 6 | - | 28 | 14 | 15 | 16 | 成功 |
+| `matmul3`（m） | 本体の詰め込み | 6（6） | 6 | - | 28 | 11 | 14 | 15 | 成功 |
 | `product8`（i） | スカラー（`NothingToPack`） | 2 | 2 | - | 19 | 2 | 2 | 2 | 成功 |
 | `dot8`（i） | スカラー（`NothingToPack`） | 2 | 2 | - | 21 | 3 | 4 | 4 | 成功 |
 
-- 2倍にした2つのループの MinAvg（MII、ASAP）は、#78 の見積り（`saxpy` 5、`fir` 13）と同じである。`matmul3` の2つの行はスカラーのループの値で、見積り（14 と 11）は本体を詰めたループの値なので、5b で比べる
-- ほかの machine（MaxLive / MinAvg（II））: `mvp2_rp4` の `fir4x8` は 16 / 15（II 4。ちょうど収まる）、`mvp2_vlat` の `fir4x8` は 16 / 15（II 5。II 4 では 20 が同時に生きる。下の全 II の結果）。`mvp2_vii` には、レジスタで II を上げるループは無い
+- 2倍にした2つのループの MinAvg（MII、ASAP）は、#78 の見積り（`saxpy` 5、`fir` 13）と同じである。本体を詰めた `matmul3` の2つのループの MinAvg（MII、ASAP）も、見積り（14 と 11）と同じである。mvp-1 の `matmul3` は MinAvg（MII、ASAP）/ MinAvg（II）/ MaxLive が（i）13 / 14 / 14、（m）11 / 14 / 14（`mvp1_rp4` の（i）は 13 / 16 / 16）
+- ほかの machine（MaxLive / MinAvg（II））: `mvp2_rp4` の `fir4x8` は 16 / 15（II 4。ちょうど収まる）、`matmul3` は 16 / 15 と 15 / 14、`mvp2_vlat` の `fir4x8` は 16 / 15（II 5。II 4 では 20 が同時に生きる。下の全 II の結果）、`matmul3` は 16 / 15（II 9）と 16 / 14（II 8）、`mvp2_vii` の `matmul3` は 16 / 15 と 16 / 16。`mvp2_vlat` の MinAvg（MII、ASAP）は `matmul3` で 16 と 12。`mvp2_vii` には、レジスタで II を上げるループは無い
 
-**`fir4x8` の全 II の結果（W-full）**: レジスタが W の II を決める最初のループである（#131。配置の効果）。この表と次の表の II は V の1反復（元の2反復）の間隔で、元の1反復当たりは II / 2 である。
+**`fir4x8` の全 II の結果（W-full）**: レジスタが W の II を決める最初のループである（#131。配置の効果）。この表と、次の `mvp2_vlat` の `fir4x8` の表の II は、2倍にしたグラフの1反復（元の2反復）の間隔で、元の1反復当たりは II / 2 である。
 
 | II | 結果 | cycles | MaxLive | MinAvg（II） |
 |---|---|---|---|---|
@@ -690,25 +721,43 @@ II 4 の配置の MinAvg がもう 18 > 16 なので、そのスケジュール�
 
 ここでも II 4 の配置の MinAvg（19）が 16 を超える。W-full と違い、II を上げると遅くなる（II 4 なら 32 cycles、II 5 は 34 cycles）。
 
+**`matmul3` の全 II の結果（`mvp2_vlat`）**: 本体を詰めたループで、16 本のレジスタが II を上げる2つのループである。本体を詰めたループの II は元の1反復の間隔である。II 6 は表が無い（(a)）。
+
+| II | （i）の結果 | cycles | MaxLive | MinAvg（II） | （m）の結果 | cycles | MaxLive | MinAvg（II） |
+|---|---|---|---|---|---|---|---|---|
+| 6 | `NoMrt` | - | - | - | `NoMrt` | - | - | - |
+| 7 | `TooManyLive`（20 > 16） | （39） | 20 | 20 | `TooManyLive`（18 > 16） | （32） | 18 | 16 |
+| 8 | `TooManyLive`（17 > 16） | （41） | 17 | 17 | 収まる | 31 | 16 | 14 |
+| 9 | 収まる | 37 | 16 | 15 | 収まる | 32 | 16 | 13 |
+| 10 | 収まる | 39 | 15 | 14 | 収まる | 33 | 16 | 13 |
+| 11 | 収まる | 42 | 15 | 14 | 収まる | 34 | 16 | 12 |
+| 12 | 収まる | 45 | 15 | 14 | 収まる（1反復の長さ） | 35 | 16 | 12 |
+| 13 | 収まる | 48 | 15 | 14 | | | | |
+| 14 | 収まる | 50 | 14 | 13 | | | | |
+| 15（1反復の長さ） | 収まる | 49 | 14 | 13 | | | | |
+
+どちらも、レジスタで II を上げても遅くならない（（i）は II 7 なら 39、II 9 は 37 cycles。（m）は II 7 なら 32、II 8 は 31 cycles）。
+
 **レジスタを減らしたとき（W-full）**:
 
 | レジスタ | `saxpy8`（i） | `fir4x8`（i） | `matmul3`（i）・（m） |
 |---|---|---|---|
-| 12 | 3［元の1反復 1.5］ / 17 | 9［元の1反復 4.5］ / 41（II 4: 18、II 5〜8: 14 が同時に生きる） | どの II にも収まらない（スカラーのループで 14 が同時に生きる。入力の誤り） |
+| 12 | 3［元の1反復 1.5］ / 17 | 9［元の1反復 4.5］ / 41（II 4: 18、II 5〜8: 14 が同時に生きる） | 本体を詰めたループも、スカラーのループ（14 が同時に生きる）も、どの II にも収まらない（入力の誤り） |
 | 10 | 3［元の1反復 1.5］ / 17 | W はどの II（4〜9）にも収まらず、スカラーのループ 5 / 49 に戻る（`NoIiFits`） | 同上 |
 | 8 | 3［元の1反復 1.5］ / 17 | W はどの II にも収まらず、スカラーのループ 9 / 77 に戻る | 同上 |
 
-`RtlMvp2Spec` の変種（レジスタ8本）では、`saxpy8` は2倍で 5［元の1反復 2.5］ / 26（II 3〜4: 9 が同時に生きる）、`fir4x8` は W の II が無くスカラーのループ 8 / 69、`product8` は 4 / 34、`dot8` は 2 / 23 で、`matmul3` の2つのループにはスカラーのループでも II が無い。
+`RtlMvp2Spec` の変種（レジスタ8本）では、`saxpy8` は2倍で 5［元の1反復 2.5］ / 26（II 3〜4: 9 が同時に生きる）、`fir4x8` は W の II が無くスカラーのループ 8 / 69、`product8` は 4 / 34、`dot8` は 2 / 23 で、`matmul3` の2つのループには本体を詰めたループにもスカラーのループにも II が無い。
 
-**`NoAlignedPair` は、測ったどのループでも起きなかった**（`WModuloSpec` で確かめる）: ベンチマークの6つのループ（W-full、`mvp2_rp4`、`mvp2_vlat`、`mvp2_vii` の 16・12・10・8 本と、`RtlMvp2Spec` の変種）、乱数の300の2倍にしやすいループ（W-full、`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii`、`RtlMvp2Spec` の変種、W-full の8本と6本）、2倍にした130のループの全 II の結果（W-full の 16・8・6・4 本で、各 568 の結果は収まる・`NoMrt`・`TooManyLive` だけ）。2倍にしたループの値はほとんどが組で、スカラーはブロードキャストの不変の値と、語の複写のレーンの ST が読む LD だけである。集めは整列した組を1つ取る（`assign` は2つのレーンを p と p+1 に置く）ので、best fit で断片化しない。(b′) の経路は手作りのテスト（`ModuloSchedulerSpec`）で確かめる。
+**`NoAlignedPair`（(b′)）**（`WModuloSpec` で確かめる）: 5a で測った2倍のループには起きない。ベンチマークの6つのループ（W-full、`mvp2_rp4`、`mvp2_vlat`、`mvp2_vii` の 16・12・10・8 本と、`RtlMvp2Spec` の変種。本体を詰めた `matmul3` を含む）、乱数の300の2倍にしやすいループのうち2倍にした 130（W-full、`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii`、`RtlMvp2Spec` の変種、W-full の8本と6本）、その 130 の全 II の結果（W-full の 16・8・6・4 本で、各 568 の結果は収まる・`NoMrt`・`TooManyLive` だけ）である。2倍にしたループの値はほとんどが組で、スカラーはブロードキャストの不変の値と、語の複写のレーンの ST が読む LD だけである。集めは整列した組を1つ取る（`assign` は2つのレーンを p と p+1 に置く）ので、best fit で断片化しにくい。ただし、2倍にしたループでも、8 本のレジスタでは起き得る。`RandomLoops.packable(5, 300)` の 19 番（W-full の8本）と 67 番（`RtlMvp2Spec` の変種）は、2倍にしたグラフの `NoIiFits` の試行に (b′) がある（どちらもスカラーのループに戻る）。本体を詰めたループでは、スカラーと組が混ざってレジスタが断片化するので、16 本でも起きる。乱数の2倍にしやすいループで本体を詰めた 66 では、W-full で 2（見つけた II を上げた）、`mvp2_vlat` で 3、`mvp2_rp4`・`mvp2_vii` で 2、変種で 2 と、スカラーのループに戻ったものの `NoIiFits` の試行に 6、W-full の8本で 1 と 3、6本で 0 と 3 である。その 66 の全 II の結果（各 361）では、16・8・6・4 本で 5・9・11・0 が (b′) である。W-full で、`RandomLoops.kernels(76, 300)` は見つけた II を上げたものが 1、`packable(5, 300)` は見つけた II を上げたものが 5 と `NoIiFits` の試行に 1 で、`packable(5, 100)` は `mvp2_vlat` で 2 と 1 である。`matmul3` には起きない（命令列の無いレジスタの数でも、入力の誤りが挙げる W の試行に (b′) は無い）。(b′) の経路は手作りのテスト（`ModuloSchedulerSpec`）でも確かめる。
 
 #### 乱数のループ
 
 `RandomLoops.vectorizable` は2倍にしやすい乱数のループを作る（状態なし、1〜8反復、歩幅はおもに1（−1、2 もある）、不変の値はおもに乗算に、`out(i)` か逆順、1/3 の確率で `w(2i)`・`w(2i+1)` も）。seed 110 の300、W-full、16 レジスタ:
 
 - 2倍 130（集めのあるもの 77、レーンの ST のあるもの 50）。`OddTripCount` 143、`SameValue` 44（それだけのもの 27）、`MiiIncrease` 0
-- 2倍にしない 170 のうち、規則1の候補のある 67 が `NotImplemented`（5b）、103 が `NothingToPack`
+- 2倍にしない 170 のうち、66 が本体を詰め、104 が `NothingToPack`（そのうち規則1の候補があってすべて組にならないもの 1）。詰めた 66 は、どれも `w(2i)`・`w(2i+1)` の組で、2つの木が違うので、集めた根の ST.W 1つになる（2段目。#110 第4段の Q2）。66 のうち 1 にはループの前の値の集めがあり、5 はループの前の語を本体で LD し（ADR-0014 の例外）、2 は MII が G より上がる
 - verifier の拒否 0、誤った出力 0（`mvp2_vlat`、`mvp2_rp4`、`mvp2_vii`、変種、W-full の8本と6本でも、誤った出力は 0）
+- 本体を詰めた 66 のうち 1 は W のどの II にも収まらず、スカラーのループに戻る。収まる 65 で G と比べると、II は 30 で良く、26 で同じ、9 で悪い。cycles は 40 で少なく、10 で同じ、15 で多い
 - 2倍にした 130 の内訳（`WModuloSpec` がそれぞれの数を確かめる）。G と比べたのは 121 で、残る 9 は、2倍にしたグラフ V か基準の G の命令列が無いので比べていない:
   - 7: V がどの II にも収まらない（`NoIiFits`）。通常の利用はスカラーのループ G に戻る
   - 1: V も G もどの II にも収まらず、命令列が無い（入力の誤り）
@@ -716,7 +765,20 @@ II 4 の配置の MinAvg がもう 18 > 16 なので、そのスケジュール�
   - 121: G と比べた。元の1反復当たりの II は 114 で良く、6 で同じ、1 で悪い。cycles は 111 で少なく、6 で同じ、4 で多い（通常の利用は、遅くてもベクトルの命令列を使う。#110 第4段の Q4 と同じ）
 - `mvp2_vlat` では、2倍にしてスカラーのループより cycles の多いものが 20、元の1反復当たりの II の悪いものが 3 である
 
-今までの `RandomLoops.kernels(76, 300)`（状態のあるものが多い）は、W-full で2倍 3、`MiiIncrease` 3 で、2倍にしない 297 のうち `NotImplemented` が 196、`NothingToPack` が 101 である。2倍にした3つの出力は DSL と一致し、ほかの 293 の命令列は mvp-1 と同じで、4つは W-full でも mvp-1 でもどの II にも収まらない。状態のある 220 は、上の簡約の定義で `AssociationOrder` 28、`LoopState` 192 になる（x のオペランドだけを見る試作の定義では 116 と 104 だった）。`OddTripCount` は 140、`SameValue` は 263 である。
+今までの `RandomLoops.kernels(76, 300)`（状態のあるものが多い）は、W-full で2倍 3、`MiiIncrease` 3 で、2倍にしない 297（`MiiIncrease` の3つも含む）のうち 162 が本体を詰め、135 が `NothingToPack`（そのうち規則1の候補があってすべて組にならないもの 34）である。詰めた 162 は、本体の組 112 とループの後の組 80 を持ち、114 に本体の集め、76 にループの後の集め（違う演算の2つの終値の組。集めた根の ST.W）、4 にベクトルの状態、5 にループの前のベクトルの演算、13 にループの前の値の集めがあり、30 はループの前の語を本体で LD する（ADR-0014 の例外）。2 は MII が G より上がる。297 のスカラーのレーンの理由は、`NoNeighbour` 302、`NeededElsewhere` 60、初期値の組の制限 44（`NeededElsewhere (initial pair)`）、`SameValue` 12 である。詰めた 162 のうち 9 は W のどの II にも収まらず、7 はスカラーのループに戻り、2 は G もどの II にも収まらない（命令列の無い 4 のうちの 2）。収まる 153 で G と比べると、II は 35 で良く、111 で同じ、7 で悪い。cycles は 58 で少なく、73 で同じ、22 で多い（#110 第4段の Q4 と同じく、遅くても詰めた命令列を使う）。(b′) は、見つけた II を上げたものが 1 で、スカラーのループに戻ったものの試行には無い。2倍にした3つと詰めた 153 の出力は DSL と一致し、ほかの命令列は mvp-1 と同じで、4つは W-full でも mvp-1 でもどの II にも収まらない。状態のある 220 は、上の簡約の定義で `AssociationOrder` 28、`LoopState` 192 になる（x のオペランドだけを見る試作の定義では 116 と 104 だった）。`OddTripCount` は 140、`SameValue` は 263 である。
+
+`RandomLoops.packable` は、隣り合う出力に同じ形の木を書く乱数のループを作る（本体の詰め込みのため。1〜8反復）。1〜2 の組 `out(per·i + 2j)`・`out(per·i + 2j+1)`（`per` は 2〜5）は、深さ 2〜3 の乱数の型をレーン0と1に当てはめたもので、1/3 の確率でスカラーの出力も1つ足す。型の葉は、隣り合う要素 `x(s·i + o + lane)`（歩幅 1、2、−1、3）、隣り合わない要素、両方のレーンで同じ不変の値か要素、レーンごとの定数で、演算の 1/10 はレーンで違う。1/3 の確率で、状態の組を 1〜2 足す（初期値は `y(2j + lane)`、`a · x(2j + lane)`、レーンごとの定数、同じ定数 1。次の値は `s + e`、`s · e`、`s + other · e`（読み合う状態）。終値は `fin(2j + lane)`）。`stateStores` を付けると、状態のあるループは最初の状態の組を `t(2i)`・`t(2i+1)` にも ST し、その組の終値は書かない。`chains` を付けると、2つ目からの隣り合う要素の葉の半分は、前の隣り合う要素の葉の1反復前 `x(s·i + o − s + lane)` を読む（LD.W の鎖がどの歩幅にもできる）。seed 5 の300、W-full、16 レジスタ:
+
+- 2倍 22、本体を詰めたもの 233、`NothingToPack` 45（45 とも規則1の候補があり、すべて組にならない）
+- 詰めた 233: 本体の組 297、ループの後の組 62。ベクトルの状態のあるもの 38、本体の集めのあるもの 136、ループの前の値の集めのあるもの 21、ループの後の集めのあるもの 20、ループの前のベクトルの演算のあるもの 45、ループの前の語を本体で LD するもの 19（ADR-0014 の例外）、1段目の候補（集めの要らない候補）のあるもの 102、MII が G より上がるもの 3
+- 2倍にしない 278 のスカラーのレーンの理由: `SameValue` 325、`NeededElsewhere` 62、`NoNeighbour` 75、初期値の組の制限 84（`SameValue (initial pair)` 59、`NeededElsewhere (initial pair)` 25）
+- 命令列の無いもの 27。W のどの II にも収まらずスカラーのループに戻るもの、2倍 1、詰めたもの 11。誤った出力 0
+- G と比べると、詰めたもので II は 150 で良く、33 で同じ、10 で悪い。cycles は 157 で少なく、24 で同じ、12 で多い（3 は G にも II が無い）。2倍にしたもので、元の1反復当たりの II は 8 で良く 13 で同じ、cycles は 16 で少なく 1 で同じ 4 で多い
+- 最初の 100 は、`mvp2_rp4`・`mvp2_vlat`・`mvp2_vii` でも W-full と同じ本体を詰める。`mvp2_vlat` では、命令列の無いもの 7、詰めたもので W の II が無くスカラーのループに戻るもの 4 で、出力は DSL と一致する
+
+**1反復の照合**（#110 第5段の計画の 8.4）: 状態の無い G（ループの後の ST も無い）について、1反復を直線の `dag.Dag` にして `Pack` で詰め、`LoopPack` と比べる（`LoopPackSpec`）。共有を外した読出しはそれぞれ合成の語の LD、ST は合成の語の ST にし、(読出しか ST か、場所、歩幅) の組ごとに離れた番地の範囲に置くので、「隣り合う」は `LoopPack` の規則3と同じ意味になる。`LoopPack` を1反復のたどり（場所で値を分けず、計算したループの前の値も集めのレーンやベクトルのレーンにできる。`LoopPack.packOneIteration`。命令列にはしない）で動かすと、3つの生成器の状態の無い 570（`RandomLoops.kernels(76, 300)` の 80、`vectorizable(110, 300)` の 300、`packable(5, 300)` の 190。2倍にするものも含む）のすべてで、組とレーンの理由（`SameValue` の位置も）が `Pack` と同じである。ループとしての `LoopPack` がそのたどりと違うのは 15（4、0、11）で、違いは1反復のたどりが許す、ループだけにある規則4の場合だけによる
+
+ベクトルの状態は1反復の照合では表せない。そこで、`LoopPackSpec` の最小のループ（状態の組の ST、木の中の状態、LD.W の初期値の組、終値もあるときの置き場、状態と状態でない値、入れ替わった状態、等しい・離れた初期値、本体とループの後で同じ2つの値を集める組）と `matmul3`（m）で、組、レーンの理由、値（`DagRun`）と出力（`IsaExecutor`）を確かめる。乱数のループでは、`packable(5, 300)`（ベクトルの状態のある 38 を含む）の出力（`IsaExecutor`）、その最初の 100 と、`packable(7, 60)` に `stateStores` を付けたもの、`packable(13, 60)` に `chains` を付けたもの（歩幅 1、2、−1、3 の LD.W の鎖のある、本体を詰めたものが 3、2、1、2）の値（`DagRun`）、最初の 30 の参照モデルとトレース（`ModuloKernelSpec`）、ベクトルの状態かループの前の値の集めのある最初の 6 の RTL（`RtlMvp2Spec`）で確かめる。
 
 **集めの例外の影響**（#110 第5段の Q3）: 集め全体が、d ≥ 1 反復後の別の集めと同じ語を読むもの（ADR-0014 の規則を集め全体に当てはめれば共有できるもの）を数えた。
 
@@ -737,24 +799,24 @@ W-reg（`max_words_per_access` 1）の Modulo Scheduling は #110 では必須�
 粒度は ADR-0023 をループに広げたものである。
 
 - ループのベクトル化の判定（2倍にしない理由）は情報で、fallback ではない
-- ループの fallback: ループ全体を G で生成する（スカラーの演算のレイテンシーが mvp-1 と同じ machine では mvp-1 と同じ命令列。`mvp2_vii` は ST の L が 2 なので1サイクル遅い）。理由は、`NothingToPack`（2倍にせず、5a では規則1の候補が無い）、`NoIiFits`（W のグラフが MII から1反復の長さまでのどの II にも収まらない。II ごとの `NoMrt`・`NoTime`・`TooManyLive`・`NoAlignedPair`・`Overflow`。list scheduling の `NoAttemptFits` にあたる）、`NotImplemented`（W-reg と、5a だけの本体の詰め込み）である
+- ループの fallback: ループ全体を G で生成する（スカラーの演算のレイテンシーが mvp-1 と同じ machine では mvp-1 と同じ命令列。`mvp2_vii` は ST の L が 2 なので1サイクル遅い）。理由は、`NothingToPack`（2倍にせず、本体の組が1つもできない。規則1の候補が無いか、候補がすべて組にならない）、`NoIiFits`（W のグラフ（2倍にしたものか、本体を詰めたもの）が MII から1反復の長さまでのどの II にも収まらない。II ごとの `NoMrt`・`NoTime`・`TooManyLive`・`NoAlignedPair`・`Overflow`。list scheduling の `NoAttemptFits` にあたる）、`NotImplemented`（W-reg だけ）である。第5段の前半だけにあった `NotImplemented`（`body packing: #110 stage 5b`）は無くなった
 - G もどの II にも収まらなければ、両方の理由を書いた入力の誤りにする（list scheduling と同じ。CLI からは呼ばない）
-- 2倍にしたループが収まらないときに、本体の詰め込みは試さない（ADR-0023 の「元のスカラーの DAG」。ループの W の候補は1つ）
+- 2倍にしたループが収まらないときに、本体の詰め込みは試さない。本体を詰めたループも、収まらなければほかを試さない（ADR-0023 の「元のスカラーの DAG」。ループの W の候補は1つ）
 
 | API | 用途 | 結果 |
 |---|---|---|
-| `ModuloCompiler.compile` | 通常の利用 | `ModuloCompiled.simd` が `LoopSimd.Scalar`（mvp-0・mvp-1）、`Vectorized(decision)`（2倍）、`Fallback(reason, decision)`（W-reg では decision が None） |
-| `ModuloCompiler.candidate` | 比較の実験（第6段） | `LoopCandidate.Packed`、`Infeasible(decision, attempts)`、`NothingToPack(decision, scalar)`、`NotMeasured(reason)`（W-reg と、5a では規則1の候補のあるループ）。mvp-0・mvp-1 の machine では入力の誤り |
+| `ModuloCompiler.compile` | 通常の利用 | `ModuloCompiled.simd` が `LoopSimd.Scalar`（mvp-0・mvp-1）、`Vectorized(decision)`（2倍か、本体を詰めたもの）、`Fallback(reason, decision)`（W-reg では decision が None） |
+| `ModuloCompiler.candidate` | 比較の実験（第6段） | `LoopCandidate.Packed`、`Infeasible(decision, attempts)`、`NothingToPack(decision, scalar)`、`NotMeasured(reason)`（W-reg だけ）。mvp-0・mvp-1 の machine では入力の誤り |
 
-`NotMeasured` は、5a が詰められないループを「SIMD の候補が無い」としてスカラーの値で記録しないためのものである（ADR-0023: 黙ってスカラーの値に置き換えない）。`LoopDecision` は、2倍にしない理由（2倍なら空）、比べた MII（G と、作ったときは V。3本目の読出しポートを除く）、規則1の候補があるかを持つ。通常の利用は、ベクトルの命令列がスカラーより遅くても使う（#110 第4段の Q4 と同じ）。`ModuloCompiler.describeW` は、テストと第6段の説明に使う行を返す。
+`NotMeasured` は、W-reg（#78 の質問8 の (c)）のループを「SIMD の候補が無い」としてスカラーの値で記録しないためのものである（ADR-0023: 黙ってスカラーの値に置き換えない）。`LoopDecision` は、2倍にしない理由（2倍なら空）、比べた MII（G と、作ったときは2倍にしたグラフ。3本目の読出しポートを除く）、本体の詰め込み（`LoopBody`。組、ほかの ST のスカラーのレーンとその理由、ベクトルの状態の数。2倍なら None）を持つ。`doubled` と `packed` は、どちらで `Vectorized` かを言う。通常の利用は、ベクトルの命令列がスカラーより遅くても使う（#110 第4段の Q4 と同じ）。`ModuloCompiler.describeW` は、テストと第6段の説明に使う行を返す。
 
 ```
 saxpy8 (i): W: doubled (MII 3 vs 2 × 3), 4 iterations of II 3 (1.5 per original iteration), per iteration 2 LD.W, 1 VMAC, 1 ST.W, 1 broadcast, 0 gathers; MinAvg 5 at MII, 6 at II; MaxLive 7
-matmul3 (m): W: scalar fallback (NotImplemented: body packing: #110 stage 5b; not doubled: AssociationOrder)
+matmul3 (m): W: not doubled: AssociationOrder; body: 3 pairs (after 18, 21, 24), 3 scalar lanes (NoNeighbour), 3 vector states; 2 iterations of II 6, per iteration 4 LD, 1 LD.W, 3 MAC, 3 VMAC, 3 broadcasts, 0 gathers; MinAvg 11 at MII, 14 at II; MaxLive 15
 dot8 (i): W: scalar fallback (NothingToPack; not doubled: OddTripCount, AssociationOrder)
 ```
 
-ループの CLI は無く（`compiler/run compile` は list scheduling だけ）、第5段でも足さない。
+本体を詰めたループの1反復は元の1反復なので、元の1反復当たりの II は2倍にしたループにだけ書く。本体（`body:`）は、組ができたか、規則がレーンを拒んだときに書く（`dot8` のように、どの ST にも隣が無いだけなら書かない）。ループの CLI は無く（`compiler/run compile` は list scheduling だけ）、第5段でも足さない。
 
 #### テスト
 
@@ -762,24 +824,32 @@ dot8 (i): W: scalar fallback (NothingToPack; not doubled: OddTripCount, Associat
   - `saxpy8` と `fir4x8` の2倍にしたグラフ（ノード、場所、参照、`fir4x8` の back 1 の鎖と Before の LD.W [x(0)]・[x(1)]）。LD と LD.W の数が list scheduling の W-full の詰めた DAG と同じこと
   - 展開した DAG を、辺を守る乱数の順序で実行した結果（`DagRun`）が `LoopLowering.evaluate` と一致すること（`fir4x(16)`・`fir4x(32)`、奇数と負の歩幅、乱数の300（W-full と W-reg））
   - 奇数と負の歩幅の集め（集めごとに LD の組を持ち、反復をまたいで共有しない）、レーンの ST、語の複写
-  - 理由ごとの最小のループ（`SameValue` の位置、rs1 への入れ替え、手作りの `Loop` の `ZeroStoreStride`、W-reg の数の `MiiIncrease`）。簡約の定義（和・積・MAC・2つの独立な簡約は `AssociationOrder`。SUB、状態を2回読むもの、漸化式、累積和、次の値の ST、読み合う2つの状態は `LoopState`）。規則1の候補
+  - 理由ごとの最小のループ（`SameValue` の位置、rs1 への入れ替え、手作りの `Loop` の `ZeroStoreStride`、W-reg の数の `MiiIncrease`）。簡約の定義（和・積・MAC・2つの独立な簡約は `AssociationOrder`。SUB、状態を2回読むもの、漸化式、累積和、次の値の ST、読み合う2つの状態は `LoopState`）
   - 集めを先のレーンから2と数える MinAvg。mvp-0・mvp-1・W-reg のグラフに W のノードが無いこと
 - `compiler/.../modulo/WModuloSpec`
-  - 上の表の各欄（2倍にしない理由、fallback、MII と律速の資源、II、II ごとの `Outcome`、cycles、MinAvg 2つ、MaxLive）、W-full と `mvp2_vlat` の `fir4x8` の全 II の結果、`describeW`
+  - 上の表の各欄（2倍にしない理由と本体、fallback、MII と律速の資源、II、II ごとの `Outcome`、cycles、MinAvg 2つ、MaxLive）、W-full と `mvp2_vlat` の `fir4x8` と `mvp2_vlat` の `matmul3` の全 II の結果、`describeW`
   - スカラーのループの命令列が mvp-1 と同じこと（`mvp2_vii` は1サイクル遅い）。`saxpy(1..9)` と `fir4x(1..9)`（奇数は `OddTripCount` と `NothingToPack` で mvp-1 と同じ命令列、`candidate` は `NothingToPack`）、`fir4x(16)`・`fir4x(32)`、`saxpy(n)`
-  - `matmul3` の `NotImplemented` と `NotMeasured`。W-reg の `Fallback(NotImplemented)`、mvp-1 と同じ命令列、`NotMeasured`
-  - レジスタを減らしたとき（12・10・8 本の値、`NoIiFits` と `candidate` の `Infeasible`、`RtlMvp2Spec` の変種）
-  - 乱数のループの数（上）と、集めの例外の数の下限。ほかの6つの構成で出力が DSL と一致し、`mvp2_vlat` でスカラーのループより遅いものの数。`RandomLoops.kernels(76, 300)` の2倍にした3つの出力と、ほかの命令列が mvp-1 と同じこと
-  - `NoAlignedPair` が上の「`NoAlignedPair` は、測ったどのループでも起きなかった」のどれにも無いこと
+  - `matmul3` が4つの machine で本体を詰め、`candidate` が `Packed` であること。W-reg の `Fallback(NotImplemented)`、mvp-1 と同じ命令列、`NotMeasured`
+  - レジスタを減らしたとき（12・10・8 本の値、`NoIiFits` と `candidate` の `Infeasible`、本体を詰めた `matmul3` も G も収まらない入力の誤り、`RtlMvp2Spec` の変種）
+  - 乱数のループの数（上。2倍、本体の詰め込み、形、レーンの理由、G との比較）と、集めの例外の数の下限。ほかの6つの構成で出力が DSL と一致し、`mvp2_vlat` で2倍にしてスカラーのループより遅いものの数。`RandomLoops.kernels(76, 300)` の2倍にしたものと本体を詰めたものの出力と、ほかの命令列が mvp-1 と同じこと。`packable(5, 300)` の W-full の数と出力、最初の 100 の `mvp2_rp4`・`mvp2_vlat`・`mvp2_vii` で同じ本体と `mvp2_vlat` の出力
+  - `NoAlignedPair` が上の「`NoAlignedPair`（(b′)）」のとおりであること（5a で測った2倍のループに無く、本体を詰めたループと `packable` の 19 番・67 番の数）
   - どの命令列も verifier の最終検査（`KernelCompiler.checked`）を通り、出力（`IsaExecutor`）が DSL の参照実装と一致すること
+- `compiler/.../loop/LoopPackSpec`
+  - `matmul3`（i）・（m）の詰めたグラフ（ノード、場所、ブロードキャスト、LD.W `Address(12, 3)`、ループの前の VMUL の初期値の組、自分を back 1 で読むベクトルの状態、LD 12・LD.W 3）。展開した DAG を `DagRun` で実行した値が `LoopLowering.evaluate` と一致すること（`matmul3`、`packable(5, 100)`、`stateStores` を付けた `packable(7, 60)`、`chains` を付けた `packable(13, 60)`（歩幅ごとの LD.W の鎖の数も）、最小のループ）
+  - 規則1の候補（本体の ST とループの後の ST を組にしない、違う歩幅を組にしない）、`storePairs == byAddress.filter(gatherFree) ++ byAddress`、`matmul3`（m）の1段目の候補、状態の値の ST が2段目だけであること。Q1 の (a) なら `matmul3`（m）が行をまたいで MII 10 になり収まらないこと、`packable` の (a) と (b) の違い
+  - 規則とレーンの理由ごとの最小のループ: `SameValue`（乗算の rs1 以外、等しい初期値。和と積）、`NeededElsewhere`（ほかでも読むベクトルのレーン、本体の値と並ぶ計算したループの前の値、集めになる初期値の組、入れ替わった状態、状態と状態でない値）、`Cycle` と `StoredTwice`（手作りの `Loop`）。ループの後の集め（違う演算の2つの終値）と、同じ2つの値を本体でも ST するループ（出力の宣言の順を2通り。どちらでも本体の組とループの後の組が1つの集めを読み、展開したループの `Pack` と同じ組になる）。ST → LD の辺をまたぐ組で、詰めたグラフが語の順序を保つこと
+  - 詰めたグラフを作る順: 関係の無い組の隣の漸化式（W-full で 6 / 29）、状態の値（ブロードキャストかベクトルの状態）を木で読み、その次の値が組の語を LD する組（ST.W がその LD より前）、2つの1次の IIR（ベクトルの状態の VMUL が1つで、W-full で 3 / 16）。どれも値（`DagRun`）を、`LoopKernel` のものは出力（`IsaExecutor`）も確かめる
+  - ベクトルの状態: 状態の組の ST（終値が無いときは詰め、あるときは両方の組が `NeededElsewhere`）、木の中の状態、LD.W の初期値の組。出力（`IsaExecutor`）も確かめる
+  - 歩幅 1、−1、3 の LD.W の鎖、ループの前の値の集め、本体で LD するループの前の語
+  - 1反復の照合（上）
 - `compiler/.../modulo/ModuloSchedulerSpec`: 独立の検査の L11 の表に W の欄（VMAC 3、VADD・VSUB・VMUL 2、ST.W 1、LD.W 0）を足し、W のスケジュール（4つの構成）が合格すること。`read_ports` 3 で MAC・VMAC と ST・ST.W が同じ bundle に無いこと。手作りの `NoAlignedPair`（レジスタ4本の W-full で、組の始まる cycle に r0 と r2 が使用中、r1 と r3 が空いている配置）
 - `compiler/.../modulo/RowFitSpec`: `fitsTogether` を、MAC・VMAC・ST・ST.W とポートを使わない演算の種類からなる乱数の 500 の表で、全て試す方法と比べる
 - `compiler/.../KernelCompilerSpec`: W-full の `saxpy8` が `Vectorized`、W-reg が `Fallback(NotImplemented(…#78 Q8 (c)…))` で `NotMeasured`、mvp-0・mvp-1 の `candidate` が入力の誤り
 - `crosscheck/ModuloTrace` は LD.W・ST.W・ベクトル演算を読み、ソースを欄で対応させる（「Modulo Scheduling」の「トレースによる II の確認」）。`crosscheck/ModuloKernelSpec` で、集めのレーンの入れ替え、組の2つ目のレジスタの commit が1行遅いもの、LD.W の番地の誤りを見つけること
 - `crosscheck/ModuloRecordsSpec`: `ModuloRecords.reasons` が `NoAlignedPair` を (b′) としてまとめること（[benchmarks/MODULO.md](../benchmarks/MODULO.md) は mvp-0 の記録なので変わらない）
-- `crosscheck/ModuloKernelSpec`: 6つのループを W-full・`mvp2_rp4`・`mvp2_vlat`・`mvp2_vii`・W-reg の参照モデルで実行し、出力が DSL と、cycles が予測と一致し、トレースの照合が記録の II（1反復のグラフでは II なし）を返すこと。`saxpy(7)`・`fir4x7`・`fir4x(16)`・`fir4x(32)`・`saxpy(2)`、乱数の2倍にしやすい 60 のループ（4つの構成）、長い 40 のループ（別の seed で、反復は 10〜24 の偶数。LD.W の鎖と集めが定常状態に達する。W-full と `mvp2_vlat`）
-- `crosscheck/RtlMvp2Spec`: 今の4つのビルドの中で、Modulo Scheduling の命令列も RTL で実行する（W-full は6つのループ、`saxpy(7)`、乱数の 20 のループ。W-reg は6つのスカラーのループ。`mvp2_vlat` は6つ。変種は `saxpy8`・`fir4x8`・`product8`・`dot8`）。参照モデルとトレース・cycles・レジスタ・メモリが一致し、出力が DSL と一致し、RTL のトレースで II を確かめる。新しいビルドは無い
-- mutant 4つ: `modulo-read-port-scalar-only`（`Mii.readPortUsers` から VMAC と ST.W を外す）、`modulo-read-port-coupling-all`（今までの結び付けの条件）、`loopvector-chain-not-halved`（LD.W の鎖の距離を2で割らない）、`loopvector-gather-lane1-same-word`（集めのレーン1がレーン0の語を読む）
+- `crosscheck/ModuloKernelSpec`: 6つのループを W-full・`mvp2_rp4`・`mvp2_vlat`・`mvp2_vii`・W-reg の参照モデルで実行し、出力が DSL と、cycles が予測と一致し、トレースの照合が記録の II（1反復のグラフでは II なし）を返すこと。`saxpy(7)`・`fir4x7`・`fir4x(16)`・`fir4x(32)`・`saxpy(2)`、乱数の2倍にしやすい 60 のループと `packable(5, 30)`（4つの構成）、長い 40 のループ（別の seed で、反復は 10〜24 の偶数。LD.W の鎖と集めが定常状態に達する。W-full と `mvp2_vlat`）。2倍にしたものと本体を詰めたものを分けて数え、それぞれの下限を確かめる（測った値は、乱数の 60 で 2倍 24・詰めたもの 14、`packable` の 30 で命令列 29・詰めたもの 17（ベクトルの状態のあるもの 1）、長い 40 で 2倍 30（`mvp2_vlat` は 29）・詰めたもの 1）
+- `crosscheck/RtlMvp2Spec`: 今の4つのビルドの中で、Modulo Scheduling の命令列も RTL で実行する（W-full は6つのループ、`saxpy(7)`、乱数の 20 のループ、ベクトルの状態かループの前の値の集めのある最初の6つの `packable` のループ。W-reg は6つのスカラーのループ。`mvp2_vlat` は6つ。変種は `saxpy8`・`fir4x8`・`product8`・`dot8`）。参照モデルとトレース・cycles・レジスタ・メモリが一致し、出力が DSL と一致し、RTL のトレースで II を確かめる。2倍にしたものと本体を詰めたものを分けて数える（W-full の 33 のうち 2倍 10・詰めたもの 14、`mvp2_vlat` は 2 と 2（`matmul3` の2つ）、W-reg は 0 と 0、変種は 1 と 0）。新しいビルドは無い
+- mutant 5つ: `modulo-read-port-scalar-only`（`Mii.readPortUsers` から VMAC と ST.W を外す）、`modulo-read-port-coupling-all`（今までの結び付けの条件）、`loopvector-chain-not-halved`（LD.W の鎖の距離を歩幅で割らない。第5段の後半から、本体を詰めたループの歩幅が 1 でない鎖（s = −1 と |s| ≥ 2）も壊す）、`loopvector-gather-lane1-same-word`（集めのレーン1がレーン0の語を読む）、`looppack-state-init-lane0`（ベクトルの状態の初期値の組の両方のレーンにレーン0の初期値を使う。初期値の組の制限で拒まれ、`matmul3`（m）が `NothingToPack` になる。出力は正しいままなので、記録と数で見つける）
 
 ## ループ IR
 
@@ -841,7 +911,7 @@ Modulo Scheduling（#68）の入力として、反復の単位と反復をまた
 
 オペランドは `Ref(node, back, initial)` で、`node` の `back` 反復前の値を表す。反復 k < back ではその反復が無いので、Before のノード `initial(k)` の値を使う。Each のノードの番号は本体の順で、back = 0 のオペランドは小さい番号である。
 
-ISA mvp-2 の W のループのノード（`LoadW`・`VCompute`・`VMac`・`StoreW`・`StoreLane`。欄は `VRef` の `Pair`・`Gather`・`Broadcast`）もある。これらを作るのはループのベクトル化（`LoopVector`）だけで、`LoopGraph.build` と `LoopFusion` は作らない（「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」）。`LoopGraph.expanded` は、これらを DAG の W のノードに展開し、LD.W と ST.W には2つの語のメモリ順序の辺を付ける。
+ISA mvp-2 の W のループのノード（`LoadW`・`VCompute`・`VMac`・`StoreW`・`StoreLane`。欄は `VRef` の `Pair`・`Gather`・`Broadcast`）もある。これらを作るのはループのベクトル化（2倍の `LoopVector.double` と、本体の詰め込みの `LoopPack`。`StoreLane` は2倍だけ）だけで、`LoopGraph.build` と `LoopFusion` は作らない（「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」）。`LoopGraph.expanded` は、これらを DAG の W のノードに展開し、LD.W と ST.W には2つの語のメモリ順序の辺を付ける。
 
 LD の共有（ADR-0014）。本体が書かない語について、次のようにする。
 
@@ -925,7 +995,7 @@ machine に MAC があるとき（ISA mvp-1）、`LoopFusion.fuse` は、ルー�
 
 ## Modulo Scheduling
 
-`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。ISA mvp-2 の machine では、LD.W のある machine でループを2倍にベクトル化してスケジュールし、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段の前半。「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」）。
+`LoopGraph`（「ループ IR」）の反復を重ねてスケジュールし、mvp-0 の直線の命令列（mvp-1 では MAC を含む）に展開する（ADR-0011、[ADR-0015](DECISIONS.md#adr-0015-modulo-scheduling-は-ii-を下限から順に試し最初に命令列ができた-ii-を使う)、#68）。実装は `vliw.compiler.modulo`。ISA mvp-2 の machine では、LD.W のある machine でループを2倍にベクトル化するか本体を詰めてスケジュールし、W-reg ではスカラーのループを理由付きで生成する（#110 の第5段。「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」）。
 
 | 段 | 内容 | 実装 |
 |---|---|---|
@@ -1067,5 +1137,5 @@ II と cycles（II / cycles）。括弧の中は、II を MII より上げた理
   - 上の手作りの `Loop` を参照モデルで実行し、メモリが `LoopLowering.evaluate` と一致し、トレースの照合に合格すること
   - トレースの照合が、表の反復の入れ替え、初期値の誤り、LD と ST のアドレスの誤り、ソースの入れ替え、別の演算が書いたレジスタを読むソース（ADD と ST）、1行ずれた commit、別のポートの commit、表と違う種類の演算、表に無いスロットの演算、状態の反復距離の誤り、記録と違う II を見つけること
   - 正しいが、反復が II ごとに始まらない命令列を拒否すること: `dot(4)` を展開して list scheduling した命令列（表はトレースと一致する）と、`saxpy8` の最後の ST を1サイクル遅らせた命令列
-- ISA mvp-2（#110 の第5段の前半）: `compiler/.../loop/LoopVectorSpec`、`compiler/.../modulo/WModuloSpec`、`ModuloSchedulerSpec`・`RowFitSpec`・`ModuloKernelSpec`・`ModuloRecordsSpec` の W の部分、`RtlMvp2Spec` のループの命令列（「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」の「テスト」）
+- ISA mvp-2（#110 の第5段）: `compiler/.../loop/LoopVectorSpec`、`compiler/.../loop/LoopPackSpec`、`compiler/.../modulo/WModuloSpec`、`ModuloSchedulerSpec`・`RowFitSpec`・`ModuloKernelSpec`・`ModuloRecordsSpec` の W の部分、`RtlMvp2Spec` のループの命令列（「ISA mvp-2（W）」の「ループのベクトル化と Modulo Scheduling（W-full）」の「テスト」）
 - `crosscheck/BenchmarkSpec`: [benchmarks/MODULO.md](../benchmarks/MODULO.md) と、Modulo Scheduling のテストケース・メトリクスが生成し直した内容と一致すること。テストケースが参照モデルと RTL で成り立つこと。配置と入力が list scheduling と同じで、`metrics` の `ii` が記録した II であること

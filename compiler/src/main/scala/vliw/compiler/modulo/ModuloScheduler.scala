@@ -454,7 +454,9 @@ object ModuloScheduler {
 
   /** The register groups of the Each values of `g`, as `dag.Dag.groups` counts them on the unrolled
     * loop: a gather (its two lane nodes, weight 2), a pair node (weight 2), or a scalar node not in
-    * a gather (weight 1). Stores have no value.
+    * a gather (weight 1). Stores have no value. A gather of two values before the loop (a packed
+    * body's invariant pair, `LoopPack`) is no Each group: [[minAvg]] counts its lanes as
+    * invariants.
     */
   private[modulo] def groups(g: LoopGraph): Vector[(Vector[Int], Int)] = {
     val each = g.ids(Place.Each)
@@ -462,6 +464,7 @@ object ModuloScheduler {
       .flatMap(n => LoopNode.fields(g.nodes(n)))
       .collect { case VRef.Gather(lo, hi) => Vector(lo.node, hi.node) }
       .distinct
+      .filterNot(_.forall(g.places(_) == Place.Before))
     val lanes = gathers.flatten
     require(lanes.distinct.size == lanes.size, s"a node is a lane of two gathers: $gathers")
     require(lanes.forall(g.places(_) == Place.Each), s"a gather of values before the loop")

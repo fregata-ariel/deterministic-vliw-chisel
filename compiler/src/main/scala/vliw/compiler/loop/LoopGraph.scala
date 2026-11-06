@@ -48,8 +48,9 @@ object LoopNode {
     def operands: Vector[Ref] = Vector(value)
   }
 
-  // ISA mvp-2 (W). Only the loop vectorization (`LoopVector`) makes these nodes, as only `dag.Pack`
-  // makes the W nodes of a DAG (docs/COMPILER.md "ループのベクトル化と Modulo Scheduling（W-full）").
+  // ISA mvp-2 (W). Only the loop vectorization (`LoopVector.double`, and `LoopPack` for a body
+  // that is not doubled) makes these nodes, as only `dag.Pack` makes the W nodes of a DAG
+  // (docs/COMPILER.md "ループのベクトル化と Modulo Scheduling（W-full）").
 
   /** LD.W [addr.at(k)]: the words `addr.at(k)` and `addr.at(k) + 1` into an aligned pair. */
   final case class LoadW(addr: Address) extends LoopNode {

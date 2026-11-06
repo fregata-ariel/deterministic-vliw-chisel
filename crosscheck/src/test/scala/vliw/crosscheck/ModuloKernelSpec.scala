@@ -491,8 +491,9 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
     )
   }
 
-  // ISA mvp-2 (#110 stage 5a): loops doubled on W-full and its variants (rp4 and vii on the model
-  // only), and the scalar loops of W-reg and of the loops that are not doubled.
+  // ISA mvp-2 (#110 stage 5): loops doubled (5a) or with their body packed (5b) on W-full and its
+  // variants (rp4 and vii on the model only), and the scalar loops of W-reg and of the loops with
+  // nothing to pack.
   private val mvp2 =
     MachineDescription.load(MachineDescription.Mvp2Path).fold(es => fail(es.mkString), identity)
   private val mvp2Machines =
@@ -525,7 +526,7 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
   }
 
   test(
-    "ISA mvp-2 on the reference model: doubled and scalar loops, odd and long sizes, random loops; DSL results, cycles, and the II in the trace"
+    "ISA mvp-2 on the reference model: doubled, packed and scalar loops, odd and long sizes, random loops; DSL results, cycles, and the II in the trace"
   ) {
     val rng = new Random(110)
     def compile(k: LoopKernel, m: MachineDescription) =
@@ -533,29 +534,50 @@ class ModuloKernelSpec extends AnyFunSuite with VliwChiselSim {
     for (m <- mvp2Machines :+ mw1; k <- LoopBenchmarks.all) onModel(compile(k, m), rng, 3)
     for (k <- Seq(LoopBenchmarks.saxpy(7), fir(7), fir(16), fir(32), LoopBenchmarks.saxpy(2)))
       onModel(compile(k, mvp2), rng, 2)
-    // 60 random vectorizable loops per machine (trips 1 to 8), and 40 long ones on W-full and vlat
-    // (even trips 10 to 24, so that LD.W chains and gathers reach a steady state).
-    def run(ks: Seq[LoopKernel], m: MachineDescription): (Int, Int) =
-      ks.foldLeft((0, 0)) { case ((compiled, doubled), k) =>
+    // On `m`: the programs, the doubled loops, the packed loops, and the packed loops with a vector
+    // state, counted apart (a packed loop is not doubled).
+    def run(ks: Seq[LoopKernel], m: MachineDescription): (Int, Int, Int, Int) =
+      ks.foldLeft((0, 0, 0, 0)) { case ((compiled, doubled, packed, states), k) =>
         ModuloCompiler.compile(k, m) match {
           case Left(e) =>
             assert(e.contains("no II from"), e)
-            (compiled, doubled)
+            (compiled, doubled, packed, states)
           case Right(c) =>
             onModel(c, rng, 1)
-            (compiled + 1, doubled + (if (c.simd.isInstanceOf[LoopSimd.Vectorized]) 1 else 0))
+            c.simd match {
+              case LoopSimd.Vectorized(d) if d.doubled =>
+                (compiled + 1, doubled + 1, packed, states)
+              case LoopSimd.Vectorized(d) =>
+                val state = if (d.body.exists(_.vectorStates > 0)) 1 else 0
+                (compiled + 1, doubled, packed + 1, states + state)
+              case _ => (compiled + 1, doubled, packed, states)
+            }
         }
       }
+    // 60 random vectorizable loops per machine (trips 1 to 8), 40 long ones on W-full and vlat (even
+    // trips 10 to 24, so that LD.W chains and gathers reach a steady state), and 30 packable loops
+    // per machine (isomorphic adjacent stores and pairs of states).
     val random = RandomLoops.vectorizable(110, 60)
+    val packable = RandomLoops.packable(5, 30)
+    // Measured on each machine: 60 programs, 24 doubled and 14 packed; 29 packable programs, 3
+    // doubled and 17 packed, 1 of them with a vector state.
     for (m <- mvp2Machines) {
-      val (compiled, doubled) = run(random, m)
-      assert(compiled >= 58 && doubled >= 20, s"${m.machineId}: $compiled, $doubled")
+      val (compiled, doubled, packed, _) = run(random, m)
+      assert(
+        compiled >= 58 && doubled >= 20 && packed >= 12,
+        (m.machineId, compiled, doubled, packed)
+      )
+      val (pc, pd, pp, ps) = run(packable, m)
+      assert(pc >= 27 && pp >= 15 && ps >= 1, (m.machineId, pc, pd, pp, ps))
     }
     val long = RandomLoops.longVectorizable(5110, 40)
     for (m <- Seq(mvp2, mvp2Machines(2))) {
-      val (compiled, doubled) = run(long, m)
-      // Measured: 35 programs, 34 doubled loops of which 21 with a gather (W-full).
-      assert(compiled >= 30 && doubled >= 28, s"${m.machineId}: $compiled, $doubled")
+      val (compiled, doubled, packed, _) = run(long, m)
+      // Measured: 35 programs; 30 doubled (29 on vlat) and 1 packed.
+      assert(
+        compiled >= 30 && doubled >= 28 && packed >= 1,
+        (m.machineId, compiled, doubled, packed)
+      )
     }
   }
 
